@@ -1,23 +1,16 @@
-import logo from './logo.svg';
+import React from 'react';
+import Dashboard from './components/Dashboard';
 import './App.css';
 
 function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
+        <h1>Kataria Stone World - Inventory Management</h1>
       </header>
+      <main className="App-main">
+        <Dashboard />
+      </main>
     </div>
   );
 }
