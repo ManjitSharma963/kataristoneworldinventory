@@ -1,12 +1,22 @@
 .dashboard-container {
-  padding: 20px;
-  max-width: 1400px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
-.dashboard-container h2 {
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 30px;
+}
+
+.dashboard-title {
+  font-size: 24px;
+  font-weight: 600;
   color: #333;
+  margin: 0;
 }
 
 /* Tab Navigation */
@@ -89,20 +99,32 @@
   margin-bottom: 40px;
 }
 
+@media (max-width: 768px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+}
+
 .stat-card {
   background: white;
   padding: 25px;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-radius: 16px;
+  box-shadow: 
+    8px 8px 16px rgba(0, 0, 0, 0.1),
+    -8px -8px 16px rgba(255, 255, 255, 0.8);
   display: flex;
   align-items: center;
   gap: 20px;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.5);
 }
 
 .stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(-4px);
+  box-shadow: 
+    12px 12px 24px rgba(0, 0, 0, 0.15),
+    -12px -12px 24px rgba(255, 255, 255, 0.9);
 }
 
 .stat-icon {
@@ -130,6 +152,10 @@
 
 .stat-card.info .stat-icon {
   background: #d1ecf1;
+}
+
+.stat-card.expense .stat-icon {
+  background: #f8d7da;
 }
 
 .stat-content {

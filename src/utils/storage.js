@@ -3,7 +3,8 @@
 export const STORAGE_KEYS = {
   INVENTORY: 'katariastoneworld_inventory',
   SALES: 'katariastoneworld_sales',
-  EXPENSES: 'katariastoneworld_expenses'
+  EXPENSES: 'katariastoneworld_expenses',
+  EMPLOYEES: 'katariastoneworld_employees'
 };
 
 export const getInventory = () => {
@@ -137,6 +138,46 @@ export const deleteExpense = (id) => {
   const expenses = getExpenses();
   const filtered = expenses.filter(expense => expense.id !== id);
   saveExpenses(filtered);
+  return filtered;
+};
+
+// Employee Management Functions
+export const getEmployees = () => {
+  const data = localStorage.getItem(STORAGE_KEYS.EMPLOYEES);
+  return data ? JSON.parse(data) : [];
+};
+
+export const saveEmployees = (employees) => {
+  localStorage.setItem(STORAGE_KEYS.EMPLOYEES, JSON.stringify(employees));
+};
+
+export const addEmployee = (employee) => {
+  const employees = getEmployees();
+  const newEmployee = {
+    id: Date.now().toString(),
+    ...employee,
+    createdAt: new Date().toISOString()
+  };
+  employees.push(newEmployee);
+  saveEmployees(employees);
+  return newEmployee;
+};
+
+export const updateEmployee = (id, updates) => {
+  const employees = getEmployees();
+  const index = employees.findIndex(emp => emp.id === id);
+  if (index !== -1) {
+    employees[index] = { ...employees[index], ...updates };
+    saveEmployees(employees);
+    return employees[index];
+  }
+  return null;
+};
+
+export const deleteEmployee = (id) => {
+  const employees = getEmployees();
+  const filtered = employees.filter(emp => emp.id !== id);
+  saveEmployees(filtered);
   return filtered;
 };
 

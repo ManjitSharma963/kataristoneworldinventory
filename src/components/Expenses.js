@@ -1,12 +1,37 @@
 import React, { useState, useEffect } from 'react';
-import { getExpenses, addExpense, updateExpense, deleteExpense } from '../utils/storage';
+import { getExpenses, addExpense, updateExpense, deleteExpense, getEmployees, addEmployee, updateEmployee, deleteEmployee } from '../utils/storage';
 import './Expenses.css';
 
-const Expenses = () => {
+const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null }) => {
   const [expenses, setExpenses] = useState([]);
-  const [showForm, setShowForm] = useState(false);
+  const [employees, setEmployees] = useState([]);
+  const [internalShowForm, setInternalShowForm] = useState(false);
+  
+  // Use external showForm if provided, otherwise use internal state
+  const showForm = externalShowForm !== null ? externalShowForm : internalShowForm;
+  
+  const handleAddClick = () => {
+    if (externalShowForm !== null && onFormClose) {
+      // External control - toggle the form
+      onFormClose();
+    } else {
+      setInternalShowForm(true);
+    }
+  };
+  
+  // Update internal state when external state changes
+  useEffect(() => {
+    if (externalShowForm !== null) {
+      // External control - don't use internal state
+    }
+  }, [externalShowForm]);
   const [editingExpense, setEditingExpense] = useState(null);
   const [filterType, setFilterType] = useState('all'); // all, daily
+  const [activeTab, setActiveTab] = useState('all'); // all, employee
+  const [showSalaryForm, setShowSalaryForm] = useState(false);
+  const [showPaySalaryForm, setShowPaySalaryForm] = useState(false);
+  const [showPayAdvanceForm, setShowPayAdvanceForm] = useState(false);
+  const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   const [currentPage, setCurrentPage] = useState(1);
@@ -18,13 +43,169 @@ const Expenses = () => {
     category: '',
     description: '',
     amount: '',
+    paymentMethod: 'cash'
+  });
+
+  const [salaryFormData, setSalaryFormData] = useState({
+    employeeName: '',
+    salaryAmount: '',
+    joiningDate: new Date().toISOString().split('T')[0]
+  });
+
+  const [paySalaryFormData, setPaySalaryFormData] = useState({
+    month: new Date().toISOString().slice(0, 7), // YYYY-MM format
+    date: new Date().toISOString().split('T')[0],
     paymentMethod: 'cash',
-    notes: ''
+    amount: ''
+  });
+
+  const [payAdvanceFormData, setPayAdvanceFormData] = useState({
+    employeeId: '',
+    amount: '',
+    date: new Date().toISOString().split('T')[0]
   });
 
   useEffect(() => {
     loadExpenses();
+    loadEmployees();
   }, []);
+
+  const loadEmployees = () => {
+    const employeesData = getEmployees();
+    setEmployees(employeesData);
+  };
+
+  // Calculate advance payments for an employee
+  const getAdvancePayments = (employeeId) => {
+    const allExpenses = getExpenses();
+    const advances = allExpenses.filter(exp => 
+      exp.type === 'advance' && 
+      exp.employeeId === employeeId &&
+      (exp.settled === false || exp.settled === undefined || !exp.settled)
+    );
+    return advances.reduce((sum, adv) => sum + (parseFloat(adv.amount) || 0), 0);
+  };
+
+  // Calculate pending payments (Total Salary - Advance Payment)
+  const getPendingPayments = (employeeId, employeeSalary) => {
+    const allExpenses = getExpenses();
+    const advancePayments = allExpenses.filter(exp => 
+      exp.type === 'advance' && 
+      exp.employeeId === employeeId &&
+      (exp.settled === false || exp.settled === undefined || !exp.settled)
+    );
+    const totalAdvances = advancePayments.reduce((sum, adv) => sum + (parseFloat(adv.amount) || 0), 0);
+    const totalSalary = parseFloat(employeeSalary) || 0;
+    const pendingPayment = totalSalary - totalAdvances;
+    return pendingPayment > 0 ? pendingPayment : 0; // Don't show negative values
+  };
+
+  // Get current month salary status
+  const getCurrentMonthSalaryStatus = (employeeId) => {
+    const allExpenses = getExpenses();
+    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
+    const salaryPayments = allExpenses.filter(exp => 
+      exp.type === 'salary' && 
+      exp.employeeId === employeeId &&
+      exp.month === currentMonth
+    );
+    return salaryPayments.length > 0 ? 'Paid' : 'Pending';
+  };
+
+  // Handle Pay Salary button click
+  const handlePaySalaryClick = (employee) => {
+    setSelectedEmployee(employee);
+    
+    // Calculate pending amount (Total Salary - Advance Payments)
+    const advancePayments = getAdvancePayments(employee.id);
+    const totalSalary = parseFloat(employee.salaryAmount) || 0;
+    const pendingAmount = totalSalary - advancePayments;
+    const amountToPay = pendingAmount > 0 ? pendingAmount : 0;
+    
+    setPaySalaryFormData({
+      month: new Date().toISOString().slice(0, 7),
+      date: new Date().toISOString().split('T')[0],
+      paymentMethod: 'cash',
+      amount: amountToPay.toFixed(2)
+    });
+    setShowPaySalaryForm(true);
+  };
+
+  // Handle Pay Salary form submission
+  const handlePaySalarySubmit = (e) => {
+    e.preventDefault();
+    if (!selectedEmployee) return;
+
+    const salaryAmount = parseFloat(paySalaryFormData.amount) || 0;
+    
+    // Mark advance payments as settled when salary is paid
+    const allExpenses = getExpenses();
+    const advancePayments = allExpenses.filter(exp => 
+      exp.type === 'advance' && 
+      exp.employeeId === selectedEmployee.id &&
+      (exp.settled === false || exp.settled === undefined || !exp.settled)
+    );
+    
+    // Mark advances as settled
+    advancePayments.forEach(advance => {
+      updateExpense(advance.id, { settled: true });
+    });
+
+    const salaryPayment = {
+      type: 'salary',
+      category: 'salary',
+      employeeId: selectedEmployee.id,
+      employeeName: selectedEmployee.employeeName,
+      amount: salaryAmount,
+      month: paySalaryFormData.month,
+      date: paySalaryFormData.date,
+      paymentMethod: paySalaryFormData.paymentMethod,
+      description: `Salary payment for ${selectedEmployee.employeeName} - ${paySalaryFormData.month}`,
+      createdAt: new Date().toISOString()
+    };
+
+    addExpense(salaryPayment);
+    loadExpenses();
+    setShowPaySalaryForm(false);
+    setSelectedEmployee(null);
+    setPaySalaryFormData({
+      month: new Date().toISOString().slice(0, 7),
+      date: new Date().toISOString().split('T')[0],
+      paymentMethod: 'cash',
+      amount: ''
+    });
+  };
+
+  // Handle Pay Advance form submission
+  const handlePayAdvanceSubmit = (e) => {
+    e.preventDefault();
+    if (!payAdvanceFormData.employeeId) return;
+
+    const selectedEmp = employees.find(emp => emp.id === payAdvanceFormData.employeeId);
+    if (!selectedEmp) return;
+
+    const advancePayment = {
+      type: 'advance',
+      category: 'advance',
+      employeeId: selectedEmp.id,
+      employeeName: selectedEmp.employeeName,
+      amount: parseFloat(payAdvanceFormData.amount) || 0,
+      date: payAdvanceFormData.date,
+      paymentMethod: 'cash', // Default for advance
+      description: `Advance payment for ${selectedEmp.employeeName}`,
+      settled: false, // Mark as unsettled initially
+      createdAt: new Date().toISOString()
+    };
+
+    addExpense(advancePayment);
+    loadExpenses();
+    setShowPayAdvanceForm(false);
+    setPayAdvanceFormData({
+      employeeId: '',
+      amount: '',
+      date: new Date().toISOString().split('T')[0]
+    });
+  };
 
   const loadExpenses = () => {
     const allExpenses = getExpenses();
@@ -54,7 +235,6 @@ const Expenses = () => {
       description: formData.description || '',
       amount: parseFloat(formData.amount) || 0,
       paymentMethod: formData.paymentMethod,
-      notes: formData.notes || '',
       createdAt: new Date().toISOString()
     };
 
@@ -76,9 +256,15 @@ const Expenses = () => {
       description: expense.description || '',
       amount: expense.amount?.toString() || '',
       paymentMethod: expense.paymentMethod || 'cash',
-      notes: expense.notes || ''
     });
-    setShowForm(true);
+    if (externalShowForm !== null) {
+      // External control - open form
+      if (onFormOpen) {
+        onFormOpen();
+      }
+    } else {
+      setInternalShowForm(true);
+    }
   };
 
   const handleDelete = (id) => {
@@ -94,17 +280,23 @@ const Expenses = () => {
       category: '',
       description: '',
       amount: '',
-      paymentMethod: 'cash',
-      notes: ''
+      paymentMethod: 'cash'
     });
-    setShowForm(false);
+    if (externalShowForm !== null && onFormClose) {
+      onFormClose();
+    } else {
+      setInternalShowForm(false);
+    }
     setEditingExpense(null);
   };
 
-  // Filter expenses
+  // Filter expenses based on active tab
   let filteredExpenses = expenses.filter(expense => {
-    // Type filter
-    if (filterType !== 'all' && expense.type !== filterType) {
+    // Tab filter
+    if (activeTab === 'all') {
+      // Show all expenses (no type filter needed)
+    } else if (activeTab === 'employee') {
+      // Don't show expenses in employee tab - employees are shown separately
       return false;
     }
     
@@ -204,34 +396,47 @@ const Expenses = () => {
       return sum + (parseFloat(exp.amount) || 0);
     }, 0);
 
+  // If showAddButtonInHeader is true, only render the button
+  if (showAddButtonInHeader) {
+    return (
+      <button className="btn btn-primary" onClick={handleAddClick}>
+        + Add Expense
+      </button>
+    );
+  }
+
   return (
     <div className="expenses-container">
-      <div className="expenses-header">
-        <h2>Daily Expenses Management</h2>
-        <button className="btn btn-primary" onClick={() => setShowForm(true)}>
-          + Add Expense
-        </button>
-      </div>
+      {!hideHeader && (
+        <div className="expenses-header">
+          <h2>Daily Expenses Management</h2>
+          <button className="btn btn-primary" onClick={handleAddClick}>
+            + Add Expense
+          </button>
+        </div>
+      )}
 
-      {/* Stats Cards */}
-      <div className="expenses-stats">
-        <div className="stat-card">
-          <div className="stat-icon">📊</div>
-          <div className="stat-content">
-            <h3>Total Expenses</h3>
-            <p className="stat-value">₹{totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-            <p className="stat-label">{filteredExpenses.length} record(s)</p>
+      {!hideStats && (
+        <div className="expenses-stats">
+          <div className="stat-card">
+            <div className="stat-icon">📊</div>
+            <div className="stat-content">
+              <h3>Total Expenses</h3>
+              <p className="stat-value">₹{totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{filteredExpenses.length} record(s)</p>
+            </div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-icon">📅</div>
+            <div className="stat-content">
+              <h3>Today's Expenses</h3>
+              <p className="stat-value">₹{todayExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">Today</p>
+            </div>
           </div>
         </div>
-        <div className="stat-card">
-          <div className="stat-icon">📅</div>
-          <div className="stat-content">
-            <h3>Today's Expenses</h3>
-            <p className="stat-value">₹{todayExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-            <p className="stat-label">Today</p>
-          </div>
-        </div>
-      </div>
+      )}
+
 
       {/* Expense Form Modal */}
       {showForm && (
@@ -313,17 +518,6 @@ const Expenses = () => {
               />
             </div>
 
-            <div className="form-group">
-              <label>Notes</label>
-              <textarea
-                name="notes"
-                value={formData.notes}
-                onChange={handleInputChange}
-                rows="3"
-                placeholder="Additional notes (optional)"
-              />
-            </div>
-
               <div className="form-actions">
                 <button type="submit" className="btn btn-primary">
                   {editingExpense ? 'Update Expense' : 'Add Expense'}
@@ -338,94 +532,525 @@ const Expenses = () => {
         </div>
       )}
 
-      {/* Filters and Search */}
-      <div className="expenses-filters">
-        <div className="filter-tabs">
-          <button
-            className={`filter-tab ${filterType === 'all' ? 'active' : ''}`}
-            onClick={() => {
-              setFilterType('all');
-              setCurrentPage(1);
-            }}
-          >
-            All Expenses
-          </button>
-          <button
-            className={`filter-tab ${filterType === 'daily' ? 'active' : ''}`}
-            onClick={() => {
-              setFilterType('daily');
-              setCurrentPage(1);
-            }}
-          >
-            Daily
-          </button>
-        </div>
-
-        <div className="search-section">
-          <div className="search-wrapper">
-            <span className="search-icon">🔍</span>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              placeholder="Search expenses..."
-              className="search-input"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery('');
-                  setCurrentPage(1);
-                }}
-                className="search-clear-btn"
-              >
-                ×
-              </button>
-            )}
-          </div>
-          <div className="date-range-filter">
-            <input
-              type="date"
-              value={dateFilter.start}
-              onChange={(e) => {
-                setDateFilter({ ...dateFilter, start: e.target.value });
-                setCurrentPage(1);
-              }}
-              className="date-input"
-              placeholder="Start Date"
-            />
-            <span className="date-separator">to</span>
-            <input
-              type="date"
-              value={dateFilter.end}
-              onChange={(e) => {
-                setDateFilter({ ...dateFilter, end: e.target.value });
-                setCurrentPage(1);
-              }}
-              className="date-input"
-              placeholder="End Date"
-            />
-            {(dateFilter.start || dateFilter.end) && (
-              <button
-                type="button"
-                onClick={() => {
-                  setDateFilter({ start: '', end: '' });
-                  setCurrentPage(1);
-                }}
-                className="btn-filter-clear"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
+      {/* Tab Navigation */}
+      <div className="expenses-tab-navigation">
+        <button
+          className={`expense-tab ${activeTab === 'all' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('all');
+            setCurrentPage(1);
+          }}
+        >
+          All Expenses
+        </button>
+        <button
+          className={`expense-tab ${activeTab === 'employee' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('employee');
+            setCurrentPage(1);
+          }}
+        >
+          Employee
+        </button>
       </div>
 
+      {/* All Expenses Tab Content */}
+      {activeTab === 'all' && (
+        <div>
+          {/* Add Expense Button */}
+          <div className="expenses-actions">
+            <button className="btn btn-primary" onClick={handleAddClick}>
+              + Add Expense
+            </button>
+          </div>
+
+          {/* Filters and Search */}
+          <div className="expenses-filters-row">
+        <div className="search-wrapper">
+          <span className="search-icon">🔍</span>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setCurrentPage(1);
+            }}
+            placeholder="Search expenses..."
+            className="search-input"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setCurrentPage(1);
+              }}
+              className="search-clear-btn"
+            >
+              ×
+            </button>
+          )}
+        </div>
+
+        <div className="date-range-filter">
+          <input
+            type="date"
+            value={dateFilter.start}
+            onChange={(e) => {
+              setDateFilter({ ...dateFilter, start: e.target.value });
+              setCurrentPage(1);
+            }}
+            className="date-input"
+            placeholder="Start Date"
+          />
+          <span className="date-separator">to</span>
+          <input
+            type="date"
+            value={dateFilter.end}
+            onChange={(e) => {
+              setDateFilter({ ...dateFilter, end: e.target.value });
+              setCurrentPage(1);
+            }}
+            className="date-input"
+            placeholder="End Date"
+          />
+          {(dateFilter.start || dateFilter.end) && (
+            <button
+              type="button"
+              onClick={() => {
+                setDateFilter({ start: '', end: '' });
+                setCurrentPage(1);
+              }}
+              className="btn-filter-clear"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+        </div>
+      )}
+
+      {/* Pay Advance Form Modal */}
+      {showPayAdvanceForm && (
+        <div className="modal-overlay" onClick={() => {
+          setShowPayAdvanceForm(false);
+          setPayAdvanceFormData({
+            employeeId: '',
+            amount: '',
+            date: new Date().toISOString().split('T')[0]
+          });
+        }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Pay Advance</h3>
+              <button className="modal-close" onClick={() => {
+                setShowPayAdvanceForm(false);
+                setPayAdvanceFormData({
+                  employeeId: '',
+                  amount: '',
+                  date: new Date().toISOString().split('T')[0]
+                });
+              }}>×</button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={handlePayAdvanceSubmit}>
+                <div className="form-group">
+                  <label>Employee Name *</label>
+                  <select
+                    name="employeeId"
+                    value={payAdvanceFormData.employeeId}
+                    onChange={(e) => setPayAdvanceFormData({ ...payAdvanceFormData, employeeId: e.target.value })}
+                    required
+                  >
+                    <option value="">Select Employee</option>
+                    {employees.map((employee) => (
+                      <option key={employee.id} value={employee.id}>
+                        {employee.employeeName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Advance Amount (₹) *</label>
+                    <input
+                      type="number"
+                      name="amount"
+                      value={payAdvanceFormData.amount}
+                      onChange={(e) => setPayAdvanceFormData({ ...payAdvanceFormData, amount: e.target.value })}
+                      min="0"
+                      step="0.01"
+                      placeholder="Enter advance amount"
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Date *</label>
+                    <input
+                      type="date"
+                      name="date"
+                      value={payAdvanceFormData.date}
+                      onChange={(e) => setPayAdvanceFormData({ ...payAdvanceFormData, date: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="form-actions">
+                  <button type="submit" className="btn btn-primary">
+                    Pay Advance
+                  </button>
+                  <button type="button" className="btn btn-secondary" onClick={() => {
+                    setShowPayAdvanceForm(false);
+                    setPayAdvanceFormData({
+                      employeeId: '',
+                      amount: '',
+                      date: new Date().toISOString().split('T')[0]
+                    });
+                  }}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pay Salary Form Modal */}
+      {showPaySalaryForm && selectedEmployee && (
+        <div className="modal-overlay" onClick={() => {
+          setShowPaySalaryForm(false);
+          setSelectedEmployee(null);
+          setPaySalaryFormData({
+            month: new Date().toISOString().slice(0, 7),
+            date: new Date().toISOString().split('T')[0],
+            paymentMethod: 'cash',
+            amount: ''
+          });
+        }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Pay Salary - {selectedEmployee.employeeName}</h3>
+              <button className="modal-close" onClick={() => {
+                setShowPaySalaryForm(false);
+                setSelectedEmployee(null);
+                setPaySalaryFormData({
+                  month: new Date().toISOString().slice(0, 7),
+                  date: new Date().toISOString().split('T')[0],
+                  paymentMethod: 'cash',
+                  amount: ''
+                });
+              }}>×</button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={handlePaySalarySubmit}>
+                <div className="form-group">
+                  <label>Employee Name</label>
+                  <input
+                    type="text"
+                    value={selectedEmployee.employeeName}
+                    disabled
+                    style={{ background: '#f5f5f5', cursor: 'not-allowed' }}
+                  />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Amount to Pay (₹) *</label>
+                    <input
+                      type="number"
+                      name="amount"
+                      value={paySalaryFormData.amount}
+                      onChange={(e) => setPaySalaryFormData({ ...paySalaryFormData, amount: e.target.value })}
+                      min="0"
+                      step="0.01"
+                      placeholder="Pending amount after advance deduction"
+                      required
+                    />
+                    {selectedEmployee && (
+                      <div style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
+                        <div>Total Salary: ₹{parseFloat(selectedEmployee.salaryAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                        <div>Advance Taken: ₹{getAdvancePayments(selectedEmployee.id).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                        <div style={{ fontWeight: '600', color: '#28a745', marginTop: '4px' }}>
+                          Pending Amount: ₹{getPendingPayments(selectedEmployee.id, selectedEmployee.salaryAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="form-group">
+                    <label>Month *</label>
+                    <input
+                      type="month"
+                      name="month"
+                      value={paySalaryFormData.month}
+                      onChange={(e) => setPaySalaryFormData({ ...paySalaryFormData, month: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Payment Date *</label>
+                    <input
+                      type="date"
+                      name="date"
+                      value={paySalaryFormData.date}
+                      onChange={(e) => setPaySalaryFormData({ ...paySalaryFormData, date: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Payment Method *</label>
+                    <select
+                      name="paymentMethod"
+                      value={paySalaryFormData.paymentMethod}
+                      onChange={(e) => setPaySalaryFormData({ ...paySalaryFormData, paymentMethod: e.target.value })}
+                      required
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="bank">Bank Transfer</option>
+                      <option value="upi">UPI</option>
+                      <option value="cheque">Cheque</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="form-actions">
+                  <button type="submit" className="btn btn-primary">
+                    Pay Salary
+                  </button>
+                  <button type="button" className="btn btn-secondary" onClick={() => {
+                    setShowPaySalaryForm(false);
+                    setSelectedEmployee(null);
+                    setPaySalaryFormData({
+                      month: new Date().toISOString().slice(0, 7),
+                      date: new Date().toISOString().split('T')[0],
+                      paymentMethod: 'cash',
+                      amount: ''
+                    });
+                  }}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Employee Form Modal */}
+      {showSalaryForm && (
+        <div className="modal-overlay" onClick={() => {
+          setShowSalaryForm(false);
+          setSalaryFormData({
+            employeeName: '',
+            salaryAmount: '',
+            joiningDate: new Date().toISOString().split('T')[0],
+            otherInformation: ''
+          });
+        }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Add Employee</h3>
+              <button className="modal-close" onClick={() => {
+                setShowSalaryForm(false);
+                setSalaryFormData({
+                  employeeName: '',
+                  salaryAmount: '',
+                  joiningDate: new Date().toISOString().split('T')[0]
+                });
+              }}>×</button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const employeeData = {
+                  employeeName: salaryFormData.employeeName,
+                  salaryAmount: parseFloat(salaryFormData.salaryAmount) || 0,
+                  joiningDate: salaryFormData.joiningDate
+                };
+                addEmployee(employeeData);
+                loadEmployees();
+                setShowSalaryForm(false);
+                setSalaryFormData({
+                  employeeName: '',
+                  salaryAmount: '',
+                  joiningDate: new Date().toISOString().split('T')[0]
+                });
+              }}>
+                <div className="form-group">
+                  <label>Employee Name *</label>
+                  <input
+                    type="text"
+                    name="employeeName"
+                    value={salaryFormData.employeeName}
+                    onChange={(e) => setSalaryFormData({ ...salaryFormData, employeeName: e.target.value })}
+                    placeholder="Enter employee name"
+                    required
+                  />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Salary Amount (₹) *</label>
+                    <input
+                      type="number"
+                      name="salaryAmount"
+                      value={salaryFormData.salaryAmount}
+                      onChange={(e) => setSalaryFormData({ ...salaryFormData, salaryAmount: e.target.value })}
+                      min="0"
+                      step="0.01"
+                      placeholder="Enter salary amount"
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Joining Date *</label>
+                    <input
+                      type="date"
+                      name="joiningDate"
+                      value={salaryFormData.joiningDate}
+                      onChange={(e) => setSalaryFormData({ ...salaryFormData, joiningDate: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="form-actions">
+                  <button type="submit" className="btn btn-primary">
+                    Add Employee
+                  </button>
+                  <button type="button" className="btn btn-secondary" onClick={() => {
+                    setShowSalaryForm(false);
+                    setSalaryFormData({
+                      employeeName: '',
+                      salaryAmount: '',
+                      joiningDate: new Date().toISOString().split('T')[0],
+                      otherInformation: ''
+                    });
+                  }}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Employee Tab Content */}
+      {activeTab === 'employee' && (
+        <div className="expenses-tab-content">
+          <div className="salaries-actions">
+            <button className="btn btn-primary" onClick={() => setShowSalaryForm(true)}>
+              + Add Employee
+            </button>
+            {/* Only show Pay Advance button if there are employees */}
+            {employees.length > 0 && (
+              <button className="btn btn-secondary" onClick={() => {
+                setShowPayAdvanceForm(true);
+                setPayAdvanceFormData({
+                  employeeId: '',
+                  amount: '',
+                  date: new Date().toISOString().split('T')[0]
+                });
+              }}>
+                💰 Pay Advance
+              </button>
+            )}
+          </div>
+          <div className="salaries-content">
+            {employees.length > 0 ? (
+              <div className="expenses-table-container">
+                <div className="sales-table-wrapper">
+                  <table className="data-table expenses-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Amount</th>
+                        <th>Joining Date</th>
+                        <th>Advance Payment</th>
+                        <th>Pending Payment</th>
+                        <th>Salary Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {employees.map((employee) => {
+                        const advancePayments = getAdvancePayments(employee.id);
+                        const pendingPayments = getPendingPayments(employee.id, employee.salaryAmount);
+                        const salaryStatus = getCurrentMonthSalaryStatus(employee.id);
+                        return (
+                        <tr key={employee.id}>
+                          <td className="date-cell">{employee.employeeName}</td>
+                          <td className="amount-cell total-col">
+                            <span className="expense-amount">₹{parseFloat(employee.salaryAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </td>
+                          <td style={{ fontSize: '12px' }}>{employee.joiningDate ? new Date(employee.joiningDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-'}</td>
+                          <td className="amount-cell">
+                            <span className="expense-amount" style={{ color: '#ffc107' }}>
+                              ₹{advancePayments.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </td>
+                          <td className="amount-cell">
+                            <span className="expense-amount" style={{ color: '#dc3545' }}>
+                              ₹{pendingPayments.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`payment-badge ${salaryStatus === 'Paid' ? 'status-paid' : 'status-pending'}`}>
+                              {salaryStatus}
+                            </span>
+                          </td>
+                          <td className="actions-cell">
+                            <button
+                              className="btn-icon btn-pay-salary"
+                              onClick={() => handlePaySalaryClick(employee)}
+                              title="Pay Salary"
+                            >
+                              💰
+                            </button>
+                            <button
+                              className="btn-icon btn-edit"
+                              onClick={() => {
+                                // TODO: Implement edit functionality
+                                console.log('Edit employee', employee);
+                              }}
+                              title="Edit"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              className="btn-icon btn-delete"
+                              onClick={() => {
+                                if (window.confirm('Are you sure you want to delete this employee?')) {
+                                  deleteEmployee(employee.id);
+                                  loadEmployees();
+                                }
+                              }}
+                              title="Delete"
+                            >
+                              🗑️
+                            </button>
+                          </td>
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="empty-state-wrapper">
+                <span className="empty-icon">👤</span>
+                <p className="empty-state">No employees added yet</p>
+                <p className="empty-subtitle">Click "Add Employee" to add your first employee</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Expenses Table */}
+      {activeTab === 'all' && (
       <div className="expenses-table-container">
         {filteredExpenses.length > 0 ? (
           <>
@@ -472,7 +1097,7 @@ const Expenses = () => {
                         </div>
                       </td>
                       <td className="amount-cell total-col">
-                        <span className="total-amount">₹{parseFloat(expense.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <span className="expense-amount">₹{parseFloat(expense.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </td>
                       <td>
                         <span className="payment-badge">{expense.paymentMethod}</span>
@@ -553,6 +1178,7 @@ const Expenses = () => {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };

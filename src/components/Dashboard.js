@@ -1,10 +1,71 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { getInventory } from '../utils/storage';
+import { getInventory, getExpenses } from '../utils/storage';
 import Expenses from './Expenses';
 import './Dashboard.css';
 
-const Dashboard = () => {
-  const [activeTab, setActiveTab] = useState('sales'); // 'sales', 'inventory', 'expenses'
+const Dashboard = ({ activeNav, setActiveNav }) => {
+  // Shared state for Expenses form
+  const [expensesFormOpen, setExpensesFormOpen] = useState(false);
+  
+  // Expenses Section Component
+  const ExpensesSection = () => {
+    return (
+      <div className="dashboard-section expenses-section">
+        <div className="section-header-enhanced">
+          <div className="section-title-wrapper">
+            <span className="section-icon">💵</span>
+            <h3>Daily Expenses</h3>
+          </div>
+          <div className="section-header-actions">
+            <button className="btn btn-primary" onClick={() => setExpensesFormOpen(true)}>
+              + Add Expense
+            </button>
+          </div>
+        </div>
+        <div className="section-content">
+          <Expenses hideHeader={true} hideStats={true} showForm={expensesFormOpen} onFormClose={() => setExpensesFormOpen(false)} />
+        </div>
+      </div>
+    );
+  };
+  // Map sidebar navigation to internal tab state
+  const getActiveTab = () => {
+    if (activeNav === 'sales') return 'sales';
+    if (activeNav === 'inventory') return 'inventory';
+    if (activeNav === 'expenses') return 'expenses';
+    return 'sales'; // Default to sales when dashboard is selected
+  };
+
+  const [activeTab, setActiveTab] = useState(getActiveTab());
+  
+  // Update active tab when sidebar navigation changes
+  React.useEffect(() => {
+    if (activeNav === 'dashboard') {
+      setActiveTab('sales');
+    } else {
+      setActiveTab(activeNav);
+    }
+  }, [activeNav]);
+
+  // Refresh expenses data periodically and when expenses tab is active
+  useEffect(() => {
+    const refreshExpenses = () => {
+      const expensesData = getExpenses();
+      setExpenses(expensesData);
+    };
+
+    // Refresh on mount and when expenses tab becomes active
+    refreshExpenses();
+    
+    // Set up interval to refresh expenses every 2 seconds when expenses tab is active
+    const interval = setInterval(() => {
+      if (activeTab === 'expenses') {
+        refreshExpenses();
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [activeTab]);
   const [stats, setStats] = useState({
     totalSales: 0,
     totalWithGST: 0,
@@ -16,6 +77,7 @@ const Dashboard = () => {
   });
   const [inventory, setInventory] = useState([]);
   const [bills, setBills] = useState([]);
+  const [expenses, setExpenses] = useState([]);
   const [loadingBills, setLoadingBills] = useState(true);
   const [showAddInventory, setShowAddInventory] = useState(false);
   const [showEditInventory, setShowEditInventory] = useState(false);
@@ -32,7 +94,6 @@ const Dashboard = () => {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
   const [inventorySortConfig, setInventorySortConfig] = useState({ key: null, direction: 'asc' });
   const [toast, setToast] = useState(null);
-  const [darkMode, setDarkMode] = useState(false);
   const [apiConnectionError, setApiConnectionError] = useState(false);
   const itemsPerPage = 10;
   const [formData, setFormData] = useState({
@@ -221,6 +282,9 @@ const Dashboard = () => {
       try {
         await fetchInventory();
         await fetchBills();
+        // Load expenses from localStorage
+        const expensesData = getExpenses();
+        setExpenses(expensesData);
       } catch (error) {
         // Errors are already handled in fetchInventory and fetchBills
         // This just prevents unhandled promise rejection
@@ -239,6 +303,11 @@ const Dashboard = () => {
     const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
     const price = item.pricePerSqft || item.price_per_sqft || item.unitPrice || 0;
     return sum + (stock * price);
+  }, 0);
+
+  // Calculate total expenses
+  const totalExpenses = expenses.reduce((sum, exp) => {
+    return sum + (parseFloat(exp.amount) || 0);
   }, 0);
 
   const lowStockItems = inventory.filter(item => {
@@ -441,12 +510,6 @@ const Dashboard = () => {
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
-  };
-
-  // Dark mode toggle
-  const toggleDarkMode = () => {
-    setDarkMode(!darkMode);
-    document.body.classList.toggle('dark-mode', !darkMode);
   };
 
   // Export to CSV helper
@@ -886,13 +949,7 @@ const Dashboard = () => {
   };
 
   return (
-    <div className={`dashboard-container ${darkMode ? 'dark-mode' : ''}`}>
-      <div className="dashboard-header">
-        <h2>Dashboard Overview</h2>
-        <button className="dark-mode-toggle" onClick={toggleDarkMode} title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
-          {darkMode ? '☀️' : '🌙'}
-        </button>
-      </div>
+    <div className="dashboard-container">
 
       {/* API Connection Error Banner */}
       {apiConnectionError && (
@@ -915,77 +972,91 @@ const Dashboard = () => {
         </div>
       )}
 
-      <div className="stats-grid">
-        <div className="stat-card primary">
-          <div className="stat-icon">💰</div>
-          <div className="stat-content">
-            <h3>Total Sales</h3>
-            <p className="stat-value">₹{stats.totalSales.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-            <p className="stat-label">{stats.totalCount} sale(s)</p>
+      {/* Stats Cards - Only show on Dashboard */}
+      {activeNav === 'dashboard' && (
+        <div className="stats-grid">
+          <div className="stat-card primary">
+            <div className="stat-icon">💰</div>
+            <div className="stat-content">
+              <h3>Total Sales</h3>
+              <p className="stat-value">₹{stats.totalSales.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{stats.totalCount} sale(s)</p>
+            </div>
+          </div>
+
+          <div className="stat-card success">
+            <div className="stat-icon">✓</div>
+            <div className="stat-content">
+              <h3>Sales with GST</h3>
+              <p className="stat-value">₹{stats.totalWithGST.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{stats.countWithGST} sale(s)</p>
+            </div>
+          </div>
+
+          <div className="stat-card warning">
+            <div className="stat-icon">ℹ</div>
+            <div className="stat-content">
+              <h3>Sales without GST</h3>
+              <p className="stat-value">₹{stats.totalWithoutGST.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{stats.countWithoutGST} sale(s)</p>
+            </div>
+          </div>
+
+          <div className="stat-card info">
+            <div className="stat-icon">📦</div>
+            <div className="stat-content">
+              <h3>Inventory Value</h3>
+              <p className="stat-value">₹{totalInventoryValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{inventory.length} item(s)</p>
+            </div>
+          </div>
+
+          <div className="stat-card expense">
+            <div className="stat-icon">💵</div>
+            <div className="stat-content">
+              <h3>Total Expenses</h3>
+              <p className="stat-value">₹{totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{expenses.length} expense(s)</p>
+            </div>
           </div>
         </div>
+      )}
 
-        <div className="stat-card success">
-          <div className="stat-icon">✓</div>
-          <div className="stat-content">
-            <h3>Sales with GST</h3>
-            <p className="stat-value">₹{stats.totalWithGST.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-            <p className="stat-label">{stats.countWithGST} sale(s)</p>
-          </div>
-        </div>
-
-        <div className="stat-card warning">
-          <div className="stat-icon">ℹ</div>
-          <div className="stat-content">
-            <h3>Sales without GST</h3>
-            <p className="stat-value">₹{stats.totalWithoutGST.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-            <p className="stat-label">{stats.countWithoutGST} sale(s)</p>
-          </div>
-        </div>
-
-        <div className="stat-card info">
-          <div className="stat-icon">📦</div>
-          <div className="stat-content">
-            <h3>Inventory Value</h3>
-            <p className="stat-value">₹{totalInventoryValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-            <p className="stat-label">{inventory.length} item(s)</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Tab Navigation */}
-      <div className="tab-navigation">
+      {/* Tab Navigation - Hidden since we're using sidebar navigation */}
+      <div className="tab-navigation" style={{ display: 'none' }}>
         <button
           className={`tab-btn ${activeTab === 'sales' ? 'active' : ''}`}
-          onClick={() => setActiveTab('sales')}
+          onClick={() => {
+            setActiveTab('sales');
+            if (setActiveNav) setActiveNav('sales');
+          }}
         >
           💰 Sales
         </button>
         <button
           className={`tab-btn ${activeTab === 'inventory' ? 'active' : ''}`}
-          onClick={() => setActiveTab('inventory')}
+          onClick={() => {
+            setActiveTab('inventory');
+            if (setActiveNav) setActiveNav('inventory');
+          }}
         >
           📦 Inventory
         </button>
         <button
           className={`tab-btn ${activeTab === 'expenses' ? 'active' : ''}`}
-          onClick={() => setActiveTab('expenses')}
+          onClick={() => {
+            setActiveTab('expenses');
+            if (setActiveNav) setActiveNav('expenses');
+          }}
         >
           💵 Daily Expenses
         </button>
       </div>
 
       {/* Render content based on active tab */}
-      {activeTab === 'expenses' ? (
-        <div className="dashboard-sections">
-          <div className="dashboard-section expenses-section">
-            <Expenses />
-          </div>
-        </div>
-      ) : (
-        <div className="dashboard-sections">
-          {/* Sales Section */}
-          {activeTab === 'sales' && (
+      <div className="dashboard-sections">
+        {/* Sales Section - Only show when Sales tab is selected, not on Dashboard */}
+        {activeTab === 'sales' && activeNav === 'sales' && (
           <div className="dashboard-section sales-section">
           <div className="section-header-enhanced">
             <div className="section-title-wrapper">
@@ -1235,12 +1306,12 @@ const Dashboard = () => {
             )}
           </div>
         </div>
-          )}
+        )}
 
         {/* Inventory Section */}
         {activeTab === 'inventory' && (
-        <div className="dashboard-section inventory-section">
-          <div className="section-header-enhanced">
+          <div className="dashboard-section inventory-section">
+            <div className="section-header-enhanced">
             <div className="section-title-wrapper">
               <span className="section-icon">📦</span>
               <h3>Inventory Items</h3>
@@ -1471,9 +1542,18 @@ const Dashboard = () => {
           </div>
         </div>
         )}
-        </div>
-      )}
 
+        {/* Expenses Section */}
+        {activeTab === 'expenses' && (
+          <div className="dashboard-section expenses-section">
+            <div className="section-content">
+              <Expenses hideHeader={true} hideStats={true} showForm={expensesFormOpen} onFormClose={() => setExpensesFormOpen(false)} onFormOpen={() => setExpensesFormOpen(true)} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Low Stock Alert - Only show when not in expenses section */}
       {activeTab !== 'expenses' && lowStockItems.length > 0 && (
         <div className="dashboard-sections">
           <div className="dashboard-section">
