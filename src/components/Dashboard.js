@@ -1,6 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { getInventory, getExpenses } from '../utils/storage';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { getInventory, getExpenses, getSales } from '../utils/storage';
 import Expenses from './Expenses';
+import Invoice from './Invoice';
+import { downloadBillPDF } from '../utils/api';
+import { fetchExpenses as apiFetchExpenses } from '../utils/api';
+import { API_BASE_URL } from '../config/api';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import './Dashboard.css';
 
 const Dashboard = ({ activeNav, setActiveNav }) => {
@@ -23,7 +28,14 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
           </div>
         </div>
         <div className="section-content">
-          <Expenses hideHeader={true} hideStats={true} showForm={expensesFormOpen} onFormClose={() => setExpensesFormOpen(false)} />
+          <Expenses 
+            hideHeader={true} 
+            hideStats={true} 
+            showForm={expensesFormOpen} 
+            onFormOpen={() => setExpensesFormOpen(true)} 
+            onFormClose={() => setExpensesFormOpen(false)}
+            onExpenseUpdate={fetchExpenses}
+          />
         </div>
       </div>
     );
@@ -47,25 +59,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     }
   }, [activeNav]);
 
-  // Refresh expenses data periodically and when expenses tab is active
-  useEffect(() => {
-    const refreshExpenses = () => {
-      const expensesData = getExpenses();
-      setExpenses(expensesData);
-    };
-
-    // Refresh on mount and when expenses tab becomes active
-    refreshExpenses();
-    
-    // Set up interval to refresh expenses every 2 seconds when expenses tab is active
-    const interval = setInterval(() => {
-      if (activeTab === 'expenses') {
-        refreshExpenses();
-      }
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [activeTab]);
+  // Expenses are now loaded from API only via the Expenses component
+  // No need to refresh from localStorage
   const [stats, setStats] = useState({
     totalSales: 0,
     totalWithGST: 0,
@@ -86,6 +81,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   const [selectedBill, setSelectedBill] = useState(null);
   const [billItems, setBillItems] = useState([]);
   const [loadingBillItems, setLoadingBillItems] = useState(false);
+  const [selectedBillForInvoice, setSelectedBillForInvoice] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [inventorySearchQuery, setInventorySearchQuery] = useState('');
   const [salesCurrentPage, setSalesCurrentPage] = useState(1);
@@ -95,6 +91,10 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   const [inventorySortConfig, setInventorySortConfig] = useState({ key: null, direction: 'asc' });
   const [toast, setToast] = useState(null);
   const [apiConnectionError, setApiConnectionError] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState({
+    stats: false,
+    charts: false
+  });
   const itemsPerPage = 10;
   const [formData, setFormData] = useState({
     name: '',
@@ -141,12 +141,17 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   const fetchInventory = useCallback(async () => {
     try {
       console.log('Fetching inventory from API via proxy...');
-      const response = await fetch('/api/inventory', {
+      const token = localStorage.getItem('authToken');
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch(`${API_BASE_URL}/inventory`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        }
+        headers: headers
       });
       
       console.log('GET Response status:', response.status, response.statusText);
@@ -214,15 +219,32 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     }
   }, []);
 
+  const fetchExpenses = useCallback(async () => {
+    try {
+      const expensesData = await apiFetchExpenses();
+      setExpenses(expensesData || []);
+    } catch (error) {
+      console.error('Error fetching expenses:', error);
+      setExpenses([]);
+    }
+  }, []);
+
   const fetchBills = useCallback(async () => {
     try {
       setLoadingBills(true);
-      const response = await fetch('/api/bills', {
+      const token = localStorage.getItem('authToken');
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const billsUrl = `${API_BASE_URL}/bills`;
+      console.log('[Dashboard] Fetching bills from:', billsUrl, 'API_BASE_URL:', API_BASE_URL);
+      const response = await fetch(billsUrl, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        }
+        headers: headers
       });
       
       if (!response.ok) {
@@ -282,18 +304,172 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       try {
         await fetchInventory();
         await fetchBills();
-        // Load expenses from localStorage
-        const expensesData = getExpenses();
-        setExpenses(expensesData);
+        await fetchExpenses(); // Load expenses for the chart
       } catch (error) {
-        // Errors are already handled in fetchInventory and fetchBills
+        // Errors are already handled in fetchInventory, fetchBills, and fetchExpenses
         // This just prevents unhandled promise rejection
         console.log('Data loading completed with fallbacks');
       }
     };
     
     loadData();
-  }, [fetchInventory, fetchBills]); // Include dependencies
+  }, [fetchInventory, fetchBills, fetchExpenses]); // Include dependencies
+
+  // Chart data preparation - Must be before any early returns
+  const [chartPeriod, setChartPeriod] = useState('monthly'); // daily, weekly, monthly
+  const [gstChartPeriod, setGstChartPeriod] = useState('monthly'); // daily, weekly, monthly, annually
+
+  // Prepare sales chart data
+  const salesChartData = useMemo(() => {
+    if (!bills || bills.length === 0) return [];
+    
+    const dataMap = new Map();
+    
+    bills.forEach(bill => {
+      const billDate = new Date(bill.date || bill.createdAt || Date.now());
+      let key, label;
+      
+      if (chartPeriod === 'daily') {
+        key = billDate.toISOString().split('T')[0];
+        label = billDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+      } else if (chartPeriod === 'weekly') {
+        const weekStart = new Date(billDate);
+        weekStart.setDate(billDate.getDate() - billDate.getDay());
+        key = weekStart.toISOString().split('T')[0];
+        label = `Week ${weekStart.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`;
+      } else { // monthly
+        key = `${billDate.getFullYear()}-${String(billDate.getMonth() + 1).padStart(2, '0')}`;
+        label = billDate.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+      }
+      
+      if (!dataMap.has(key)) {
+        dataMap.set(key, {
+          period: label,
+          total: 0,
+          withGST: 0,
+          withoutGST: 0
+        });
+      }
+      
+      const data = dataMap.get(key);
+      data.total += bill.totalAmount || 0;
+      
+      if (bill.billType === 'GST') {
+        data.withGST += bill.totalAmount || 0;
+      } else {
+        data.withoutGST += bill.totalAmount || 0;
+      }
+    });
+    
+    return Array.from(dataMap.values()).sort((a, b) => {
+      return a.period.localeCompare(b.period);
+    });
+  }, [bills, chartPeriod]);
+
+  // Prepare GST chart data - Only GST sales
+  const gstChartData = useMemo(() => {
+    if (!bills || bills.length === 0) return [];
+    
+    // Filter only GST bills
+    const gstBills = bills.filter(bill => bill.billType === 'GST');
+    if (gstBills.length === 0) return [];
+    
+    const dataMap = new Map();
+    
+    gstBills.forEach(bill => {
+      const billDate = new Date(bill.date || bill.createdAt || Date.now());
+      let key, label;
+      
+      if (gstChartPeriod === 'daily') {
+        key = billDate.toISOString().split('T')[0];
+        label = billDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+      } else if (gstChartPeriod === 'weekly') {
+        const weekStart = new Date(billDate);
+        weekStart.setDate(billDate.getDate() - billDate.getDay());
+        key = weekStart.toISOString().split('T')[0];
+        label = `Week ${weekStart.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`;
+      } else if (gstChartPeriod === 'annually') {
+        key = `${billDate.getFullYear()}`;
+        label = billDate.getFullYear().toString();
+      } else { // monthly
+        key = `${billDate.getFullYear()}-${String(billDate.getMonth() + 1).padStart(2, '0')}`;
+        label = billDate.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+      }
+      
+      if (!dataMap.has(key)) {
+        dataMap.set(key, {
+          period: label,
+          gstSales: 0
+        });
+      }
+      
+      const data = dataMap.get(key);
+      data.gstSales += bill.totalAmount || 0;
+    });
+    
+    return Array.from(dataMap.values()).sort((a, b) => {
+      return a.period.localeCompare(b.period);
+    });
+  }, [bills, gstChartPeriod]);
+
+  // Prepare inventory chart data (by category/type)
+  const inventoryChartData = useMemo(() => {
+    if (!inventory || inventory.length === 0) return [];
+    
+    const categoryMap = new Map();
+    
+    inventory.forEach(item => {
+      const category = item.productType || item.product_type || item.category || 'Other';
+      const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
+      const price = item.pricePerSqft || item.price_per_sqft || item.unitPrice || 0;
+      const value = stock * price;
+      
+      if (!categoryMap.has(category)) {
+        categoryMap.set(category, {
+          name: category,
+          value: 0,
+          quantity: 0
+        });
+      }
+      
+      const data = categoryMap.get(category);
+      data.value += value;
+      data.quantity += stock;
+    });
+    
+    return Array.from(categoryMap.values()).sort((a, b) => b.value - a.value);
+  }, [inventory]);
+
+  // Prepare expenses chart data (by category) for pie chart
+  const expensesChartData = useMemo(() => {
+    if (!expenses || expenses.length === 0) return [];
+    
+    const categoryMap = new Map();
+    
+    expenses.forEach(exp => {
+      const category = exp.category || exp.type || 'Other';
+      const amount = parseFloat(exp.amount) || 0;
+      
+      if (!categoryMap.has(category)) {
+        categoryMap.set(category, {
+          name: category,
+          value: 0,
+          amount: 0,
+          count: 0
+        });
+      }
+      
+      const data = categoryMap.get(category);
+      data.value += amount;
+      data.amount += amount;
+      data.count += 1;
+    });
+    
+    return Array.from(categoryMap.values()).sort((a, b) => b.value - a.value);
+  }, [expenses]);
+
+  // Colors for pie chart segments
+  const COLORS = ['#dc3545', '#667eea', '#17a2b8', '#28a745', '#ffc107', '#fd7e14', '#6f42c1', '#e83e8c'];
 
   if (loadingBills && bills.length === 0) {
     return <div className="dashboard-container">Loading...</div>;
@@ -574,15 +750,18 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             </thead>
             <tbody>
               ${billItems.map(item => {
-                const qty = item.quantity || 0;
-                const price = item.pricePerUnit || item.price_per_unit || item.unitPrice || 0;
+                const qty = Number(parseFloat(item?.quantity) || 0) || 0;
+                const price = Number(parseFloat(item?.pricePerUnit || item?.price_per_unit || item?.unitPrice || item?.price) || 0) || 0;
+                const safeQty = isNaN(qty) ? 0 : qty;
+                const safePrice = isNaN(price) ? 0 : price;
+                const safeTotal = isNaN(qty * price) ? 0 : (qty * price);
                 return `
                   <tr>
-                    <td>${item.itemName || item.name || '-'}</td>
-                    <td>${item.category || '-'}</td>
-                    <td>${qty}</td>
-                    <td>₹${price.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-                    <td>₹${(qty * price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                    <td>${item?.itemName || item?.name || '-'}</td>
+                    <td>${item?.category || '-'}</td>
+                    <td>${safeQty}</td>
+                    <td>₹${safePrice.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                    <td>₹${safeTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                   </tr>
                 `;
               }).join('')}
@@ -590,23 +769,23 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             <tfoot>
               <tr class="total-row">
                 <td colspan="4" class="text-right">Subtotal:</td>
-                <td>₹${selectedBill.subtotal?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                <td>₹${(Number(parseFloat(selectedBill?.subtotal) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
               </tr>
               ${selectedBill.taxAmount > 0 ? `
                 <tr class="total-row">
                   <td colspan="4" class="text-right">Tax (${selectedBill.taxPercentage || 0}%):</td>
-                  <td>₹${selectedBill.taxAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                  <td>₹${(Number(parseFloat(selectedBill?.taxAmount) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                 </tr>
               ` : ''}
               ${selectedBill.discountAmount > 0 ? `
                 <tr class="total-row">
                   <td colspan="4" class="text-right">Discount:</td>
-                  <td>-₹${selectedBill.discountAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                  <td>-₹${(Number(parseFloat(selectedBill?.discountAmount) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                 </tr>
               ` : ''}
               <tr class="total-row">
                 <td colspan="4" class="text-right"><strong>Total:</strong></td>
-                <td><strong>₹${selectedBill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></td>
+                <td><strong>₹${(Number(parseFloat(selectedBill?.totalAmount) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></td>
               </tr>
             </tfoot>
           </table>
@@ -642,7 +821,17 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         setLoadingBillItems(false);
       } else {
         // Fetch bill details from API
-        const response = await fetch(`/api/bills/${bill.id}`);
+        const token = localStorage.getItem('authToken');
+        const headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        const response = await fetch(`${API_BASE_URL}/bills/${bill.id}`, {
+          headers: headers
+        });
         if (response.ok) {
           const billDetails = await response.json();
           setBillItems(billDetails.items || []);
@@ -733,12 +922,17 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       console.log('JSON body values:', Object.values(itemData));
       
       // POST request to add inventory
-      const response = await fetch('/api/inventory', {
+      const token = localStorage.getItem('authToken');
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch(`${API_BASE_URL}/inventory`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers: headers,
         body: jsonBody
       });
 
@@ -848,12 +1042,17 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     };
 
     try {
-      const response = await fetch(`/api/inventory/${editingInventoryItem.id}`, {
+      const token = localStorage.getItem('authToken');
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch(`${API_BASE_URL}/inventory/${editingInventoryItem.id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers: headers,
         body: JSON.stringify(itemData)
       });
 
@@ -894,11 +1093,16 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     }
 
     try {
-      const response = await fetch(`/api/inventory/${item.id}`, {
+      const token = localStorage.getItem('authToken');
+      const headers = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const response = await fetch(`${API_BASE_URL}/inventory/${item.id}`, {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        }
+        headers: headers
       });
 
       if (!response.ok) {
@@ -974,7 +1178,18 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
 
       {/* Stats Cards - Only show on Dashboard */}
       {activeNav === 'dashboard' && (
-        <div className="stats-grid">
+        <div className={`collapsible-section ${collapsedSections.stats ? 'collapsed' : ''}`}>
+          <div 
+            className="section-toggle-header"
+            onClick={() => setCollapsedSections(prev => ({ ...prev, stats: !prev.stats }))}
+          >
+            <h3 className="section-toggle-title">
+              <span className="section-toggle-icon">{collapsedSections.stats ? '▶' : '▼'}</span>
+              Statistics Overview
+            </h3>
+          </div>
+          <div className="section-toggle-content">
+            <div className="stats-grid">
           <div className="stat-card primary">
             <div className="stat-icon">💰</div>
             <div className="stat-content">
@@ -1017,6 +1232,231 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
               <h3>Total Expenses</h3>
               <p className="stat-value">₹{totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
               <p className="stat-label">{expenses.length} expense(s)</p>
+            </div>
+          </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Charts Section - Only show on Dashboard */}
+      {activeNav === 'dashboard' && (
+        <div className={`collapsible-section ${collapsedSections.charts ? 'collapsed' : ''}`}>
+          <div 
+            className="section-toggle-header"
+            onClick={() => setCollapsedSections(prev => ({ ...prev, charts: !prev.charts }))}
+          >
+            <h3 className="section-toggle-title">
+              <span className="section-toggle-icon">{collapsedSections.charts ? '▶' : '▼'}</span>
+              Charts & Analytics
+            </h3>
+          </div>
+          <div className="section-toggle-content">
+            <div className="charts-section">
+          {/* Sales Chart */}
+          <div className="chart-card">
+            <div className="chart-header">
+              <h3>Sales Overview</h3>
+              <div className="chart-period-selector">
+                <button 
+                  className={chartPeriod === 'daily' ? 'active' : ''}
+                  onClick={() => setChartPeriod('daily')}
+                >
+                  Daily
+                </button>
+                <button 
+                  className={chartPeriod === 'weekly' ? 'active' : ''}
+                  onClick={() => setChartPeriod('weekly')}
+                >
+                  Weekly
+                </button>
+                <button 
+                  className={chartPeriod === 'monthly' ? 'active' : ''}
+                  onClick={() => setChartPeriod('monthly')}
+                >
+                  Monthly
+                </button>
+              </div>
+            </div>
+            <div className="chart-container">
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={salesChartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="period" />
+                  <YAxis />
+                  <Tooltip 
+                    formatter={(value) => {
+                      const num = Number(value) || 0;
+                      return `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                    }}
+                  />
+                  <Bar dataKey="withGST" fill="#28a745" name="GST" />
+                  <Bar dataKey="withoutGST" fill="#ffc107" name="NON-GST" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* GST Chart */}
+          <div className="chart-card">
+            <div className="chart-header">
+              <h3>GST Sales</h3>
+              <div className="chart-period-selector">
+                <button 
+                  className={gstChartPeriod === 'daily' ? 'active' : ''}
+                  onClick={() => setGstChartPeriod('daily')}
+                >
+                  Daily
+                </button>
+                <button 
+                  className={gstChartPeriod === 'weekly' ? 'active' : ''}
+                  onClick={() => setGstChartPeriod('weekly')}
+                >
+                  Weekly
+                </button>
+                <button 
+                  className={gstChartPeriod === 'monthly' ? 'active' : ''}
+                  onClick={() => setGstChartPeriod('monthly')}
+                >
+                  Monthly
+                </button>
+                <button 
+                  className={gstChartPeriod === 'annually' ? 'active' : ''}
+                  onClick={() => setGstChartPeriod('annually')}
+                >
+                  Annually
+                </button>
+              </div>
+            </div>
+            <div className="chart-container">
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={gstChartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="period" />
+                  <YAxis />
+                  <Tooltip 
+                    formatter={(value) => {
+                      const num = Number(value) || 0;
+                      return `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                    }}
+                  />
+                  <Bar dataKey="gstSales" fill="#28a745" name="GST Sales" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Inventory Chart - Horizontal Bar Chart */}
+          <div className="chart-card">
+            <div className="chart-header">
+              <h3>Inventory Value by Category</h3>
+            </div>
+            <div className="chart-container">
+              <ResponsiveContainer width="100%" height={380}>
+                <BarChart
+                  data={inventoryChartData.map(item => {
+                    const total = inventoryChartData.reduce((sum, i) => sum + (Number(i.value) || 0), 0);
+                    const percent = total > 0 ? ((Number(item.value) / total) * 100) : 0;
+                    return { ...item, percent };
+                  })}
+                  layout="vertical"
+                  margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                >
+                  <XAxis 
+                    type="number" 
+                    domain={[0, 'dataMax']}
+                    tickFormatter={(value) => `${value.toFixed(0)}%`}
+                    stroke="#666"
+                    fontSize={12}
+                  />
+                  <YAxis 
+                    type="category" 
+                    dataKey="name" 
+                    width={50}
+                    stroke="#666"
+                    fontSize={12}
+                    tick={{ fill: '#333' }}
+                  />
+                  <Tooltip 
+                    formatter={(value, name, props) => {
+                      const num = Number(props.payload.value) || 0;
+                      const total = inventoryChartData.reduce((sum, item) => sum + (Number(item.value) || 0), 0);
+                      const percent = total > 0 ? ((num / total) * 100).toFixed(1) : '0';
+                      return [
+                        `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${percent}%)`,
+                        'Value'
+                      ];
+                    }}
+                    labelFormatter={(label) => label}
+                  />
+                  <Bar 
+                    dataKey="percent" 
+                    radius={[0, 8, 8, 0]}
+                  >
+                    {inventoryChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Expenses Chart - Horizontal Bar Chart */}
+          <div className="chart-card">
+            <div className="chart-header">
+              <h3>Expenses by Category</h3>
+            </div>
+            <div className="chart-container">
+              <ResponsiveContainer width="100%" height={380}>
+                <BarChart
+                  data={expensesChartData.map(item => {
+                    const total = expensesChartData.reduce((sum, i) => sum + (Number(i.value) || 0), 0);
+                    const percent = total > 0 ? ((Number(item.value) / total) * 100) : 0;
+                    return { ...item, percent };
+                  })}
+                  layout="vertical"
+                  margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                >
+                  <XAxis 
+                    type="number" 
+                    domain={[0, 'dataMax']}
+                    tickFormatter={(value) => `${value.toFixed(0)}%`}
+                    stroke="#666"
+                    fontSize={12}
+                  />
+                  <YAxis 
+                    type="category" 
+                    dataKey="name" 
+                    width={50}
+                    stroke="#666"
+                    fontSize={12}
+                    tick={{ fill: '#333' }}
+                  />
+                  <Tooltip 
+                    formatter={(value, name, props) => {
+                      const num = Number(props.payload.value) || 0;
+                      const total = expensesChartData.reduce((sum, item) => sum + (Number(item.value) || 0), 0);
+                      const percent = total > 0 ? ((num / total) * 100).toFixed(1) : '0';
+                      return [
+                        `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${percent}%)`,
+                        'Value'
+                      ];
+                    }}
+                    labelFormatter={(label) => label}
+                  />
+                  <Bar 
+                    dataKey="percent" 
+                    radius={[0, 8, 8, 0]}
+                  >
+                    {expensesChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
             </div>
           </div>
         </div>
@@ -1150,6 +1590,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
               </div>
             ) : filteredBills.length > 0 ? (
               <>
+                {/* Desktop Table View */}
                 <div className="sales-table-wrapper">
                   <table className="data-table sales-table">
                     <thead>
@@ -1208,6 +1649,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                             <span className="sort-icon">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                           )}
                         </th>
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1236,10 +1678,106 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                         <td className="total-cell total-col">
                           <span className="total-amount">₹{bill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </td>
+                        <td>
+                          <div className="action-buttons" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              className="action-btn"
+                              onClick={() => handleBillRowClick(bill)}
+                              title="View Details"
+                            >
+                              👁️
+                            </button>
+                            <button
+                              className="action-btn"
+                              onClick={async () => {
+                                try {
+                                  await downloadBillPDF(bill.id, bill.billType);
+                                } catch (error) {
+                                  alert(`Failed to download bill: ${error.message}`);
+                                }
+                              }}
+                              title="Download PDF"
+                            >
+                              ⬇️
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                       ))}
                     </tbody>
                   </table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="mobile-sales-cards">
+                  {paginatedBills.map((bill, index) => (
+                    <div 
+                      key={`bill-card-${bill.id || index}`} 
+                      className="sales-card" 
+                      onClick={() => handleBillRowClick(bill)}
+                    >
+                      <div className="sales-card-header">
+                        <span className="sales-card-title">#{bill.billNumber}</span>
+                        <span className={`gst-badge sales-card-badge ${bill.billType === 'GST' ? 'gst-paid' : 'gst-not-paid'}`}>
+                          {bill.billType === 'GST' ? '✓ GST' : 'NON-GST'}
+                        </span>
+                      </div>
+                      <div className="sales-card-row">
+                        <span className="sales-card-label">Date:</span>
+                        <span className="sales-card-value">{formatBillDate(bill.billDate)}</span>
+                      </div>
+                      <div className="sales-card-row">
+                        <span className="sales-card-label">Customer:</span>
+                        <span className="sales-card-value">{bill.customerMobileNumber || '-'}</span>
+                      </div>
+                      <div className="sales-card-row">
+                        <span className="sales-card-label">Sqft:</span>
+                        <span className="sales-card-value">{bill.totalSqft?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} sqft</span>
+                      </div>
+                      <div className="sales-card-row">
+                        <span className="sales-card-label">Subtotal:</span>
+                        <span className="sales-card-value">₹{bill.subtotal?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                      {bill.taxAmount > 0 && (
+                        <div className="sales-card-row">
+                          <span className="sales-card-label">Tax:</span>
+                          <span className="sales-card-value">₹{bill.taxAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                      {bill.discountAmount > 0 && (
+                        <div className="sales-card-row">
+                          <span className="sales-card-label">Discount:</span>
+                          <span className="sales-card-value">₹{bill.discountAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                      <div className="sales-card-total">
+                        <span className="sales-card-label">Total:</span>
+                        <span className="sales-card-value">₹{bill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                      <div className="sales-card-actions" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="action-btn"
+                          onClick={() => handleBillRowClick(bill)}
+                          title="View Details"
+                        >
+                          👁️
+                        </button>
+                        <button
+                          className="action-btn"
+                          onClick={async () => {
+                            try {
+                              await downloadBillPDF(bill.id, bill.billType);
+                            } catch (error) {
+                              alert(`Failed to download bill: ${error.message}`);
+                            }
+                          }}
+                          title="Download PDF"
+                        >
+                          ⬇️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
                 {/* Pagination Controls for Sales */}
                 {salesTotalPages > 1 && (
@@ -1370,6 +1908,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             {inventory.length > 0 ? (
               filteredInventory.length > 0 ? (
                 <>
+                  {/* Desktop Table View */}
                   <div className="sales-table-wrapper">
                       <table className="data-table inventory-table">
                         <thead>
@@ -1474,6 +2013,83 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                         })}
                       </tbody>
                     </table>
+                  </div>
+
+                  {/* Mobile Card View for Inventory */}
+                  <div className="mobile-inventory-cards">
+                    {paginatedInventory.map((item, index) => {
+                      const pricePerSqft = item.pricePerSqft || item.price_per_sqft || item.unitPrice || 0;
+                      const totalSqftStock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
+                      const productType = item.productType || item.product_type || item.category || '-';
+                      const primaryImageUrl = item.primaryImageUrl || item.primary_image_url;
+                      const totalValue = totalSqftStock * pricePerSqft;
+                      const isLowStock = totalSqftStock < 10;
+                      
+                      return (
+                        <div 
+                          key={`inventory-card-${item.id || index}`} 
+                          className={`inventory-card ${isLowStock ? 'low-stock-card' : ''}`}
+                        >
+                          <div className="inventory-card-header">
+                            {primaryImageUrl && (
+                              <img 
+                                src={primaryImageUrl} 
+                                alt={item.name} 
+                                className="inventory-card-image" 
+                                onError={(e) => { e.target.style.display = 'none'; }} 
+                              />
+                            )}
+                            <div className="inventory-card-title-section">
+                              <h4 className="inventory-card-title">{item.name}</h4>
+                              <span className="product-type-badge">{productType}</span>
+                            </div>
+                            {isLowStock && <span className="low-stock-badge">⚠️ Low Stock</span>}
+                          </div>
+                          <div className="inventory-card-body">
+                            <div className="inventory-card-row">
+                              <span className="inventory-card-label">Price/Sqft:</span>
+                              <span className="inventory-card-value">₹{pricePerSqft.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            </div>
+                            <div className="inventory-card-row">
+                              <span className="inventory-card-label">Stock:</span>
+                              <span className={`inventory-card-value ${isLowStock ? 'low-stock-value' : ''}`}>
+                                {totalSqftStock.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} sqft
+                              </span>
+                            </div>
+                            {item.color && (
+                              <div className="inventory-card-row">
+                                <span className="inventory-card-label">Color:</span>
+                                <span className="color-badge">{item.color}</span>
+                              </div>
+                            )}
+                            <div className="inventory-card-total">
+                              <span className="inventory-card-label">Total Value:</span>
+                              <span className="inventory-card-value total-value">₹{totalValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            </div>
+                          </div>
+                          <div className="inventory-card-actions">
+                            <button
+                              className="btn btn-primary btn-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditInventory(item);
+                              }}
+                            >
+                              ✏️ Edit
+                            </button>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteInventory(item);
+                              }}
+                            >
+                              🗑️ Delete
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                   {/* Pagination Controls for Inventory */}
                   {inventoryTotalPages > 1 && (
@@ -1743,20 +2359,24 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     </thead>
                     <tbody>
                       {billItems.map((item, index) => {
-                        const quantity = item.quantity || 0;
-                        const pricePerUnit = item.pricePerUnit || item.price_per_unit || item.unitPrice || 0;
-                        const subtotal = quantity * pricePerUnit;
+                        const quantity = Number(parseFloat(item?.quantity) || 0) || 0;
+                        const pricePerUnit = Number(parseFloat(item?.pricePerUnit || item?.price_per_unit || item?.unitPrice || item?.price) || 0) || 0;
+                        const subtotal = Number((quantity * pricePerUnit) || 0) || 0;
+                        
+                        const safeQuantity = isNaN(quantity) ? 0 : quantity;
+                        const safePrice = isNaN(pricePerUnit) ? 0 : pricePerUnit;
+                        const safeSubtotal = isNaN(subtotal) ? 0 : subtotal;
                         
                         return (
                           <tr key={index}>
-                            <td className="item-name-cell">{item.itemName || item.name || '-'}</td>
+                            <td className="item-name-cell">{item?.itemName || item?.name || '-'}</td>
                             <td>
-                              <span className="product-type-badge">{item.category || '-'}</span>
+                              <span className="product-type-badge">{item?.category || '-'}</span>
                             </td>
-                            <td className="quantity-cell">{quantity.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                            <td className="amount-cell">₹{pricePerUnit.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td className="quantity-cell">{safeQuantity.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td className="amount-cell">₹{safePrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                             <td className="total-cell total-col">
-                              <span className="total-amount">₹{subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              <span className="total-amount">₹{safeSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             </td>
                           </tr>
                         );
@@ -1966,6 +2586,14 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
           <span className="toast-message">{toast.message}</span>
           <button className="toast-close" onClick={() => setToast(null)}>×</button>
         </div>
+      )}
+
+      {/* Invoice Modal */}
+      {selectedBillForInvoice && (
+        <Invoice 
+          bill={selectedBillForInvoice} 
+          onClose={() => setSelectedBillForInvoice(null)} 
+        />
       )}
     </div>
   );

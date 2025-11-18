@@ -1,0 +1,48 @@
+.customers-container {
+  max-width: 100%;
+  margin: 0;
+  background: #e0e5ec;
+  border-radius: 24px;
+  padding: 24px;
+}
+
+.customers-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.customers-header h2 {
+  margin: 0;
+  color: #333;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.customers-table-container {
+  background: #e0e5ec;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 
+    8px 8px 16px rgba(163, 177, 198, 0.7),
+    -8px -8px 16px rgba(255, 255, 255, 0.8),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.6),
+    inset -1px -1px 2px rgba(163, 177, 198, 0.3);
+}
+
+/* Error Message Styling */
+.error-message {
+  display: block;
+  color: #dc3545;
+  font-size: 12px;
+  margin-top: 5px;
+  font-weight: 500;
+}
+
+.form-group {
+  position: relative;
+}
+
+/* Search styles are already in Expenses.css, reusing them */
+
