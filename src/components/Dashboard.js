@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { getInventory, getExpenses, getSales } from '../utils/storage';
 import Expenses from './Expenses';
 import Invoice from './Invoice';
-import { downloadBillPDF } from '../utils/api';
+import HomeScreenManagement from './HomeScreenManagement';
+import { downloadBillPDF, handleApiResponse } from '../utils/api';
 import { fetchExpenses as apiFetchExpenses } from '../utils/api';
 import { API_BASE_URL } from '../config/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -45,6 +46,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     if (activeNav === 'sales') return 'sales';
     if (activeNav === 'inventory') return 'inventory';
     if (activeNav === 'expenses') return 'expenses';
+    if (activeNav === 'home-screen') return 'home-screen';
     return 'sales'; // Default to sales when dashboard is selected
   };
 
@@ -102,6 +104,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     product_type: '',
     price_per_sqft: '',
     total_sqft_stock: '',
+    unit: '',
     primary_image_url: '',
     color: ''
   });
@@ -157,6 +160,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       console.log('GET Response status:', response.status, response.statusText);
       
       if (!response.ok) {
+        // Check for session expiry (401)
+        if (response.status === 401) {
+          await handleApiResponse(response);
+          return [];
+        }
+        
         const errorText = await response.text();
         console.error('GET Error response:', errorText);
         
@@ -168,7 +177,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
           throw new Error(`Backend server error: ${response.status} ${response.statusText}`);
         }
         
-        // Client error (400, 401, 403, 404, etc.)
+        // Client error (400, 403, 404, etc.)
         throw new Error(`Failed to fetch inventory: ${response.status} ${response.statusText}`);
       }
       
@@ -248,6 +257,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       });
       
       if (!response.ok) {
+        // Check for session expiry (401)
+        if (response.status === 401) {
+          await handleApiResponse(response);
+          return;
+        }
+        
         // Server error (500, 502, 503, etc.) - backend is reachable but has issues
         if (response.status >= 500) {
           const errorText = await response.text();
@@ -421,7 +436,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     inventory.forEach(item => {
       const category = item.productType || item.product_type || item.category || 'Other';
       const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
-      const price = item.pricePerSqft || item.price_per_sqft || item.unitPrice || 0;
+      const price = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
       const value = stock * price;
       
       if (!categoryMap.has(category)) {
@@ -477,7 +492,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
 
   const totalInventoryValue = inventory.reduce((sum, item) => {
     const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
-    const price = item.pricePerSqft || item.price_per_sqft || item.unitPrice || 0;
+    const price = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
     return sum + (stock * price);
   }, 0);
 
@@ -499,7 +514,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const name = item.name?.toLowerCase() || '';
     const productType = (item.productType || item.product_type || item.category || '').toLowerCase();
     const color = (item.color || '').toLowerCase();
-    const pricePerSqft = (item.pricePerSqft || item.price_per_sqft || item.unitPrice || 0).toString();
+    const pricePerSqft = (item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0).toString();
     const totalSqftStock = (item.totalSqftStock || item.total_sqft_stock || item.quantity || 0).toString();
     const slug = (item.slug || '').toLowerCase();
 
@@ -524,8 +539,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         aValue = a.productType || a.product_type || '';
         bValue = b.productType || b.product_type || '';
       } else if (inventorySortConfig.key === 'pricePerSqft') {
-        aValue = a.pricePerSqft || a.price_per_sqft || 0;
-        bValue = b.pricePerSqft || b.price_per_sqft || 0;
+        aValue = a.pricePerSqft || a.price_per_sqft || a.pricePerUnit || a.unitPrice || 0;
+        bValue = b.pricePerSqft || b.price_per_sqft || b.pricePerUnit || b.unitPrice || 0;
       } else if (inventorySortConfig.key === 'totalSqftStock') {
         aValue = a.totalSqftStock || a.total_sqft_stock || 0;
         bValue = b.totalSqftStock || b.total_sqft_stock || 0;
@@ -832,6 +847,13 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         const response = await fetch(`${API_BASE_URL}/bills/${bill.id}`, {
           headers: headers
         });
+        
+        // Check for session expiry (401)
+        if (response.status === 401) {
+          await handleApiResponse(response);
+          return;
+        }
+        
         if (response.ok) {
           const billDetails = await response.json();
           setBillItems(billDetails.items || []);
@@ -877,12 +899,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const totalSqftStock = parseFloat(formData.total_sqft_stock);
     
     if (isNaN(pricePerSqft) || pricePerSqft < 0) {
-      alert('Please enter a valid price per square foot');
+      alert('Please enter a valid price per unit');
       return;
     }
     
     if (isNaN(totalSqftStock) || totalSqftStock < 0) {
-      alert('Please enter a valid total square feet stock');
+      alert('Please enter a valid quantity/stock');
       return;
     }
     
@@ -901,28 +923,41 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     
     // Use camelCase format (as shown in API error messages)
     // The error shows: primaryImageUrl, pricePerSqft, totalSqftStock, productTypeString
+    const trimmedUnit = (formData.unit || '').trim();
     const itemData = {
       name: trimmedName,
       slug: trimmedSlug,
       productTypeString: trimmedProductType,  // Must match API's expected field name
       pricePerSqft: pricePerSqft,  // Must match API's expected field name
       totalSqftStock: totalSqftStock,  // Must match API's expected field name
+      unit: trimmedUnit || 'piece',  // Unit (piece, sqr ft, etc.)
       primaryImageUrl: trimmedImageUrl,  // Must match API's expected field name
       color: trimmedColor
     };
 
     try {
-      console.log('Adding inventory item:', itemData);
-      console.log('Form data state:', formData);
-      
-      // Convert to JSON string and log it
-      const jsonBody = JSON.stringify(itemData);
-      console.log('JSON body being sent:', jsonBody);
-      console.log('JSON body keys:', Object.keys(itemData));
-      console.log('JSON body values:', Object.values(itemData));
-      
       // POST request to add inventory
       const token = localStorage.getItem('authToken');
+      const userData = JSON.parse(localStorage.getItem('user') || '{}');
+      
+      // Get admin role from user data - JWT token should already contain admin role
+      // Backend should extract role from JWT token, but we'll also send it in request body
+      const userRole = userData?.role || userData?.userRole || 'admin';
+      
+      // Add admin role to request body - backend may need it if JWT extraction fails
+      // Try both 'role' and 'userRole' field names in case backend expects different field
+      const requestBody = {
+        ...itemData,
+        role: userRole,        // Primary field name
+        userRole: userRole    // Alternative field name (in case backend expects this)
+      };
+      
+      // Debug logging
+      console.log('Adding inventory item:', itemData);
+      console.log('User role from localStorage:', userRole);
+      console.log('Request body with role:', JSON.stringify(requestBody, null, 2));
+      console.log('Request body keys:', Object.keys(requestBody));
+      
       const headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -930,13 +965,20 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
+      
       const response = await fetch(`${API_BASE_URL}/inventory`, {
         method: 'POST',
         headers: headers,
-        body: jsonBody
+        body: JSON.stringify(requestBody)
       });
 
       console.log('POST Response status:', response.status, response.statusText);
+
+      // Check for session expiry (401)
+      if (response.status === 401) {
+        await handleApiResponse(response);
+        return;
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -960,6 +1002,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         product_type: '',
         price_per_sqft: '',
         total_sqft_stock: '',
+        unit: '',
         primary_image_url: '',
         color: ''
       });
@@ -989,6 +1032,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       product_type: item.productType || item.product_type || '',
       price_per_sqft: item.pricePerSqft || item.price_per_sqft || '',
       total_sqft_stock: item.totalSqftStock || item.total_sqft_stock || '',
+      unit: item.unit || '',
       primary_image_url: item.primaryImageUrl || item.primary_image_url || '',
       color: item.color || ''
     });
@@ -1011,12 +1055,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const totalSqftStock = parseFloat(formData.total_sqft_stock);
     
     if (isNaN(pricePerSqft) || pricePerSqft < 0) {
-      showToast('Please enter a valid price per square foot', 'error');
+      showToast('Please enter a valid price per unit', 'error');
       return;
     }
     
     if (isNaN(totalSqftStock) || totalSqftStock < 0) {
-      showToast('Please enter a valid total square feet stock', 'error');
+      showToast('Please enter a valid quantity/stock', 'error');
       return;
     }
 
@@ -1025,6 +1069,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const trimmedProductType = formData.product_type.trim();
     const trimmedImageUrl = formData.primary_image_url.trim();
     const trimmedColor = (formData.color || '').trim();
+    const trimmedUnit = (formData.unit || '').trim();
 
     if (!trimmedName || !trimmedProductType || !trimmedImageUrl) {
       showToast('Please fill all required fields', 'error');
@@ -1037,12 +1082,24 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       productTypeString: trimmedProductType,
       pricePerSqft: pricePerSqft,
       totalSqftStock: totalSqftStock,
+      unit: trimmedUnit || 'piece',  // Unit (piece, sqr ft, etc.)
       primaryImageUrl: trimmedImageUrl,
       color: trimmedColor
     };
 
     try {
       const token = localStorage.getItem('authToken');
+      const userData = JSON.parse(localStorage.getItem('user') || '{}');
+      
+      // Add admin role to request body - backend should extract from JWT token
+      // But we'll send it in request body as well in case backend needs it
+      const userRole = userData?.role || userData?.userRole || 'admin';
+      const requestBody = {
+        ...itemData,
+        role: userRole,        // Primary field name
+        userRole: userRole    // Alternative field name (in case backend expects this)
+      };
+      
       const headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -1053,8 +1110,14 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       const response = await fetch(`${API_BASE_URL}/inventory/${editingInventoryItem.id}`, {
         method: 'PUT',
         headers: headers,
-        body: JSON.stringify(itemData)
+        body: JSON.stringify(requestBody)
       });
+
+      // Check for session expiry (401)
+      if (response.status === 401) {
+        await handleApiResponse(response);
+        return;
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -1076,6 +1139,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         product_type: '',
         price_per_sqft: '',
         total_sqft_stock: '',
+        unit: '',
         primary_image_url: '',
         color: ''
       });
@@ -1104,6 +1168,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         method: 'DELETE',
         headers: headers
       });
+
+      // Check for session expiry (401)
+      if (response.status === 401) {
+        await handleApiResponse(response);
+        return;
+      }
 
       if (!response.ok) {
         throw new Error('Failed to delete inventory item');
@@ -1136,15 +1206,15 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
 
   // Export inventory to CSV
   const exportInventoryToCSV = () => {
-    const headers = ['Product Name', 'Product Type', 'Price/Sqft', 'Stock (Sqft)', 'Color', 'Total Value'];
+    const headers = ['Product Name', 'Product Type', 'Price/Unit', 'Quantity/Stock', 'Color', 'Total Value'];
     const csvData = filteredInventory.map(item => {
-      const pricePerSqft = item.pricePerSqft || item.price_per_sqft || 0;
-      const totalSqftStock = item.totalSqftStock || item.total_sqft_stock || 0;
+      const pricePerSqft = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
+      const totalSqftStock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
       return {
         'Product Name': item.name || '',
         'Product Type': item.productType || item.product_type || '',
-        'Price/Sqft': pricePerSqft,
-        'Stock (Sqft)': totalSqftStock,
+        'Price/Unit': pricePerSqft,
+        'Quantity/Stock': totalSqftStock,
         'Color': item.color || '',
         'Total Value': pricePerSqft * totalSqftStock
       };
@@ -1491,6 +1561,15 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         >
           💵 Daily Expenses
         </button>
+        <button
+          className={`tab-btn ${activeTab === 'home-screen' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('home-screen');
+            if (setActiveNav) setActiveNav('home-screen');
+          }}
+        >
+          🏠 Home Screen
+        </button>
       </div>
 
       {/* Render content based on active tab */}
@@ -1731,7 +1810,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                         <span className="sales-card-value">{bill.customerMobileNumber || '-'}</span>
                       </div>
                       <div className="sales-card-row">
-                        <span className="sales-card-label">Sqft:</span>
+                        <span className="sales-card-label">Units:</span>
                         <span className="sales-card-value">{bill.totalSqft?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} sqft</span>
                       </div>
                       <div className="sales-card-row">
@@ -1861,7 +1940,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   <span className="summary-item">
                     Total Value: ₹{filteredInventory.reduce((sum, item) => {
                       const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
-                      const price = item.pricePerSqft || item.price_per_sqft || item.unitPrice || 0;
+                      const price = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
                       return sum + (stock * price);
                     }, 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
@@ -1926,13 +2005,13 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                               )}
                             </th>
                             <th className="sortable" onClick={() => handleSort('pricePerSqft', true)}>
-                              Price/Sqft
+                              Price/Unit
                               {inventorySortConfig.key === 'pricePerSqft' && (
                                 <span className="sort-icon">{inventorySortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                               )}
                             </th>
                             <th className="sortable" onClick={() => handleSort('totalSqftStock', true)}>
-                              Stock (Sqft)
+                              Quantity/Stock
                               {inventorySortConfig.key === 'totalSqftStock' && (
                                 <span className="sort-icon">{inventorySortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                               )}
@@ -1944,7 +2023,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                         </thead>
                       <tbody>
                         {paginatedInventory.map((item, index) => {
-                        const pricePerSqft = item.pricePerSqft || item.price_per_sqft || item.unitPrice || 0;
+                        const pricePerSqft = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
                         const totalSqftStock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
                         const productType = item.productType || item.product_type || item.category || '-';
                         const primaryImageUrl = item.primaryImageUrl || item.primary_image_url;
@@ -1974,7 +2053,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                             <td className="amount-cell">₹{pricePerSqft.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                             <td className={isLowStock ? 'low-stock-cell' : 'stock-cell'}>
                               {isLowStock && <span className="low-stock-indicator">⚠️ </span>}
-                              {totalSqftStock.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} sqft
+                              {totalSqftStock.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
                             <td>
                               {item.color ? (
@@ -2018,7 +2097,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   {/* Mobile Card View for Inventory */}
                   <div className="mobile-inventory-cards">
                     {paginatedInventory.map((item, index) => {
-                      const pricePerSqft = item.pricePerSqft || item.price_per_sqft || item.unitPrice || 0;
+                      const pricePerSqft = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
                       const totalSqftStock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
                       const productType = item.productType || item.product_type || item.category || '-';
                       const primaryImageUrl = item.primaryImageUrl || item.primary_image_url;
@@ -2047,13 +2126,13 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                           </div>
                           <div className="inventory-card-body">
                             <div className="inventory-card-row">
-                              <span className="inventory-card-label">Price/Sqft:</span>
+                              <span className="inventory-card-label">Price/Unit:</span>
                               <span className="inventory-card-value">₹{pricePerSqft.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             </div>
                             <div className="inventory-card-row">
-                              <span className="inventory-card-label">Stock:</span>
+                              <span className="inventory-card-label">Quantity/Stock:</span>
                               <span className={`inventory-card-value ${isLowStock ? 'low-stock-value' : ''}`}>
-                                {totalSqftStock.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} sqft
+                                {totalSqftStock.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </span>
                             </div>
                             {item.color && (
@@ -2167,6 +2246,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             </div>
           </div>
         )}
+
+        {/* Home Screen Management Section */}
+        {activeTab === 'home-screen' && (
+          <HomeScreenManagement />
+        )}
       </div>
 
       {/* Low Stock Alert - Only show when not in expenses section */}
@@ -2181,7 +2265,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
                   return (
                     <li key={`lowstock-${item.id || index}`}>
-                      <strong>{item.name}</strong> - Only {stock.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} sqft remaining
+                      <strong>{item.name}</strong> - Only {stock.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} units remaining
                     </li>
                   );
                 })}
@@ -2237,15 +2321,18 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     required
                   >
                     <option value="">Select Product Type</option>
+                    <option value="table">Table</option>
+                    <option value="chair">Chair</option>
                     <option value="marble">Marble</option>
-                    <option value="granite">Granite</option>
                     <option value="tiles">Tiles</option>
-                    <option value="countertop">Countertop</option>
+                    <option value="counter top">Counter Top</option>
+                    <option value="granite">Granite</option>
+                    <option value="other">Other</option>
                   </select>
                 </div>
                 <div className="form-row">
                   <div className="form-group">
-                    <label>Price Per Square Foot (₹) *</label>
+                    <label>Price Per Unit (₹) *</label>
                     <input
                       type="number"
                       name="price_per_sqft"
@@ -2258,7 +2345,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     />
                   </div>
                   <div className="form-group">
-                    <label>Total Square Feet Stock *</label>
+                    <label>Quantity/Stock *</label>
                     <input
                       type="number"
                       name="total_sqft_stock"
@@ -2268,6 +2355,17 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                       step="0.01"
                       placeholder="e.g., 150.00"
                       required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Unit</label>
+                    <input
+                      type="text"
+                      name="unit"
+                      value={formData.unit}
+                      onChange={handleInputChange}
+                      maxLength="20"
+                      placeholder="e.g., piece, sqr ft, kg, meter"
                     />
                   </div>
                 </div>
@@ -2497,15 +2595,18 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     required
                   >
                     <option value="">Select Product Type</option>
+                    <option value="table">Table</option>
+                    <option value="chair">Chair</option>
                     <option value="marble">Marble</option>
-                    <option value="granite">Granite</option>
                     <option value="tiles">Tiles</option>
-                    <option value="countertop">Countertop</option>
+                    <option value="counter top">Counter Top</option>
+                    <option value="granite">Granite</option>
+                    <option value="other">Other</option>
                   </select>
                 </div>
                 <div className="form-row">
                   <div className="form-group">
-                    <label>Price Per Square Foot (₹) *</label>
+                    <label>Price Per Unit (₹) *</label>
                     <input
                       type="number"
                       name="price_per_sqft"
@@ -2518,7 +2619,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     />
                   </div>
                   <div className="form-group">
-                    <label>Total Square Feet Stock *</label>
+                    <label>Quantity/Stock *</label>
                     <input
                       type="number"
                       name="total_sqft_stock"
@@ -2528,6 +2629,17 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                       step="0.01"
                       placeholder="e.g., 150.00"
                       required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Unit</label>
+                    <input
+                      type="text"
+                      name="unit"
+                      value={formData.unit}
+                      onChange={handleInputChange}
+                      maxLength="20"
+                      placeholder="e.g., piece, sqr ft, kg, meter"
                     />
                   </div>
                 </div>

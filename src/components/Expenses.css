@@ -545,51 +545,139 @@
 
 .expenses-table-container .data-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   margin: 0;
+  background: #e0e5ec;
+  border-radius: 16px;
+  overflow: hidden;
 }
 
 .expenses-table-container .data-table thead {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  box-shadow: 
-    4px 4px 8px rgba(163, 177, 198, 0.6),
-    -4px -4px 8px rgba(255, 255, 255, 0.5);
+  background: linear-gradient(145deg, #e0e5ec, #e0e5ec);
+  box-shadow:  5px 5px 8px #828282,
+             -5px -5px 8px #ffffff;
+  border-radius: 16px 16px 0 0;
+  overflow: hidden;
 }
 
 .expenses-table-container .data-table thead th {
-  padding: 6px 8px;
-  color: white;
-  font-weight: 600;
-  font-size: 10px;
+  padding: 14px 12px;
+  color: #4a5568;
+  font-weight: 700;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.2px;
+  letter-spacing: 0.5px;
   border: none;
   white-space: nowrap;
+  background: transparent;
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+}
+
+.expenses-table-container .data-table thead th:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 20%;
+  height: 60%;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    rgba(163, 177, 198, 0.3) 0%,
+    rgba(163, 177, 198, 0.6) 50%,
+    rgba(163, 177, 198, 0.3) 100%
+  );
+  box-shadow: 1px 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.expenses-table-container .data-table thead th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.expenses-table-container .data-table thead th.sortable:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.6) 0%,
+    rgba(255, 255, 255, 0.3) 100%
+  );
+  box-shadow: 
+    inset 2px 2px 4px rgba(163, 177, 198, 0.2),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.9);
+  transform: translateY(-1px);
+  color: #667eea;
+}
+
+.expenses-table-container .data-table thead th.sortable:active {
+  box-shadow: 
+    inset 3px 3px 6px rgba(163, 177, 198, 0.4),
+    inset -3px -3px 6px rgba(255, 255, 255, 0.6);
+  transform: translateY(0);
+}
+
+.expenses-table-container .data-table thead th .sort-icon {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #667eea;
+  text-shadow: 
+    0 1px 2px rgba(255, 255, 255, 0.9),
+    0 -1px 1px rgba(163, 177, 198, 0.3);
+  transition: all 0.2s ease;
+  opacity: 0.8;
+}
+
+.expenses-table-container .data-table thead th.sortable:hover .sort-icon {
+  opacity: 1;
+  transform: scale(1.1);
+  color: #5568d3;
 }
 
 .expenses-table-container .data-table tbody tr {
-  border-bottom: 1px solid rgba(163, 177, 198, 0.2);
-  transition: all 0.2s ease;
+  border-bottom: 1px solid rgba(163, 177, 198, 0.15);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   background: #e0e5ec;
+  position: relative;
 }
 
 .expenses-table-container .data-table tbody tr:hover {
-  background: #e0e5ec;
-  transform: translateY(-1px);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.4) 0%,
+    rgba(255, 255, 255, 0.2) 100%
+  );
+  transform: translateY(-2px);
   box-shadow: 
-    4px 4px 8px rgba(163, 177, 198, 0.6),
-    -4px -4px 8px rgba(255, 255, 255, 0.5);
+    6px 6px 12px rgba(163, 177, 198, 0.4),
+    -6px -6px 12px rgba(255, 255, 255, 0.6);
+  border-bottom-color: rgba(163, 177, 198, 0.3);
 }
 
 .expenses-table-container .data-table tbody td {
-  padding: 6px 8px;
+  padding: 12px;
   font-size: 11px;
-  color: #333;
+  color: #4a5568;
   vertical-align: middle;
+  transition: color 0.2s ease;
+}
+
+.expenses-table-container .data-table tbody tr:hover td {
+  color: #2d3748;
 }
 
 .expenses-table-container .data-table tbody tr:last-child {
   border-bottom: none;
+}
+
+.expenses-table-container .data-table tbody tr:last-child td:first-child {
+  border-bottom-left-radius: 16px;
+}
+
+.expenses-table-container .data-table tbody tr:last-child td:last-child {
+  border-bottom-right-radius: 16px;
 }
 
 /* Center align table text */
@@ -604,12 +692,12 @@
 }
 
 .expenses-table-container .data-table.expenses-table th {
-  padding: 6px 8px;
-  font-size: 10px;
+  padding: 14px 12px;
+  font-size: 11px;
 }
 
 .expenses-table-container .data-table.expenses-table td {
-  padding: 6px 8px;
+  padding: 12px;
   font-size: 11px;
 }
 

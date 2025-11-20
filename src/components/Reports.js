@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { fetchExpenses as apiFetchExpenses } from '../utils/api';
+import { fetchExpenses as apiFetchExpenses, handleApiResponse } from '../utils/api';
 import { API_BASE_URL } from '../config/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import Loading from './Loading';
@@ -36,6 +36,13 @@ const Reports = () => {
         method: 'GET',
         headers: billsHeaders
       });
+      
+      // Check for session expiry (401)
+      if (billsResponse.status === 401) {
+        await handleApiResponse(billsResponse);
+        return;
+      }
+      
       if (billsResponse.ok) {
         const billsData = await billsResponse.json();
         setBills(billsData || []);
@@ -57,6 +64,13 @@ const Reports = () => {
         method: 'GET',
         headers: inventoryHeaders
       });
+      
+      // Check for session expiry (401)
+      if (inventoryResponse.status === 401) {
+        await handleApiResponse(inventoryResponse);
+        return;
+      }
+      
       if (inventoryResponse.ok) {
         const inventoryData = await inventoryResponse.json();
         setInventory(inventoryData || []);

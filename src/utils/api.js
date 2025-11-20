@@ -58,6 +58,14 @@ const apiCall = async (endpoint, options = {}) => {
 
     if (!response.ok) {
       const errorText = await response.text();
+      
+      // Handle session expiry - 401 Unauthorized
+      if (response.status === 401 && !isAuthEndpoint) {
+        // Session expired - logout automatically
+        handleSessionExpiry();
+        throw new Error('Session expired. Please login again.');
+      }
+      
       // For auth endpoints, provide more helpful error messages
       if (isAuthEndpoint && response.status === 401) {
         throw new Error(`Authentication endpoint error: The backend may be incorrectly requiring authentication for public endpoints. ${errorText}`);
@@ -322,6 +330,27 @@ export const register = async (userData) => {
   }
 };
 
+// Global session expiry handler
+let sessionExpiryHandler = null;
+
+export const setSessionExpiryHandler = (handler) => {
+  sessionExpiryHandler = handler;
+};
+
+// Handle session expiry
+const handleSessionExpiry = () => {
+  // Clear auth data
+  logout();
+  
+  // Trigger logout event for App.js to handle
+  if (sessionExpiryHandler) {
+    sessionExpiryHandler();
+  } else {
+    // Fallback: dispatch custom event
+    window.dispatchEvent(new CustomEvent('sessionExpired'));
+  }
+};
+
 export const logout = () => {
   localStorage.removeItem('authToken');
   localStorage.removeItem('user');
@@ -338,6 +367,16 @@ export const getCurrentUser = () => {
 
 export const isAuthenticated = () => {
   return !!getAuthToken();
+};
+
+// Helper function to check if response is 401 and handle session expiry
+export const handleApiResponse = async (response) => {
+  if (response.status === 401) {
+    // Session expired - logout automatically
+    handleSessionExpiry();
+    throw new Error('Session expired. Please login again.');
+  }
+  return response;
 };
 
 // ==================== CUSTOMER API ====================

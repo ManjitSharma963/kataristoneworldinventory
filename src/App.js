@@ -4,7 +4,7 @@ import Customers from './components/Customers';
 import Reports from './components/Reports';
 import Login from './components/Login';
 import Register from './components/Register';
-import { isAuthenticated, getCurrentUser, logout } from './utils/api';
+import { isAuthenticated, getCurrentUser, logout, setSessionExpiryHandler } from './utils/api';
 import './App.css';
 
 function App() {
@@ -23,6 +23,33 @@ function App() {
     if (storedError) {
       setAuthError(storedError);
     }
+  }, []);
+
+  // Handle automatic logout on session expiry
+  useEffect(() => {
+    // Set up session expiry handler
+    const handleSessionExpiry = () => {
+      setAuthenticated(false);
+      setUser(null);
+      setActiveNav('dashboard');
+      setShowRegister(false);
+      setAuthError('Session expired. Please login again.');
+      localStorage.setItem('authError', 'Session expired. Please login again.');
+    };
+
+    setSessionExpiryHandler(handleSessionExpiry);
+
+    // Also listen for session expired event (fallback)
+    const handleSessionExpiredEvent = () => {
+      handleSessionExpiry();
+    };
+
+    window.addEventListener('sessionExpired', handleSessionExpiredEvent);
+
+    return () => {
+      window.removeEventListener('sessionExpired', handleSessionExpiredEvent);
+      setSessionExpiryHandler(null);
+    };
   }, []);
 
   useEffect(() => {
@@ -246,6 +273,13 @@ function App() {
               <span className="nav-icon">💵</span>
               <span className="nav-label">Expenses</span>
             </button>
+            <button
+              className={`nav-item ${activeNav === 'home-screen' ? 'active' : ''}`}
+              onClick={() => setActiveNav('home-screen')}
+            >
+              <span className="nav-icon">🏠</span>
+              <span className="nav-label">Management</span>
+            </button>
             <button 
               className={`nav-item ${activeNav === 'customers' ? 'active' : ''}`}
               onClick={() => setActiveNav('customers')}
@@ -345,6 +379,16 @@ function App() {
                   >
                     <span className="nav-icon">💵</span>
                     <span className="nav-label">Expenses</span>
+                  </button>
+                  <button 
+                    className={`nav-item ${activeNav === 'home-screen' ? 'active' : ''}`}
+                    onClick={() => {
+                      setActiveNav('home-screen');
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    <span className="nav-icon">🏠</span>
+                    <span className="nav-label">Home Screen</span>
                   </button>
                   <button 
                     className={`nav-item ${activeNav === 'customers' ? 'active' : ''}`}
