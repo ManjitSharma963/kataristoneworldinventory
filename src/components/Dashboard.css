@@ -879,14 +879,16 @@
 .modal-content {
   background: #e0e5ec;
   border: none;
-  border-radius: 24px;
+  border-radius: 20px;
   box-shadow: 
     12px 12px 24px rgba(163, 177, 198, 0.7),
     -12px -12px 24px rgba(255, 255, 255, 0.8),
     inset 2px 2px 4px rgba(255, 255, 255, 0.7),
     inset -2px -2px 4px rgba(163, 177, 198, 0.4);
-  max-width: 500px;
+  max-width: 450px;
   width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
   max-height: 85vh;
   overflow-y: auto;
   animation: modalSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
@@ -927,9 +929,9 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px;
+  padding: 14px 18px;
   background: #e0e5ec;
-  border-radius: 24px 24px 0 0;
+  border-radius: 20px 20px 0 0;
   border: none;
   position: relative;
   box-shadow: 
@@ -941,9 +943,9 @@
 .modal-header h3 {
   margin: 0;
   color: #333;
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
 }
 
 .modal-close {
@@ -984,7 +986,7 @@
 }
 
 .modal-body {
-  padding: 24px;
+  padding: 16px 18px;
   background: transparent;
 }
 
@@ -2031,11 +2033,14 @@
 
 /* Bill Items Modal Styles */
 .bill-details-summary {
-  background: rgba(102, 126, 234, 0.05);
-  padding: 16px;
-  border-radius: 8px;
-  margin-bottom: 20px;
-  border: 1px solid rgba(102, 126, 234, 0.1);
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.05) 100%);
+  padding: 16px 18px;
+  border-radius: 14px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(102, 126, 234, 0.15);
+  box-shadow: 
+    inset 2px 2px 4px rgba(255, 255, 255, 0.7),
+    inset -2px -2px 4px rgba(163, 177, 198, 0.3);
 }
 
 .bill-info-row {
@@ -2043,36 +2048,45 @@
   justify-content: space-between;
   align-items: center;
   padding: 8px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  border-bottom: 1px solid rgba(102, 126, 234, 0.1);
+  transition: all 0.2s ease;
 }
 
 .bill-info-row:last-child {
   border-bottom: none;
 }
 
+.bill-info-row:hover {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
 .bill-info-label {
   font-weight: 600;
-  color: #666;
-  font-size: 14px;
+  color: #4a5568;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
 }
 
 .bill-info-value {
-  color: #333;
-  font-weight: 500;
-  font-size: 14px;
+  color: #2d3748;
+  font-weight: 600;
+  font-size: 13px;
 }
 
 .bill-items-table-wrapper {
-  border-radius: 16px;
+  border-radius: 14px;
   box-shadow: 
-    4px 4px 8px rgba(163, 177, 198, 0.6),
-    -4px -4px 8px rgba(255, 255, 255, 0.5);
-  margin-bottom: 20px;
+    6px 6px 12px rgba(163, 177, 198, 0.6),
+    -6px -6px 12px rgba(255, 255, 255, 0.5);
+  margin-bottom: 18px;
   overflow-x: auto;
   overflow-y: visible;
   -webkit-overflow-scrolling: touch;
-  background: #e0e5ec;
-  padding: 8px;
+  background: #ffffff;
+  padding: 12px;
+  border: 1px solid rgba(163, 177, 198, 0.2);
 }
 
 .bill-items-table-wrapper::-webkit-scrollbar {
@@ -2095,80 +2109,188 @@
 
 .bill-items-table {
   width: 100%;
+  font-size: 12px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.bill-items-table thead {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 10px 10px 0 0;
+}
+
+.bill-items-table thead th {
+  padding: 12px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: white;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  text-align: center;
+  border: none;
+}
+
+.bill-items-table thead th:first-child {
+  border-radius: 10px 0 0 0;
+}
+
+.bill-items-table thead th:last-child {
+  border-radius: 0 10px 0 0;
+}
+
+.bill-items-table td {
+  padding: 12px 10px;
+  font-size: 12px;
+  text-align: center;
+  border-bottom: 1px solid rgba(163, 177, 198, 0.15);
 }
 
 .bill-items-table tbody tr {
   transition: all 0.2s ease;
-  background: #e0e5ec;
+  background: #ffffff;
 }
 
 .bill-items-table tbody tr:hover {
-  background: #e0e5ec;
-  box-shadow: 
-    inset 2px 2px 4px rgba(163, 177, 198, 0.6),
-    inset -2px -2px 4px rgba(255, 255, 255, 0.5);
+  background: rgba(102, 126, 234, 0.04);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.1);
+}
+
+.bill-items-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .item-name-cell {
-  font-weight: 500;
-  color: #333;
+  font-weight: 600;
+  color: #2d3748;
 }
 
 .quantity-cell {
-  color: #666;
-  font-weight: 500;
+  color: #4a5568;
+  font-weight: 600;
+}
+
+.amount-cell {
+  color: #2d3748;
+  font-weight: 600;
 }
 
 .bill-items-table tfoot {
-  background: #f8f9fa;
-  border-top: 2px solid #e0e0e0;
+  background: transparent;
+  border-top: 2px solid rgba(102, 126, 234, 0.2);
 }
 
 .bill-totals-row {
-  border-top: 1px solid #e0e0e0;
+  background: #f8f9fa;
+  border-top: 1px solid rgba(163, 177, 198, 0.2);
+  transition: all 0.2s ease;
 }
 
 .bill-totals-row:first-child {
-  border-top: 2px solid #e0e0e0;
+  border-top: 2px solid rgba(102, 126, 234, 0.2);
+  background: #ffffff;
+}
+
+.bill-totals-row:hover {
+  background: rgba(102, 126, 234, 0.03);
 }
 
 .totals-label {
   text-align: right;
-  font-weight: 600;
-  color: #333;
-  padding: 12px;
+  font-weight: 700;
+  color: #2d3748;
+  padding: 10px 10px;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+}
+
+.bill-totals-row .total-cell {
+  font-weight: 700;
+  color: #2d3748;
+  font-size: 13px;
 }
 
 .bill-totals-row.final-total {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
+  border-radius: 0 0 10px 10px;
+  box-shadow: 
+    0 4px 12px rgba(102, 126, 234, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  margin-top: 4px;
+}
+
+.bill-totals-row.final-total:hover {
+  background: linear-gradient(135deg, #5568d3 0%, #6a3f8f 100%);
+  transform: translateY(-1px);
+  box-shadow: 
+    0 6px 16px rgba(102, 126, 234, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
 .bill-totals-row.final-total .totals-label {
   color: white;
-  font-weight: 700;
-  font-size: 16px;
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 
 .bill-totals-row.final-total .total-amount {
   color: white;
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 800;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.bill-totals-row.final-total .total-cell {
+  color: white;
+  font-weight: 800;
 }
 
 .discount-amount {
   color: #dc3545;
-  font-weight: 600;
+  font-weight: 700;
+}
+
+.total-amount {
+  color: #28a745;
+  font-weight: 700;
+  font-size: 13px;
 }
 
 .modal-footer {
-  padding: 18px 22px;
-  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  padding: 16px 18px;
+  border-top: 2px solid rgba(102, 126, 234, 0.15);
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  background: rgba(102, 126, 234, 0.05);
-  border-radius: 0 0 16px 16px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.03) 100%);
+  border-radius: 0 0 20px 20px;
+  box-shadow: 
+    inset 0 2px 4px rgba(255, 255, 255, 0.7),
+    inset 0 -2px 4px rgba(163, 177, 198, 0.2);
+}
+
+.modal-footer .btn {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 10px;
+  transition: all 0.3s ease;
+}
+
+.modal-footer .btn-primary {
+  box-shadow: 
+    4px 4px 8px rgba(102, 126, 234, 0.3),
+    -2px -2px 4px rgba(255, 255, 255, 0.5);
+}
+
+.modal-footer .btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 
+    6px 6px 12px rgba(102, 126, 234, 0.4),
+    -3px -3px 6px rgba(255, 255, 255, 0.6);
 }
 
 /* Dashboard Header */

@@ -89,7 +89,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   const [salesCurrentPage, setSalesCurrentPage] = useState(1);
   const [inventoryCurrentPage, setInventoryCurrentPage] = useState(1);
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+  // Default to sorting by date (newest first) for all tabs
+  const [sortConfig, setSortConfig] = useState({ key: 'billDate', direction: 'desc' });
   const [inventorySortConfig, setInventorySortConfig] = useState({ key: null, direction: 'asc' });
   const [toast, setToast] = useState(null);
   const [apiConnectionError, setApiConnectionError] = useState(false);
@@ -656,25 +657,32 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     return false;
   });
 
-  // Sort bills
-  if (sortConfig.key) {
-    filteredBills = [...filteredBills].sort((a, b) => {
-      let aValue = a[sortConfig.key];
-      let bValue = b[sortConfig.key];
+  // Sort bills - always sort by date by default (newest first)
+  // If user clicks another column, sort by that column instead
+  filteredBills = [...filteredBills].sort((a, b) => {
+    let aValue = a[sortConfig.key];
+    let bValue = b[sortConfig.key];
 
-      if (sortConfig.key === 'billDate') {
-        aValue = new Date(aValue);
-        bValue = new Date(bValue);
-      } else if (typeof aValue === 'string') {
-        aValue = aValue.toLowerCase();
-        bValue = bValue?.toLowerCase() || '';
-      }
+    if (sortConfig.key === 'billDate') {
+      // Parse dates properly - handle ISO format and other formats
+      const aDate = aValue ? new Date(aValue) : new Date(0);
+      const bDate = bValue ? new Date(bValue) : new Date(0);
+      // Use timestamp for reliable comparison
+      aValue = isNaN(aDate.getTime()) ? 0 : aDate.getTime();
+      bValue = isNaN(bDate.getTime()) ? 0 : bDate.getTime();
+    } else if (typeof aValue === 'string') {
+      aValue = aValue.toLowerCase();
+      bValue = bValue?.toLowerCase() || '';
+    } else {
+      // For other types (numbers, etc.), use as-is
+      aValue = aValue ?? 0;
+      bValue = bValue ?? 0;
+    }
 
-      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
-      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-  }
+    if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+    return 0;
+  });
 
   // Pagination calculations for Sales (after filteredBills is defined)
   const salesTotalPages = Math.ceil(filteredBills.length / itemsPerPage);
@@ -817,9 +825,15 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const setSort = isInventory ? setInventorySortConfig : setSortConfig;
     const currentSort = isInventory ? inventorySortConfig : sortConfig;
     
+    // For date columns, default to descending (newest first)
+    // For other columns, default to ascending
+    const defaultDirection = key === 'billDate' ? 'desc' : 'asc';
+    
     setSort({
       key,
-      direction: currentSort.key === key && currentSort.direction === 'asc' ? 'desc' : 'asc'
+      direction: currentSort.key === key && currentSort.direction === 'asc' ? 'desc' : 
+                 currentSort.key === key && currentSort.direction === 'desc' ? 'asc' : 
+                 defaultDirection
     });
   };
 

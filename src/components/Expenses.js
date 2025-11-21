@@ -64,7 +64,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   const [currentPage, setCurrentPage] = useState(1);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+  // Default to sorting by date (newest first) for all tabs
+  const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
   const [expandedExpenses, setExpandedExpenses] = useState(new Set());
   const [expandedEmployees, setExpandedEmployees] = useState(new Set());
   const itemsPerPage = 10;
@@ -528,28 +529,35 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return true;
   });
 
-  // Sort expenses
-  if (sortConfig.key) {
-    filteredExpenses = [...filteredExpenses].sort((a, b) => {
-      let aValue = a[sortConfig.key];
-      let bValue = b[sortConfig.key];
+  // Sort expenses - always sort by date by default (newest first)
+  // If user clicks another column, sort by that column instead
+  filteredExpenses = [...filteredExpenses].sort((a, b) => {
+    let aValue = a[sortConfig.key];
+    let bValue = b[sortConfig.key];
 
-      if (sortConfig.key === 'date') {
-        aValue = new Date(aValue);
-        bValue = new Date(bValue);
-      } else if (sortConfig.key === 'amount') {
-        aValue = parseFloat(aValue) || 0;
-        bValue = parseFloat(bValue) || 0;
-      } else if (typeof aValue === 'string') {
-        aValue = aValue.toLowerCase();
-        bValue = bValue?.toLowerCase() || '';
-      }
+    if (sortConfig.key === 'date') {
+      // Parse dates properly - handle ISO format and other formats
+      const aDate = aValue ? new Date(aValue) : new Date(0);
+      const bDate = bValue ? new Date(bValue) : new Date(0);
+      // Use timestamp for reliable comparison
+      aValue = isNaN(aDate.getTime()) ? 0 : aDate.getTime();
+      bValue = isNaN(bDate.getTime()) ? 0 : bDate.getTime();
+    } else if (sortConfig.key === 'amount') {
+      aValue = parseFloat(aValue) || 0;
+      bValue = parseFloat(bValue) || 0;
+    } else if (typeof aValue === 'string') {
+      aValue = aValue.toLowerCase();
+      bValue = bValue?.toLowerCase() || '';
+    } else {
+      // For other types (numbers, etc.), use as-is
+      aValue = aValue ?? 0;
+      bValue = bValue ?? 0;
+    }
 
-      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
-      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-  }
+    if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+    return 0;
+  });
 
   // Pagination
   const totalPages = Math.ceil(filteredExpenses.length / itemsPerPage);
@@ -558,9 +566,15 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const paginatedExpenses = filteredExpenses.slice(startIndex, endIndex);
 
   const handleSort = (key) => {
+    // For date columns, default to descending (newest first)
+    // For other columns, default to ascending
+    const defaultDirection = key === 'date' ? 'desc' : 'asc';
+    
     setSortConfig({
       key,
-      direction: sortConfig.key === key && sortConfig.direction === 'asc' ? 'desc' : 'asc'
+      direction: sortConfig.key === key && sortConfig.direction === 'asc' ? 'desc' : 
+                 sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 
+                 defaultDirection
     });
   };
 
