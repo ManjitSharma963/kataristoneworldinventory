@@ -1,0 +1,50 @@
+================================================================================
+QUICK FIX: Update Backend CORS Configuration
+================================================================================
+
+PROBLEM:
+Backend allows: http://localhost:3001
+Frontend is on: http://localhost:3000
+Result: CORS error
+
+SOLUTION:
+Update your backend CORS configuration to allow port 3000.
+
+STEP 1: Find CORS configuration in your backend
+------------------------------------------------
+Search for: "localhost:3001" or "allowedOrigins" or "CORS"
+
+STEP 2: Change the allowed origin
+----------------------------------
+FIND:  "http://localhost:3001"
+CHANGE TO: "http://localhost:3000"
+
+OR (Recommended - allows both):
+CHANGE TO: ["http://localhost:3000", "http://localhost:3001"]
+
+STEP 3: Restart backend server
+-------------------------------
+Stop backend (Ctrl+C) and restart it.
+
+STEP 4: Test frontend
+----------------------
+CORS errors should be gone!
+
+================================================================================
+EXAMPLES BY FRAMEWORK:
+================================================================================
+
+SPRING BOOT (Java):
+-------------------
+.allowedOrigins("http://localhost:3000", "http://localhost:3001")
+
+NODE.JS/EXPRESS:
+----------------
+origin: ['http://localhost:3000', 'http://localhost:3001']
+
+PYTHON/FLASK:
+-------------
+origins=["http://localhost:3000", "http://localhost:3001"]
+
+================================================================================
+
