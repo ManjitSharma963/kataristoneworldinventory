@@ -1,370 +1,326 @@
-import React, { useState, useEffect } from 'react';
-import { getInventory, getSales, addSale } from '../utils/storage';
+import React, { useState, useEffect, useMemo } from 'react';
+import { getInventory } from '../utils/storage';
+import { API_BASE_URL } from '../config/api';
+import { handleApiResponse, downloadBillPDF } from '../utils/api';
+import { DataTable } from 'primereact/datatable';
+import { Column } from 'primereact/column';
+import { InputText } from 'primereact/inputtext';
+import { Dropdown } from 'primereact/dropdown';
+import { Calendar } from 'primereact/calendar';
+import { Button } from 'primereact/button';
+import { Tag } from 'primereact/tag';
+import { FilterMatchMode, FilterOperator } from 'primereact/api';
 import './Sales.css';
 
 const Sales = () => {
   const [sales, setSales] = useState([]);
   const [inventory, setInventory] = useState([]);
-  const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState({
-    customerName: '',
-    gstPaid: false,
-    gstRate: 18,
-    items: []
+  const [loading, setLoading] = useState(true);
+  
+  // PrimeReact DataTable filters
+  const [filters, setFilters] = useState({
+    billNumber: { value: null, matchMode: FilterMatchMode.CONTAINS },
+    customerNumber: { value: null, matchMode: FilterMatchMode.CONTAINS },
+    billType: { value: null, matchMode: FilterMatchMode.EQUALS },
+    billDate: { operator: FilterOperator.AND, constraints: [{ value: null, matchMode: FilterMatchMode.DATE_IS }] }
   });
-  const [currentItem, setCurrentItem] = useState({
-    itemId: '',
-    quantity: '',
-    unitPrice: ''
-  });
+  
+  // Bill Type options for filter
+  const billTypeOptions = [
+    { label: 'All', value: null },
+    { label: 'GST', value: 'GST' },
+    { label: 'NON-GST', value: 'NON-GST' }
+  ];
 
   useEffect(() => {
     loadData();
+    initFilters();
   }, []);
 
-  const loadData = () => {
-    setSales(getSales());
-    setInventory(getInventory());
-  };
-
-  const handleInputChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
-  };
-
-  const handleItemInputChange = (e) => {
-    const { name, value } = e.target;
-    setCurrentItem(prev => ({
-      ...prev,
-      [name]: value
-    }));
-
-    // Auto-fill unit price when item is selected
-    if (name === 'itemId' && value) {
-      const selectedItem = inventory.find(item => item.id === value);
-      if (selectedItem) {
-        setCurrentItem(prev => ({
-          ...prev,
-          unitPrice: selectedItem.unitPrice || ''
-        }));
-      }
-    }
-  };
-
-  const addItemToSale = () => {
-    if (!currentItem.itemId || !currentItem.quantity) {
-      alert('Please select an item and enter quantity');
-      return;
-    }
-
-    const selectedInventoryItem = inventory.find(item => item.id === currentItem.itemId);
-    if (!selectedInventoryItem) {
-      alert('Item not found');
-      return;
-    }
-
-    const quantity = parseFloat(currentItem.quantity);
-    if (quantity > selectedInventoryItem.quantity) {
-      alert(`Insufficient stock. Available: ${selectedInventoryItem.quantity}`);
-      return;
-    }
-
-    const unitPrice = parseFloat(currentItem.unitPrice) || selectedInventoryItem.unitPrice;
-    const subtotal = quantity * unitPrice;
-
-    const newItem = {
-      itemId: currentItem.itemId,
-      itemName: selectedInventoryItem.name,
-      quantity: quantity,
-      unitPrice: unitPrice,
-      subtotal: subtotal
-    };
-
-    setFormData(prev => ({
-      ...prev,
-      items: [...prev.items, newItem]
-    }));
-
-    setCurrentItem({
-      itemId: '',
-      quantity: '',
-      unitPrice: ''
+  const initFilters = () => {
+    setFilters({
+      billNumber: { value: null, matchMode: FilterMatchMode.CONTAINS },
+      customerNumber: { value: null, matchMode: FilterMatchMode.CONTAINS },
+      billType: { value: null, matchMode: FilterMatchMode.EQUALS },
+      billDate: { operator: FilterOperator.AND, constraints: [{ value: null, matchMode: FilterMatchMode.DATE_IS }] }
     });
   };
 
-  const removeItemFromSale = (index) => {
-    setFormData(prev => ({
-      ...prev,
-      items: prev.items.filter((_, i) => i !== index)
-    }));
-  };
-
-  const calculateTotal = () => {
-    const subtotal = formData.items.reduce((sum, item) => sum + item.subtotal, 0);
-    if (formData.gstPaid) {
-      const gstRate = parseFloat(formData.gstRate) || 0;
-      const gstAmount = (subtotal * gstRate) / 100;
-      return {
-        subtotal,
-        gstAmount,
-        total: subtotal + gstAmount
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('authToken');
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
       };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const billsResponse = await fetch(`${API_BASE_URL}/bills`, {
+        method: 'GET',
+        headers: headers
+      });
+      
+      if (billsResponse.status === 401) {
+        await handleApiResponse(billsResponse);
+        return;
+      }
+      
+      if (billsResponse.ok) {
+        const billsData = await billsResponse.json();
+        const allBills = Array.isArray(billsData) ? billsData : [];
+        setSales(allBills);
+      } else {
+        console.error('Failed to fetch bills:', billsResponse.status);
+        setSales([]);
+      }
+      
+      setInventory(getInventory());
+    } catch (error) {
+      console.error('Error loading sales data:', error);
+      setSales([]);
+    } finally {
+      setLoading(false);
     }
-    return {
-      subtotal,
-      gstAmount: 0,
-      total: subtotal
-    };
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (formData.items.length === 0) {
-      alert('Please add at least one item to the sale');
-      return;
-    }
 
-    const totals = calculateTotal();
-    const saleData = {
-      customerName: formData.customerName || 'Walk-in Customer',
-      gstPaid: formData.gstPaid,
-      gstRate: formData.gstPaid ? parseFloat(formData.gstRate) : 0,
-      items: formData.items,
-      subtotal: totals.subtotal,
-      gstAmount: totals.gstAmount,
-      totalAmount: totals.total
-    };
+  // Prepare data for DataTable
+  const prepareSalesData = useMemo(() => {
+    return sales.map(sale => {
+      const billId = sale.id || sale.billId;
+      const billNumber = sale.billNumber || sale.billId || billId || '-';
+      const billDate = sale.billDate || sale.createdAt || sale.date;
+      const customerNumber = sale.customerMobileNumber || sale.customerNumber || sale.customerPhone || '-';
+      const items = sale.items || sale.billItems || [];
+      
+      // Normalize billType
+      let billType = sale.billType || (sale.gstPaid ? 'GST' : 'NON-GST');
+      const billTypeUpper = (billType || '').toUpperCase();
+      if (billTypeUpper !== 'GST') {
+        billType = 'NON-GST';
+      } else {
+        billType = 'GST';
+      }
+      
+      const isGST = billType === 'GST';
+      const gstRate = sale.gstRate || (isGST ? 18 : 0);
+      const subtotal = sale.subtotal || sale.subTotal || 0;
+      const gstAmount = sale.taxAmount || sale.gstAmount || sale.gst || 0;
+      const totalAmount = sale.totalAmount || sale.total || sale.amount || 0;
 
-    addSale(saleData);
-    resetForm();
-    loadData();
-    alert('Sale recorded successfully!');
-  };
+      // Ensure billDate is a proper Date object
+      let dateObj = null;
+      if (billDate) {
+        try {
+          dateObj = billDate instanceof Date ? billDate : new Date(billDate);
+          if (isNaN(dateObj.getTime())) {
+            dateObj = null;
+          }
+        } catch (e) {
+          dateObj = null;
+        }
+      }
 
-  const resetForm = () => {
-    setFormData({
-      customerName: '',
-      gstPaid: false,
-      gstRate: 18,
-      items: []
+      return {
+        id: billId,
+        billNumber: String(billNumber || '').toUpperCase(),
+        billDate: dateObj,
+        customerNumber: String(customerNumber || ''),
+        itemsCount: items.length,
+        billType: billType,
+        isGST: isGST,
+        gstRate: gstRate,
+        subtotal: Number(subtotal) || 0,
+        gstAmount: Number(gstAmount) || 0,
+        totalAmount: Number(totalAmount) || 0,
+        originalSale: sale
+      };
     });
-    setCurrentItem({
-      itemId: '',
-      quantity: '',
-      unitPrice: ''
-    });
-    setShowForm(false);
-  };
+  }, [sales]);
 
-  const totals = calculateTotal();
-
+  // Format date for display
   const formatDate = (dateString) => {
+    if (!dateString) return '-';
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN') + ' ' + date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleDateString('en-IN');
   };
+
+  // Column templates
+  const billNumberBodyTemplate = (rowData) => {
+    return <span className="bill-number">#{rowData.billNumber}</span>;
+  };
+
+  const dateBodyTemplate = (rowData) => {
+    return rowData.billDate ? formatDate(rowData.billDate) : '-';
+  };
+
+  const billTypeBodyTemplate = (rowData) => {
+    const severity = rowData.isGST ? 'success' : 'secondary';
+    const label = rowData.isGST ? `GST (${rowData.gstRate}%)` : 'NON-GST';
+    return <Tag value={label} severity={severity} />;
+  };
+
+  const amountBodyTemplate = (rowData, field) => {
+    const amount = rowData[field] || 0;
+    return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const totalAmountBodyTemplate = (rowData) => {
+    return (
+      <span className="total-amount-cell">
+        {amountBodyTemplate(rowData, 'totalAmount')}
+      </span>
+    );
+  };
+
+  const actionsBodyTemplate = (rowData) => {
+    return (
+      <Button
+        icon="pi pi-download"
+        rounded
+        outlined
+        severity="secondary"
+        onClick={async () => {
+          try {
+            await downloadBillPDF(rowData.id, rowData.billType);
+          } catch (error) {
+            alert(`Failed to download bill: ${error.message}`);
+          }
+        }}
+        title="Download Bill PDF"
+      />
+    );
+  };
+
+  // Filter templates for row-based filtering
+  const billTypeRowFilterTemplate = (options) => {
+    return (
+      <Dropdown
+        value={options.value}
+        options={billTypeOptions}
+        onChange={(e) => options.filterApplyCallback(e.value === null ? null : e.value)}
+        placeholder="Select Bill Type"
+        className="p-column-filter"
+        showClear
+        style={{ minWidth: '12rem' }}
+      />
+    );
+  };
+
+  const dateRowFilterTemplate = (options) => {
+    return (
+      <Calendar
+        value={options.value}
+        onChange={(e) => {
+          const dateValue = e.value instanceof Date ? e.value : (e.value ? new Date(e.value) : null);
+          options.filterApplyCallback(dateValue);
+        }}
+        dateFormat="dd/mm/yy"
+        placeholder="dd/mm/yyyy"
+        showIcon
+        style={{ minWidth: '12rem' }}
+      />
+    );
+  };
+
 
   return (
     <div className="sales-container">
       <div className="sales-header">
         <h2>Sales Management</h2>
-        <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
-          {showForm ? 'Cancel' : 'New Sale'}
-        </button>
       </div>
-
-      {showForm && (
-        <div className="sales-form">
-          <h3>Create New Sale</h3>
-          <form onSubmit={handleSubmit}>
-            <div className="form-group">
-              <label>Customer Name</label>
-              <input
-                type="text"
-                name="customerName"
-                value={formData.customerName}
-                onChange={handleInputChange}
-                placeholder="Leave empty for walk-in customer"
-              />
-            </div>
-
-            <div className="form-row">
-              <div className="form-group checkbox-group">
-                <label>
-                  <input
-                    type="checkbox"
-                    name="gstPaid"
-                    checked={formData.gstPaid}
-                    onChange={handleInputChange}
-                  />
-                  GST Paid
-                </label>
-              </div>
-              {formData.gstPaid && (
-                <div className="form-group">
-                  <label>GST Rate (%)</label>
-                  <input
-                    type="number"
-                    name="gstRate"
-                    value={formData.gstRate}
-                    onChange={handleInputChange}
-                    min="0"
-                    max="100"
-                    step="0.01"
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="add-item-section">
-              <h4>Add Items</h4>
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Item</label>
-                  <select
-                    name="itemId"
-                    value={currentItem.itemId}
-                    onChange={handleItemInputChange}
-                  >
-                    <option value="">Select Item</option>
-                    {inventory.filter(item => item.quantity > 0).map(item => (
-                      <option key={item.id} value={item.id}>
-                        {item.name} (Stock: {item.quantity})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label>Quantity</label>
-                  <input
-                    type="number"
-                    name="quantity"
-                    value={currentItem.quantity}
-                    onChange={handleItemInputChange}
-                    min="0.01"
-                    step="0.01"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Unit Price (₹)</label>
-                  <input
-                    type="number"
-                    name="unitPrice"
-                    value={currentItem.unitPrice}
-                    onChange={handleItemInputChange}
-                    min="0"
-                    step="0.01"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>&nbsp;</label>
-                  <button type="button" className="btn btn-secondary" onClick={addItemToSale}>
-                    Add Item
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {formData.items.length > 0 && (
-              <div className="sale-items-list">
-                <h4>Sale Items</h4>
-                <table className="items-table">
-                  <thead>
-                    <tr>
-                      <th>Item</th>
-                      <th>Quantity</th>
-                      <th>Unit Price</th>
-                      <th>Subtotal</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {formData.items.map((item, index) => (
-                      <tr key={index}>
-                        <td>{item.itemName}</td>
-                        <td>{item.quantity}</td>
-                        <td>₹{item.unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        <td>₹{item.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        <td>
-                          <button type="button" className="btn btn-sm btn-delete" onClick={() => removeItemFromSale(index)}>
-                            Remove
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="sale-totals">
-                  <div className="total-row">
-                    <span>Subtotal:</span>
-                    <span>₹{totals.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                  {formData.gstPaid && (
-                    <div className="total-row">
-                      <span>GST ({formData.gstRate}%):</span>
-                      <span>₹{totals.gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    </div>
-                  )}
-                  <div className="total-row total-final">
-                    <span>Total:</span>
-                    <span>₹{totals.total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="form-actions">
-              <button type="submit" className="btn btn-primary" disabled={formData.items.length === 0}>
-                Record Sale
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={resetForm}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
 
       <div className="sales-list">
         <h3>Sales History</h3>
-        {sales.length === 0 ? (
-          <p className="empty-state">No sales recorded yet</p>
-        ) : (
-          <div className="sales-table-container">
-            <table className="sales-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Customer</th>
-                  <th>Items</th>
-                  <th>GST Status</th>
-                  <th>Subtotal</th>
-                  <th>GST</th>
-                  <th>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sales.map(sale => (
-                  <tr key={sale.id}>
-                    <td>{formatDate(sale.date)}</td>
-                    <td>{sale.customerName}</td>
-                    <td>{sale.items.length} item(s)</td>
-                    <td>
-                      <span className={`gst-badge ${sale.gstPaid ? 'gst-paid' : 'gst-not-paid'}`}>
-                        {sale.gstPaid ? `Paid (${sale.gstRate}%)` : 'Not Paid'}
-                      </span>
-                    </td>
-                    <td>₹{sale.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td>₹{sale.gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td>₹{sale.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <div className="sales-table-container">
+          <DataTable
+            value={prepareSalesData}
+            paginator
+            rows={10}
+            rowsPerPageOptions={[10, 25, 50]}
+            loading={loading}
+            dataKey="id"
+            filters={filters}
+            emptyMessage="No sales found."
+            filterDisplay="row"
+            showGridlines
+            stripedRows
+            tableStyle={{ minWidth: '50rem', width: '100%' }}
+            className="sales-datatable"
+          >
+            <Column
+              field="billNumber"
+              header="Bill Number"
+              filter
+              filterPlaceholder="Search by Bill Number"
+              style={{ minWidth: '12rem' }}
+              body={billNumberBodyTemplate}
+            />
+            <Column
+              field="billDate"
+              header="Date"
+              filterField="billDate"
+              dataType="date"
+              style={{ minWidth: '10rem' }}
+              body={dateBodyTemplate}
+              filter
+              filterElement={dateRowFilterTemplate}
+            />
+            <Column
+              field="customerNumber"
+              header="Customer Number"
+              filter
+              filterPlaceholder="Search by Customer Number"
+              style={{ minWidth: '12rem' }}
+            />
+            <Column
+              field="itemsCount"
+              header="Items"
+              style={{ minWidth: '8rem' }}
+              body={(rowData) => `${rowData.itemsCount} item(s)`}
+            />
+            <Column
+              field="billType"
+              header="GST Status"
+              filterField="billType"
+              showFilterMenu={false}
+              filterMenuStyle={{ width: '14rem' }}
+              style={{ minWidth: '12rem' }}
+              body={billTypeBodyTemplate}
+              filter
+              filterElement={billTypeRowFilterTemplate}
+            />
+            <Column
+              field="subtotal"
+              header="Subtotal"
+              dataType="numeric"
+              style={{ minWidth: '10rem' }}
+              body={(rowData) => amountBodyTemplate(rowData, 'subtotal')}
+            />
+            <Column
+              field="gstAmount"
+              header="GST"
+              dataType="numeric"
+              style={{ minWidth: '9rem' }}
+              body={(rowData) => amountBodyTemplate(rowData, 'gstAmount')}
+            />
+            <Column
+              field="totalAmount"
+              header="Total"
+              dataType="numeric"
+              style={{ minWidth: '10rem' }}
+              body={totalAmountBodyTemplate}
+            />
+            <Column
+              header="Actions"
+              style={{ minWidth: '8rem' }}
+              body={actionsBodyTemplate}
+            />
+          </DataTable>
+        </div>
       </div>
     </div>
   );
