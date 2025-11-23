@@ -10,12 +10,19 @@ import {
   fetchEmployees as apiFetchEmployees,
   createEmployee as apiCreateEmployee,
   updateEmployee as apiUpdateEmployee,
-  deleteEmployee as apiDeleteEmployee
+  deleteEmployee as apiDeleteEmployee,
+  fetchClientPurchases,
+  createClientPurchase,
+  updateClientPurchase,
+  deleteClientPurchase,
+  addClientPayment,
+  fetchAllPayments
 } from '../utils/api';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import { expenseSchema, employeeSchema, salaryPaymentSchema, advancePaymentSchema, clientPurchaseSchema, clientPaymentSchema } from '../utils/validation';
 import Loading from './Loading';
+import ConfirmationModal from './ConfirmationModal';
 import './Expenses.css';
 
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
@@ -58,9 +65,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [showPayAdvanceForm, setShowPayAdvanceForm] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [clientPayments, setClientPayments] = useState([]);
+  const [allPayments, setAllPayments] = useState([]); // All payments from API
   const [showClientPurchaseForm, setShowClientPurchaseForm] = useState(false);
   const [showClientPaymentForm, setShowClientPaymentForm] = useState(false);
   const [selectedClientPurchase, setSelectedClientPurchase] = useState(null);
+  const [clientFilter, setClientFilter] = useState(''); // Filter by client name
+  const [showPaymentsTable, setShowPaymentsTable] = useState(false); // Toggle between purchases and payments view
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   const [currentPage, setCurrentPage] = useState(1);
@@ -68,7 +78,28 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
   const [expandedExpenses, setExpandedExpenses] = useState(new Set());
   const [expandedEmployees, setExpandedEmployees] = useState(new Set());
+  const [toast, setToast] = useState(null);
+  const [confirmModal, setConfirmModal] = useState({ isOpen: false, onConfirm: null, title: '', message: '' });
   const itemsPerPage = 10;
+
+  // Toast notification helper
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Confirmation modal helper
+  const showConfirm = (title, message, onConfirm) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: () => {
+        setConfirmModal({ isOpen: false, onConfirm: null, title: '', message: '' });
+        onConfirm();
+      }
+    });
+  };
 
   const toggleExpense = (expenseId) => {
     setExpandedExpenses(prev => {
@@ -155,6 +186,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     paymentMethod: 'cash',
     notes: ''
   });
+  const [submittingPayment, setSubmittingPayment] = useState(false);
 
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [loadingExpenses, setLoadingExpenses] = useState(false);
@@ -164,28 +196,145 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     loadExpenses();
     loadEmployees();
     loadClientPayments();
+    // Also load all payments on initial load
+    loadAllPayments();
   }, []);
 
-  const loadClientPayments = () => {
+  const loadClientPayments = async () => {
     try {
-      const stored = localStorage.getItem('clientPayments');
-      if (stored) {
-        setClientPayments(JSON.parse(stored));
+      // Try to fetch from API first
+      const purchases = await fetchClientPurchases();
+      if (purchases && Array.isArray(purchases)) {
+        // Fetch all payments and merge them into purchases to ensure paid amounts are accurate
+        try {
+          const allPayments = await fetchAllPayments();
+          if (allPayments && Array.isArray(allPayments)) {
+            // Group payments by purchaseId/clientPurchaseId
+            const paymentsByPurchase = {};
+            allPayments.forEach(payment => {
+              const purchaseId = String(payment.clientPurchaseId || payment.purchaseId);
+              if (purchaseId) {
+                if (!paymentsByPurchase[purchaseId]) {
+                  paymentsByPurchase[purchaseId] = [];
+                }
+                paymentsByPurchase[purchaseId].push(payment);
+              }
+            });
+            
+            // Merge payments into purchases
+            const purchasesWithPayments = purchases.map(purchase => {
+              const purchaseId = String(purchase.id);
+              const payments = paymentsByPurchase[purchaseId] || purchase.payments || [];
+              return {
+                ...purchase,
+                payments: payments
+              };
+            });
+            
+            setClientPayments(purchasesWithPayments);
+            // Also save to localStorage as backup
+            localStorage.setItem('clientPayments', JSON.stringify(purchasesWithPayments));
+          } else {
+            // If payments API fails, use purchases as-is
+            setClientPayments(purchases);
+            localStorage.setItem('clientPayments', JSON.stringify(purchases));
+          }
+        } catch (paymentsError) {
+          console.error('Error fetching payments to merge:', paymentsError);
+          // Use purchases without payments if payments API fails
+          setClientPayments(purchases);
+          localStorage.setItem('clientPayments', JSON.stringify(purchases));
+        }
+        
+        // Reload all payments to enrich them with purchase details (for All Payments view)
+        await loadAllPayments();
       } else {
-        setClientPayments([]);
+        // If API returns invalid data, try localStorage
+        const stored = localStorage.getItem('clientPayments');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setClientPayments(Array.isArray(parsed) ? parsed : []);
+        } else {
+          setClientPayments([]);
+        }
       }
     } catch (error) {
-      console.error('Error loading client payments:', error);
-      setClientPayments([]);
+      console.error('Error loading client payments from API:', error);
+      // Fallback to localStorage if API fails
+      try {
+        const stored = localStorage.getItem('clientPayments');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setClientPayments(Array.isArray(parsed) ? parsed : []);
+        } else {
+          setClientPayments([]);
+        }
+      } catch (localError) {
+        console.error('Error loading client payments from localStorage:', localError);
+        setClientPayments([]);
+      }
     }
   };
 
   const saveClientPayments = (payments) => {
     try {
-      localStorage.setItem('clientPayments', JSON.stringify(payments));
+      // Update state immediately for UI responsiveness
       setClientPayments(payments);
+      // Save to localStorage as backup
+      localStorage.setItem('clientPayments', JSON.stringify(payments));
     } catch (error) {
-      console.error('Error saving client payments:', error);
+      console.error('Error saving client payments to localStorage:', error);
+    }
+  };
+
+  // Load all payments from API endpoint
+  const loadAllPayments = async () => {
+    try {
+      // Fetch all payments from dedicated API endpoint: GET /api/client-purchases/payments
+      const payments = await fetchAllPayments();
+      if (payments && Array.isArray(payments)) {
+        // API Response: { id, clientPurchaseId, clientId, amount, date, paymentMethod, notes, createdAt, updatedAt }
+        // Enrich payments with purchase details (clientName, purchaseDescription) from clientPayments
+        const enrichedPayments = payments.map(payment => {
+          // Find the purchase this payment belongs to using clientPurchaseId
+          const purchase = clientPayments.find(p => 
+            String(p.id) === String(payment.clientPurchaseId) || 
+            String(p.id) === String(payment.purchaseId)
+          );
+          
+          return {
+            ...payment,
+            // Keep all API fields: id, clientPurchaseId, clientId, amount, date, paymentMethod, notes, createdAt, updatedAt
+            // Add enriched fields from purchase if available
+            clientName: purchase?.clientName || payment.clientId || '-',
+            purchaseDescription: purchase?.purchaseDescription || '-',
+            purchaseId: payment.clientPurchaseId || payment.purchaseId // Support both field names
+          };
+        });
+        setAllPayments(enrichedPayments);
+        console.log('All payments loaded from API:', enrichedPayments.length, 'payments');
+      } else {
+        setAllPayments([]);
+      }
+    } catch (error) {
+      console.error('Error loading all payments from API:', error);
+      // Fallback: extract payments from purchases if API fails
+      const allPaymentsFromPurchases = [];
+      clientPayments.forEach(purchase => {
+        if (purchase?.payments && Array.isArray(purchase.payments)) {
+          purchase.payments.forEach(payment => {
+            allPaymentsFromPurchases.push({
+              ...payment,
+              purchaseId: purchase.id,
+              clientPurchaseId: purchase.id,
+              clientName: purchase.clientName,
+              purchaseDescription: purchase.purchaseDescription
+            });
+          });
+        }
+      });
+      setAllPayments(allPaymentsFromPurchases);
+      showToast('Using fallback data. API endpoint unavailable.', 'error');
     }
   };
 
@@ -322,7 +471,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       });
     } catch (error) {
       console.error('Error saving salary payment to API:', error);
-      alert('Failed to save salary payment. Please check your connection and try again.');
+      showToast('Failed to save salary payment. Please check your connection and try again.', 'error');
       // Don't use localStorage fallback - only use API
     }
   };
@@ -364,7 +513,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       });
     } catch (error) {
       console.error('Error saving advance payment to API:', error);
-      alert('Failed to save advance payment. Please check your connection and try again.');
+      showToast('Failed to save advance payment. Please check your connection and try again.', 'error');
       // Don't use localStorage fallback - only use API
     }
   };
@@ -421,7 +570,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       }
     } catch (error) {
       console.error('Error saving expense to API:', error);
-      alert('Failed to save expense. Please check your connection and try again.');
+      showToast('Failed to save expense. Please check your connection and try again.', 'error');
       // Don't use localStorage fallback - only use API
     } finally {
       setSubmittingExpense(false);
@@ -459,20 +608,25 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   };
 
   const handleDelete = async (id) => {
-    if (window.confirm('Are you sure you want to delete this expense?')) {
-      try {
-        await apiDeleteExpense(id);
-        await loadExpenses();
-        // Notify parent component (Dashboard) to refresh expenses for chart
-        if (onExpenseUpdate) {
-          onExpenseUpdate();
+    showConfirm(
+      'Delete Expense',
+      'Are you sure you want to delete this expense? This action cannot be undone.',
+      async () => {
+        try {
+          await apiDeleteExpense(id);
+          await loadExpenses();
+          showToast('Expense deleted successfully!', 'success');
+          // Notify parent component (Dashboard) to refresh expenses for chart
+          if (onExpenseUpdate) {
+            onExpenseUpdate();
+          }
+        } catch (error) {
+          console.error('Error deleting expense from API:', error);
+          showToast('Failed to delete expense. Please check your connection and try again.', 'error');
+          // Don't use localStorage fallback - only use API
         }
-      } catch (error) {
-        console.error('Error deleting expense from API:', error);
-        alert('Failed to delete expense. Please check your connection and try again.');
-        // Don't use localStorage fallback - only use API
       }
-    }
+    );
   };
 
   const resetForm = () => {
@@ -1112,7 +1266,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   });
                 } catch (error) {
                   console.error('Error saving employee to API:', error);
-                  alert('Failed to save employee. Please check your connection and try again.');
+                  showToast('Failed to save employee. Please check your connection and try again.', 'error');
                   // Don't use localStorage fallback - only use API
                 }
               }}>
@@ -1264,17 +1418,22 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                             </button>
                             <button
                               className="btn-icon btn-delete"
-                              onClick={async () => {
-                                if (window.confirm('Are you sure you want to delete this employee?')) {
-                                  try {
-                                    await apiDeleteEmployee(employee.id);
-                                    await loadEmployees();
-                                  } catch (error) {
-                                    console.error('Error deleting employee from API:', error);
-                                    alert('Failed to delete employee. Please check your connection and try again.');
-                                    // Don't use localStorage fallback - only use API
+                              onClick={() => {
+                                showConfirm(
+                                  'Delete Employee',
+                                  `Are you sure you want to delete "${employee.employeeName}"? This action cannot be undone.`,
+                                  async () => {
+                                    try {
+                                      await apiDeleteEmployee(employee.id);
+                                      await loadEmployees();
+                                      showToast('Employee deleted successfully!', 'success');
+                                    } catch (error) {
+                                      console.error('Error deleting employee from API:', error);
+                                      showToast('Failed to delete employee. Please check your connection and try again.', 'error');
+                                      // Don't use localStorage fallback - only use API
+                                    }
                                   }
-                                }
+                                );
                               }}
                               title="Delete"
                             >
@@ -1357,18 +1516,23 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                               </button>
                               <button
                                 className="btn-icon btn-delete"
-                                onClick={async (e) => {
+                                onClick={(e) => {
                                   e.stopPropagation();
-                                  if (window.confirm('Are you sure you want to delete this employee?')) {
-                                    try {
-                                      await apiDeleteEmployee(employee.id);
-                                      await loadEmployees();
-                                    } catch (error) {
-                                      console.error('Error deleting employee from API:', error);
-                                      alert('Failed to delete employee. Please check your connection and try again.');
-                                      // Don't use localStorage fallback - only use API
+                                  showConfirm(
+                                    'Delete Employee',
+                                    `Are you sure you want to delete "${employee.employeeName}"? This action cannot be undone.`,
+                                    async () => {
+                                      try {
+                                        await apiDeleteEmployee(employee.id);
+                                        await loadEmployees();
+                                        showToast('Employee deleted successfully!', 'success');
+                                      } catch (error) {
+                                        console.error('Error deleting employee from API:', error);
+                                        showToast('Failed to delete employee. Please check your connection and try again.', 'error');
+                                        // Don't use localStorage fallback - only use API
+                                      }
                                     }
-                                  }
+                                  );
                                 }}
                                 title="Delete"
                               >
@@ -1396,7 +1560,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       {/* Client Payment Tab Content */}
       {activeTab === 'client' && (
         <div className="expenses-tab-content">
-          <div className="salaries-actions">
+          <div className="salaries-actions" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
             <button className="btn btn-primary" onClick={() => setShowClientPurchaseForm(true)}>
               + Add Client Purchase
             </button>
@@ -1414,7 +1578,70 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 💰 Make Payment
               </button>
             )}
+            {clientPayments.length > 0 && (
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginLeft: 'auto' }}>
+                <button 
+                  className={`btn ${!showPaymentsTable ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={async () => {
+                    setShowPaymentsTable(false);
+                    // Reload purchases data when switching to purchases view
+                    await loadClientPayments();
+                  }}
+                  style={{ fontSize: '13px', padding: '8px 16px' }}
+                >
+                  📦 Purchases
+                </button>
+                <button 
+                  className={`btn ${showPaymentsTable ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={async () => {
+                    setShowPaymentsTable(true);
+                    // Load all payments from dedicated API endpoint
+                    await loadAllPayments();
+                  }}
+                  style={{ fontSize: '13px', padding: '8px 16px' }}
+                >
+                  💰 All Payments
+                </button>
+              </div>
+            )}
           </div>
+          
+          {/* Client Filter */}
+          {clientPayments.length > 0 && (
+            <div style={{ marginTop: '15px', marginBottom: '15px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <input
+                type="text"
+                placeholder="🔍 Filter by client name..."
+                value={clientFilter}
+                onChange={(e) => setClientFilter(e.target.value)}
+                style={{
+                  padding: '10px 14px',
+                  border: 'none',
+                  borderRadius: '12px',
+                  fontSize: '14px',
+                  width: '300px',
+                  background: '#e0e5ec',
+                  boxShadow: 'inset 3px 3px 6px rgba(163, 177, 198, 0.6), inset -3px -3px 6px rgba(255, 255, 255, 0.5)'
+                }}
+              />
+              {clientFilter && (
+                <button
+                  onClick={() => setClientFilter('')}
+                  style={{
+                    padding: '10px 20px',
+                    background: '#e0e5ec',
+                    border: 'none',
+                    borderRadius: '12px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: '600'
+                  }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Client Purchase Form Modal */}
           {showClientPurchaseForm && (
@@ -1443,28 +1670,61 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   }}>×</button>
                 </div>
                 <div className="modal-body">
-                  <form onSubmit={(e) => {
+                  <form onSubmit={async (e) => {
                     e.preventDefault();
-                    const newPurchase = {
-                      id: Date.now().toString(),
-                      clientName: clientPurchaseFormData.clientName,
-                      purchaseDescription: clientPurchaseFormData.purchaseDescription,
-                      totalAmount: parseFloat(clientPurchaseFormData.totalAmount) || 0,
-                      purchaseDate: clientPurchaseFormData.purchaseDate,
-                      notes: clientPurchaseFormData.notes || '',
-                      payments: [],
-                      createdAt: new Date().toISOString()
-                    };
-                    const updated = [...clientPayments, newPurchase];
-                    saveClientPayments(updated);
-                    setShowClientPurchaseForm(false);
-                    setClientPurchaseFormData({
-                      clientName: '',
-                      purchaseDescription: '',
-                      totalAmount: '',
-                      purchaseDate: new Date().toISOString().split('T')[0],
-                      notes: ''
-                    });
+                    try {
+                      // Prepare purchase data for API
+                      const purchaseData = {
+                        clientName: clientPurchaseFormData.clientName,
+                        purchaseDescription: clientPurchaseFormData.purchaseDescription,
+                        totalAmount: parseFloat(clientPurchaseFormData.totalAmount) || 0,
+                        purchaseDate: clientPurchaseFormData.purchaseDate,
+                        notes: clientPurchaseFormData.notes || ''
+                      };
+
+                      // Create purchase via API
+                      const newPurchase = await createClientPurchase(purchaseData);
+                      
+                      // Update local state
+                      const updated = [...clientPayments, newPurchase];
+                      saveClientPayments(updated);
+                      
+                      showToast(`Client purchase added successfully!`, 'success');
+                      
+                      setShowClientPurchaseForm(false);
+                      setClientPurchaseFormData({
+                        clientName: '',
+                        purchaseDescription: '',
+                        totalAmount: '',
+                        purchaseDate: new Date().toISOString().split('T')[0],
+                        notes: ''
+                      });
+                    } catch (error) {
+                      console.error('Error creating client purchase:', error);
+                      // Fallback to localStorage if API fails
+                      const newPurchase = {
+                        id: Date.now().toString(),
+                        clientName: clientPurchaseFormData.clientName,
+                        purchaseDescription: clientPurchaseFormData.purchaseDescription,
+                        totalAmount: parseFloat(clientPurchaseFormData.totalAmount) || 0,
+                        purchaseDate: clientPurchaseFormData.purchaseDate,
+                        notes: clientPurchaseFormData.notes || '',
+                        payments: [],
+                        createdAt: new Date().toISOString()
+                      };
+                      const updated = [...clientPayments, newPurchase];
+                      saveClientPayments(updated);
+                      showToast(`Purchase saved locally (API unavailable). ${error.message}`, 'error');
+                      
+                      setShowClientPurchaseForm(false);
+                      setClientPurchaseFormData({
+                        clientName: '',
+                        purchaseDescription: '',
+                        totalAmount: '',
+                        purchaseDate: new Date().toISOString().split('T')[0],
+                        notes: ''
+                      });
+                    }
                   }}>
                     <div className="form-group">
                       <label>Client Name *</label>
@@ -1570,14 +1830,43 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   }}>×</button>
                 </div>
                 <div className="modal-body">
-                  <form onSubmit={(e) => {
+                  <form onSubmit={async (e) => {
                     e.preventDefault();
-                    if (!clientPaymentFormData.purchaseId) {
-                      alert('Please select a purchase');
+                    
+                    // Prevent double submission
+                    if (submittingPayment) {
+                      console.log('Payment already being submitted...');
                       return;
                     }
-                    const purchase = clientPayments.find(p => p?.id === clientPaymentFormData?.purchaseId);
-                    if (!purchase) return;
+                    
+                    console.log('Form submitted!', clientPaymentFormData);
+                    console.log('Available purchases:', clientPayments);
+                    
+                    // Use selectedClientPurchase if available (more reliable)
+                    let purchase = selectedClientPurchase;
+                    
+                    // If not available, try to find by ID (handle string/number mismatch)
+                    if (!purchase && clientPaymentFormData.purchaseId) {
+                      purchase = clientPayments.find(p => {
+                        // Compare as strings to handle type mismatch
+                        return String(p?.id) === String(clientPaymentFormData.purchaseId);
+                      });
+                    }
+                    
+                    if (!purchase) {
+                      console.error('Purchase not found:', {
+                        purchaseId: clientPaymentFormData.purchaseId,
+                        selectedPurchase: selectedClientPurchase,
+                        availablePurchases: clientPayments.map(p => ({ id: p.id, type: typeof p.id, clientName: p.clientName }))
+                      });
+                      showToast('Purchase not found. Please select a purchase from the dropdown.', 'error');
+                      setSubmittingPayment(false);
+                      return;
+                    }
+                    
+                    console.log('Purchase found:', purchase);
+                    
+                    setSubmittingPayment(true);
                     
                     const payments = purchase?.payments || [];
                     const paidAmount = Number((Array.isArray(payments) ? payments.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0) : 0) || 0) || 0;
@@ -1587,49 +1876,158 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     const safePending = isNaN(pendingAmount) ? 0 : pendingAmount;
                     const safePayment = isNaN(paymentAmount) ? 0 : paymentAmount;
                     
-                    if (safePayment > safePending) {
-                      alert(`Payment amount (₹${safePayment.toLocaleString('en-IN')}) exceeds pending amount (₹${safePending.toLocaleString('en-IN')})`);
+                    if (safePayment <= 0) {
+                      showToast('Please enter a valid payment amount', 'error');
+                      console.error('Invalid payment amount:', safePayment);
+                      setSubmittingPayment(false);
                       return;
                     }
                     
-                    const newPayment = {
-                      id: Date.now().toString(),
-                      amount: paymentAmount,
-                      date: clientPaymentFormData.date,
-                      paymentMethod: clientPaymentFormData.paymentMethod,
-                      notes: clientPaymentFormData.notes || '',
-                      createdAt: new Date().toISOString()
-                    };
+                    if (safePayment > safePending) {
+                      showToast(`Payment amount (₹${safePayment.toLocaleString('en-IN')}) exceeds pending amount (₹${safePending.toLocaleString('en-IN')})`, 'error');
+                      console.error('Payment exceeds pending:', { safePayment, safePending });
+                      setSubmittingPayment(false);
+                      return;
+                    }
                     
-                    const updated = clientPayments.map(p => {
-                      if (p.id === clientPaymentFormData.purchaseId) {
-                        return {
-                          ...p,
-                          payments: [...p.payments, newPayment]
-                        };
+                    console.log('Validation passed. Proceeding with payment...');
+                    
+                    try {
+                      // Simple API call to track payment transaction
+                      // Ensure data format matches API requirements
+                      const paymentData = {
+                        clientId: purchase.clientId || purchase.clientName,
+                        amount: Number(paymentAmount), // Ensure it's a number, not string
+                        date: clientPaymentFormData.date, // Already in YYYY-MM-DD format from date input
+                        paymentMethod: clientPaymentFormData.paymentMethod.toLowerCase(), // Ensure lowercase
+                        notes: clientPaymentFormData.notes || ''
+                      };
+                      
+                      console.log('Adding payment to API:', {
+                        endpoint: `/client-purchases/${purchase.id}/payments`,
+                        purchaseId: purchase.id,
+                        paymentData
+                      });
+                      
+                      // Add payment via simple API endpoint
+                      const response = await addClientPayment(purchase.id, paymentData);
+                      console.log('Payment added successfully:', response);
+                      
+                      // Reload purchases to get updated data
+                      console.log('Reloading purchases to update pending amounts...');
+                      await loadClientPayments();
+                      
+                      // Also fetch all payments and merge them into purchases to ensure paid amount is updated
+                      try {
+                        const allPayments = await fetchAllPayments();
+                        if (allPayments && Array.isArray(allPayments)) {
+                          // Group payments by purchaseId/clientPurchaseId
+                          const paymentsByPurchase = {};
+                          allPayments.forEach(payment => {
+                            const purchaseId = payment.clientPurchaseId || payment.purchaseId;
+                            if (purchaseId) {
+                              if (!paymentsByPurchase[purchaseId]) {
+                                paymentsByPurchase[purchaseId] = [];
+                              }
+                              paymentsByPurchase[purchaseId].push(payment);
+                            }
+                          });
+                          
+                          // Update clientPayments state with merged payments
+                          setClientPayments(prevPurchases => {
+                            return prevPurchases.map(p => {
+                              const purchaseId = String(p.id);
+                              const payments = paymentsByPurchase[purchaseId] || p.payments || [];
+                              return {
+                                ...p,
+                                payments: payments
+                              };
+                            });
+                          });
+                          
+                          console.log('Payments merged with purchases. Updated paid amounts should now be visible.');
+                        }
+                      } catch (error) {
+                        console.error('Error fetching payments to merge:', error);
+                        // Continue anyway - purchases were already reloaded
                       }
-                      return p;
-                    });
-                    
-                    saveClientPayments(updated);
-                    setShowClientPaymentForm(false);
-                    setSelectedClientPurchase(null);
-                    setClientPaymentFormData({
-                      purchaseId: '',
-                      amount: '',
-                      date: new Date().toISOString().split('T')[0],
-                      paymentMethod: 'cash',
-                      notes: ''
-                    });
+                      
+                      // Verify the update
+                      const updatedPurchases = await fetchClientPurchases();
+                      const updatedPurchase = updatedPurchases?.find(p => String(p.id) === String(purchase.id));
+                      if (updatedPurchase) {
+                        // Try to get payments for this purchase from allPayments
+                        try {
+                          const allPayments = await fetchAllPayments();
+                          const purchasePayments = allPayments?.filter(p => 
+                            String(p.clientPurchaseId || p.purchaseId) === String(purchase.id)
+                          ) || [];
+                          const updatedPaidAmount = purchasePayments.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0);
+                          const updatedPendingAmount = (updatedPurchase.totalAmount || 0) - updatedPaidAmount;
+                          console.log('Updated amounts:', {
+                            totalAmount: updatedPurchase.totalAmount,
+                            paidAmount: updatedPaidAmount,
+                            pendingAmount: updatedPendingAmount,
+                            paymentCount: purchasePayments.length
+                          });
+                        } catch (err) {
+                          console.error('Error verifying payment amounts:', err);
+                        }
+                      }
+                      
+                      // Also create this as an expense in the API
+                      try {
+                        const expenseData = {
+                          type: 'client_payment',
+                          date: clientPaymentFormData.date,
+                          category: 'client_payment',
+                          description: `Payment to ${purchase.clientName} - ${purchase.purchaseDescription || 'Purchase'}`,
+                          amount: paymentAmount,
+                          paymentMethod: clientPaymentFormData.paymentMethod
+                        };
+                        
+                        if (clientPaymentFormData.notes) {
+                          expenseData.description += ` - ${clientPaymentFormData.notes}`;
+                        }
+                        
+                        await apiCreateExpense(expenseData);
+                        await loadExpenses();
+                        
+                        showToast(`Payment of ₹${paymentAmount.toLocaleString('en-IN')} recorded and added to expenses!`, 'success');
+                      } catch (error) {
+                        console.error('Error creating expense for client payment:', error);
+                        showToast(`Payment recorded, but failed to add to expenses: ${error.message}`, 'error');
+                      }
+                      
+                      // Only close modal on success
+                      setShowClientPaymentForm(false);
+                      setSelectedClientPurchase(null);
+                      setClientPaymentFormData({
+                        purchaseId: '',
+                        amount: '',
+                        date: new Date().toISOString().split('T')[0],
+                        paymentMethod: 'cash',
+                        notes: ''
+                      });
+                    } catch (error) {
+                      console.error('Error adding client payment:', error);
+                      showToast(`Failed to record payment: ${error.message}`, 'error');
+                      // Don't close modal on error - let user try again
+                    } finally {
+                      setSubmittingPayment(false);
+                    }
                   }}>
                     <div className="form-group">
                       <label>Select Purchase *</label>
                       <select
                         value={clientPaymentFormData.purchaseId}
                         onChange={(e) => {
-                          const purchase = clientPayments.find(p => p.id === e.target.value);
+                          const selectedId = e.target.value;
+                          // Find purchase by comparing as strings to handle type mismatch
+                          const purchase = clientPayments.find(p => String(p.id) === String(selectedId));
+                          console.log('Purchase selected:', { selectedId, purchase, allPurchases: clientPayments });
                           setSelectedClientPurchase(purchase);
-                          setClientPaymentFormData({ ...clientPaymentFormData, purchaseId: e.target.value });
+                          setClientPaymentFormData({ ...clientPaymentFormData, purchaseId: selectedId });
                         }}
                         required
                       >
@@ -1703,8 +2101,15 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       />
                     </div>
                     <div className="form-actions">
-                      <button type="submit" className="btn btn-primary">
-                        Make Payment
+                      <button type="submit" className="btn btn-primary" disabled={submittingPayment}>
+                        {submittingPayment ? (
+                          <>
+                            <span className="button-loading"></span>
+                            Processing...
+                          </>
+                        ) : (
+                          'Make Payment'
+                        )}
                       </button>
                       <button type="button" className="btn btn-secondary" onClick={() => {
                         setShowClientPaymentForm(false);
@@ -1728,24 +2133,31 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
           <div className="salaries-content">
             {clientPayments.length > 0 ? (
-              <div className="expenses-table-container">
-                {/* Desktop Table View */}
-                <div className="sales-table-wrapper">
-                  <table className="data-table expenses-table">
-                    <thead>
-                      <tr>
-                        <th>Client Name</th>
-                        <th>Description</th>
-                        <th>Purchase Date</th>
-                        <th>Total Amount</th>
-                        <th>Paid Amount</th>
-                        <th>Pending Amount</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {clientPayments.map((purchase) => {
+              <>
+                {/* Purchases Table View */}
+                {!showPaymentsTable && (
+                  <div className="expenses-table-container">
+                    <div className="sales-table-wrapper">
+                      <table className="data-table expenses-table">
+                        <thead>
+                          <tr>
+                            <th>Client Name</th>
+                            <th>Description</th>
+                            <th>Purchase Date</th>
+                            <th>Total Amount</th>
+                            <th>Paid Amount</th>
+                            <th>Pending Amount</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {clientPayments
+                            .filter(purchase => 
+                              !clientFilter || 
+                              purchase?.clientName?.toLowerCase().includes(clientFilter.toLowerCase())
+                            )
+                            .map((purchase) => {
                         const payments = purchase?.payments || [];
                         const paidAmount = Number((Array.isArray(payments) ? payments.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0) : 0) || 0) || 0;
                         const totalAmount = Number(parseFloat(purchase?.totalAmount || 0) || 0) || 0;
@@ -1807,10 +2219,28 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                 <button
                                   className="action-btn"
                                   onClick={() => {
-                                    if (window.confirm('Are you sure you want to delete this purchase and all its payments?')) {
-                                      const updated = clientPayments.filter(p => p.id !== purchase.id);
-                                      saveClientPayments(updated);
-                                    }
+                                    showConfirm(
+                                      'Delete Purchase',
+                                      `Are you sure you want to delete this purchase and all its payments? This action cannot be undone.`,
+                                      async () => {
+                                        try {
+                                          // Delete from API
+                                          await deleteClientPurchase(purchase.id);
+                                          
+                                          // Update local state
+                                          const updated = clientPayments.filter(p => p.id !== purchase.id);
+                                          saveClientPayments(updated);
+                                          
+                                          showToast('Client purchase deleted successfully!', 'success');
+                                        } catch (error) {
+                                          console.error('Error deleting client purchase:', error);
+                                          // Fallback to localStorage if API fails
+                                          const updated = clientPayments.filter(p => p.id !== purchase.id);
+                                          saveClientPayments(updated);
+                                          showToast(`Purchase deleted locally (API unavailable). ${error.message}`, 'error');
+                                        }
+                                      }
+                                    );
                                   }}
                                   title="Delete"
                                 >
@@ -1820,11 +2250,111 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                             </td>
                           </tr>
                         );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                            })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* All Payments Table View */}
+                {showPaymentsTable && (() => {
+                  // Use payments from API (allPayments state) - fetched from GET /api/client-purchases/payments
+                  // Filter by client name if filter is set
+                  const filteredPayments = clientFilter
+                    ? allPayments.filter(p => 
+                        (p?.clientName?.toLowerCase().includes(clientFilter.toLowerCase()) ||
+                         p?.clientId?.toLowerCase().includes(clientFilter.toLowerCase()))
+                      )
+                    : allPayments;
+
+                  // Sort by date (newest first)
+                  filteredPayments.sort((a, b) => {
+                    const dateA = new Date(a.date || a.createdAt || 0).getTime();
+                    const dateB = new Date(b.date || b.createdAt || 0).getTime();
+                    return dateB - dateA;
+                  });
+
+                  return (
+                    <div className="expenses-table-container">
+                      <div className="sales-table-wrapper">
+                        <table className="data-table expenses-table">
+                          <thead>
+                            <tr>
+                              <th>Payment Date</th>
+                              <th>Client Name</th>
+                              <th>Payment Amount</th>
+                              <th>Payment Method</th>
+                              <th>Notes</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredPayments.length > 0 ? (
+                              filteredPayments.map((payment, index) => {
+                                const paymentAmount = Number(parseFloat(payment?.amount || 0) || 0) || 0;
+                                const safeAmount = isNaN(paymentAmount) ? 0 : paymentAmount;
+                                return (
+                                  <tr key={payment?.id || index}>
+                                    <td className="date-cell">
+                                      {payment?.date 
+                                        ? new Date(payment.date).toLocaleDateString('en-IN', { 
+                                            day: '2-digit', 
+                                            month: '2-digit', 
+                                            year: 'numeric' 
+                                          })
+                                        : payment?.createdAt
+                                        ? new Date(payment.createdAt).toLocaleDateString('en-IN', { 
+                                            day: '2-digit', 
+                                            month: '2-digit', 
+                                            year: 'numeric' 
+                                          })
+                                        : '-'}
+                                    </td>
+                                    <td className="date-cell" style={{ fontWeight: '600' }}>
+                                      {payment?.clientName || payment?.clientId || '-'}
+                                    </td>
+                                    <td className="amount-cell total-col">
+                                      <span className="expense-amount" style={{ color: '#28a745', fontWeight: '700' }}>
+                                        ₹{safeAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      </span>
+                                    </td>
+                                    <td>
+                                      <span style={{
+                                        padding: '4px 8px',
+                                        borderRadius: '4px',
+                                        fontSize: '11px',
+                                        fontWeight: '600',
+                                        textTransform: 'capitalize',
+                                        background: '#e0e5ec',
+                                        color: '#333'
+                                      }}>
+                                        {payment?.paymentMethod || 'cash'}
+                                      </span>
+                                    </td>
+                                    <td style={{ fontSize: '12px', color: '#666' }}>
+                                      {payment?.notes || '-'}
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            ) : (
+                              <tr>
+                                <td colSpan="6" style={{ textAlign: 'center', padding: '40px' }}>
+                                  <span className="empty-icon">💰</span>
+                                  <p className="empty-state">No payments found</p>
+                                  {clientFilter && (
+                                    <p className="empty-subtitle">Try a different client name</p>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </>
             ) : (
               <div className="empty-state-wrapper">
                 <span className="empty-icon">💼</span>
@@ -2034,6 +2564,24 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         )}
       </div>
       )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`toast toast-${toast.type}`}>
+          <span className="toast-message">{toast.message}</span>
+          <button className="toast-close" onClick={() => setToast(null)}>×</button>
+        </div>
+      )}
+
+      {/* Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal({ isOpen: false, onConfirm: null, title: '', message: '' })}
+        onConfirm={confirmModal.onConfirm || (() => {})}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        type="danger"
+      />
     </div>
   );
 };

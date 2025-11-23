@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../config/api';
 import { handleApiResponse } from '../utils/api';
 import './HomeScreenManagement.css';
@@ -34,13 +34,13 @@ const HomeScreenManagement = () => {
   });
 
   // Show toast message
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
-  };
+  }, []);
 
   // Fetch hero slides (Public - no auth required)
-  const fetchHeroSlides = async () => {
+  const fetchHeroSlides = useCallback(async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/heroes`, {
         headers: {
@@ -55,10 +55,10 @@ const HomeScreenManagement = () => {
       console.error('Error fetching hero slides:', error);
       showToast('Failed to load hero slides', 'error');
     }
-  };
+  }, [showToast]);
 
   // Fetch categories
-  const fetchCategories = async () => {
+  const fetchCategories = useCallback(async () => {
     try {
       const token = localStorage.getItem('authToken');
       const response = await fetch(`${API_BASE_URL}/categories`, {
@@ -82,7 +82,7 @@ const HomeScreenManagement = () => {
       console.error('Error fetching categories:', error);
       showToast('Failed to load categories', 'error');
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -91,7 +91,7 @@ const HomeScreenManagement = () => {
       setLoading(false);
     };
     loadData();
-  }, []);
+  }, [fetchHeroSlides, fetchCategories]);
 
   // Handle hero slide form input
   const handleHeroInputChange = (e) => {
@@ -459,7 +459,8 @@ const HomeScreenManagement = () => {
       {/* Toast Notification */}
       {toast && (
         <div className={`toast toast-${toast.type}`}>
-          {toast.message}
+          <span className="toast-message">{toast.message}</span>
+          <button className="toast-close" onClick={() => setToast(null)}>×</button>
         </div>
       )}
 

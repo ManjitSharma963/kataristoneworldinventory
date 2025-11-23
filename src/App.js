@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Dashboard from './components/Dashboard';
 import Customers from './components/Customers';
 import Reports from './components/Reports';
+import Sales from './components/Sales';
 import Login from './components/Login';
 import Register from './components/Register';
 import { isAuthenticated, getCurrentUser, logout, setSessionExpiryHandler } from './utils/api';
@@ -295,15 +296,6 @@ function App() {
               <span className="nav-label">Reports</span>
             </button>
           </nav>
-          <div className="sidebar-footer">
-            <button 
-              className="visit-site-btn"
-              onClick={() => window.open('https://www.katariastoneworld.com', '_blank', 'noopener,noreferrer')}
-            >
-              <span>Visit site</span>
-              <span className="arrow">→</span>
-            </button>
-          </div>
           <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? '←' : '→'}
           </button>
@@ -411,15 +403,6 @@ function App() {
                     <span className="nav-label">Reports</span>
                   </button>
                 </nav>
-                <div className="sidebar-footer">
-                  <button 
-                    className="visit-site-btn"
-                    onClick={() => window.open('https://www.katariastoneworld.com', '_blank', 'noopener,noreferrer')}
-                  >
-                    <span>Visit site</span>
-                    <span className="arrow">→</span>
-                  </button>
-                </div>
               </aside>
             </div>
           )}
@@ -430,6 +413,8 @@ function App() {
               <Customers />
             ) : activeNav === 'reports' ? (
               <Reports />
+            ) : activeNav === 'sales' ? (
+              <Sales />
             ) : (
               <Dashboard activeNav={activeNav} setActiveNav={setActiveNav} />
             )}

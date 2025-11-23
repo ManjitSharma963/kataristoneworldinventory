@@ -438,3 +438,136 @@ export const deleteCustomer = async (id) => {
   return await apiCall(`/customers/${id}`, { method: 'DELETE' });
 };
 
+// ==================== CLIENT PURCHASE API ====================
+
+/**
+ * Get all client purchases
+ * @returns {Promise<Array>} List of client purchases
+ */
+export const fetchClientPurchases = async () => {
+  return await apiCall('/client-purchases', { method: 'GET' });
+};
+
+/**
+ * Get client purchase by ID
+ * @param {string|number} id - Client purchase ID
+ * @returns {Promise<Object>} Client purchase object
+ */
+export const fetchClientPurchaseById = async (id) => {
+  return await apiCall(`/client-purchases/${id}`, { method: 'GET' });
+};
+
+/**
+ * Create new client purchase
+ * @param {Object} purchaseData - Client purchase data
+ * @param {string} purchaseData.clientName - Client name
+ * @param {string} purchaseData.purchaseDescription - Purchase description
+ * @param {number} purchaseData.totalAmount - Total amount
+ * @param {string} purchaseData.purchaseDate - Purchase date (YYYY-MM-DD)
+ * @param {string} purchaseData.notes - Optional notes
+ * @returns {Promise<Object>} Created client purchase
+ */
+export const createClientPurchase = async (purchaseData) => {
+  return await apiCall('/client-purchases', {
+    method: 'POST',
+    body: JSON.stringify(purchaseData),
+  });
+};
+
+/**
+ * Update client purchase
+ * @param {string|number} id - Client purchase ID
+ * @param {Object} updates - Client purchase updates
+ * @returns {Promise<Object>} Updated client purchase
+ */
+export const updateClientPurchase = async (id, updates) => {
+  return await apiCall(`/client-purchases/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
+};
+
+/**
+ * Delete client purchase
+ * @param {string|number} id - Client purchase ID
+ * @returns {Promise<void>}
+ */
+export const deleteClientPurchase = async (id) => {
+  return await apiCall(`/client-purchases/${id}`, { method: 'DELETE' });
+};
+
+/**
+ * Add payment for a client purchase (Simple transaction tracking)
+ * @param {string|number} purchaseId - Purchase ID
+ * @param {Object} paymentData - Payment data
+ * @param {string} paymentData.clientId - Client ID (from database)
+ * @param {number} paymentData.amount - Payment amount
+ * @param {string} paymentData.date - Payment date (YYYY-MM-DD)
+ * @param {string} paymentData.paymentMethod - Payment method (cash, bank, card, upi)
+ * @param {string} paymentData.notes - Optional notes
+ * @returns {Promise<Object>} Created payment
+ */
+export const addClientPayment = async (purchaseId, paymentData) => {
+  return await apiCall(`/client-purchases/${purchaseId}/payments`, {
+    method: 'POST',
+    body: JSON.stringify(paymentData),
+  });
+};
+
+/**
+ * Get all payments (direct endpoint)
+ * @returns {Promise<Array>} List of all payments
+ */
+export const fetchAllPayments = async () => {
+  return await apiCall('/client-purchases/payments', { method: 'GET' });
+};
+
+/**
+ * Get all payments for a specific client
+ * @param {string} clientId - Client ID or client name
+ * @returns {Promise<Array>} List of payments for the client
+ */
+export const fetchClientPayments = async (clientId) => {
+  // Try direct payments endpoint first
+  try {
+    const allPayments = await fetchAllPayments();
+    if (clientId) {
+      // Filter by clientId if provided
+      return allPayments.filter(payment => 
+        payment.clientId === clientId || 
+        payment.clientName === clientId ||
+        String(payment.clientId) === String(clientId)
+      );
+    }
+    return allPayments;
+  } catch (error) {
+    console.warn('Direct payments endpoint failed, falling back to purchases endpoint:', error);
+    // Fallback to old method
+    const endpoint = clientId 
+      ? `/client-purchases?clientId=${encodeURIComponent(clientId)}`
+      : '/client-purchases';
+    const purchases = await apiCall(endpoint, { method: 'GET' });
+    
+    // Extract all payments from purchases and filter by clientId
+    const allPayments = [];
+    if (purchases && Array.isArray(purchases)) {
+      purchases.forEach(purchase => {
+        if (purchase.payments && Array.isArray(purchase.payments)) {
+          purchase.payments.forEach(payment => {
+            // Include payment if clientId matches or if no clientId filter specified
+            if (!clientId || payment.clientId === clientId || payment.clientName === clientId) {
+              allPayments.push({
+                ...payment,
+                purchaseId: purchase.id,
+                purchaseDescription: purchase.purchaseDescription
+              });
+            }
+          });
+        }
+      });
+    }
+    
+    return allPayments;
+  }
+};
+

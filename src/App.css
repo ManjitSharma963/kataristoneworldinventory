@@ -106,8 +106,8 @@ body {
 
 .logout-btn {
   position: absolute;
-  top: 15px;
-  right: 15px;
+  top: 20px;
+  right: 20px;
   width: 36px;
   height: 36px;
   border: none;
@@ -122,6 +122,7 @@ body {
     4px 4px 8px rgba(163, 177, 198, 0.6),
     -4px -4px 8px rgba(255, 255, 255, 0.8);
   transition: all 0.3s ease;
+  z-index: 10;
 }
 
 .logout-btn:hover {
