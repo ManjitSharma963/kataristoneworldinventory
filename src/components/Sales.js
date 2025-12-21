@@ -86,7 +86,6 @@ const Sales = () => {
     }
   };
 
-
   // Prepare data for DataTable
   const prepareSalesData = useMemo(() => {
     return sales.map(sale => {

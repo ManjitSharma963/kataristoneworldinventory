@@ -38,10 +38,11 @@ const Register = ({ onRegisterSuccess, onSwitchToLogin, initialError = '' }) => 
 
     try {
       // Call backend directly at http://localhost:8080 (no proxy)
-      // Always send role as "admin" for registration
+      // Role defaults to 'user' on backend if not provided
+      // Only admins should be able to create admin accounts (handled by backend)
       const requestBody = {
-        ...formData,
-        role: 'admin'
+        ...formData
+        // role will default to 'user' on backend
       };
       
       const response = await fetch(`${API_BASE_URL}/auth/register`, {

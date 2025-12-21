@@ -107,7 +107,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     total_sqft_stock: '',
     unit: '',
     primary_image_url: '',
-    color: ''
+    color: '',
+    labour_charges: '',
+    rto_fees: '',
+    damage_expenses: '',
+    others_expenses: ''
   });
 
   const calculateStats = (billsData) => {
@@ -884,6 +888,27 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     }
   };
 
+  // Calculate price per sqr ft before and after expenses
+  const calculatePricePerSqft = (data) => {
+    const pricePerSqft = parseFloat(data.price_per_sqft) || 0;
+    const totalSqftStock = parseFloat(data.total_sqft_stock) || 0;
+    const labourCharges = parseFloat(data.labour_charges) || 0;
+    const rtoFees = parseFloat(data.rto_fees) || 0;
+    const damageExpenses = parseFloat(data.damage_expenses) || 0;
+    const othersExpenses = parseFloat(data.others_expenses) || 0;
+    
+    const pricePerSqftBefore = pricePerSqft;
+    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses;
+    const pricePerSqftAfter = totalSqftStock > 0 
+      ? (pricePerSqft * totalSqftStock + totalExpenses) / totalSqftStock 
+      : pricePerSqft;
+    
+    return {
+      pricePerSqftBefore: pricePerSqftBefore.toFixed(2),
+      pricePerSqftAfter: pricePerSqftAfter.toFixed(2)
+    };
+  };
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => {
@@ -938,6 +963,17 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     // Use camelCase format (as shown in API error messages)
     // The error shows: primaryImageUrl, pricePerSqft, totalSqftStock, productTypeString
     const trimmedUnit = (formData.unit || '').trim();
+    const labourCharges = parseFloat(formData.labour_charges) || 0;
+    const rtoFees = parseFloat(formData.rto_fees) || 0;
+    const damageExpenses = parseFloat(formData.damage_expenses) || 0;
+    const othersExpenses = parseFloat(formData.others_expenses) || 0;
+    
+    // Calculate total expenses and final price per sqr ft after expenses
+    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses;
+    const pricePerSqftAfter = totalSqftStock > 0 
+      ? (pricePerSqft * totalSqftStock + totalExpenses) / totalSqftStock 
+      : pricePerSqft;
+    
     const itemData = {
       name: trimmedName,
       slug: trimmedSlug,
@@ -946,7 +982,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       totalSqftStock: totalSqftStock,  // Must match API's expected field name
       unit: trimmedUnit || 'piece',  // Unit (piece, sqr ft, etc.)
       primaryImageUrl: trimmedImageUrl,  // Must match API's expected field name
-      color: trimmedColor
+      color: trimmedColor,
+      labourCharges: labourCharges,
+      rtoFees: rtoFees,
+      damageExpenses: damageExpenses,
+      othersExpenses: othersExpenses,
+      pricePerSqftAfter: parseFloat(pricePerSqftAfter.toFixed(2))  // Final price per sqr ft after all expenses
     };
 
     try {
@@ -1018,7 +1059,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         total_sqft_stock: '',
         unit: '',
         primary_image_url: '',
-        color: ''
+        color: '',
+        labour_charges: '',
+        rto_fees: '',
+        damage_expenses: '',
+        others_expenses: ''
       });
       setShowAddInventory(false);
       
@@ -1048,7 +1093,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       total_sqft_stock: item.totalSqftStock || item.total_sqft_stock || '',
       unit: item.unit || '',
       primary_image_url: item.primaryImageUrl || item.primary_image_url || '',
-      color: item.color || ''
+      color: item.color || '',
+      labour_charges: item.labourCharges || item.labour_charges || '',
+      rto_fees: item.rtoFees || item.rto_fees || '',
+      damage_expenses: item.damageExpenses || item.damage_expenses || '',
+      others_expenses: item.othersExpenses || item.others_expenses || ''
     });
     setShowEditInventory(true);
   };
@@ -1084,6 +1133,16 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const trimmedImageUrl = formData.primary_image_url.trim();
     const trimmedColor = (formData.color || '').trim();
     const trimmedUnit = (formData.unit || '').trim();
+    const labourCharges = parseFloat(formData.labour_charges) || 0;
+    const rtoFees = parseFloat(formData.rto_fees) || 0;
+    const damageExpenses = parseFloat(formData.damage_expenses) || 0;
+    const othersExpenses = parseFloat(formData.others_expenses) || 0;
+
+    // Calculate total expenses and final price per sqr ft after expenses
+    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses;
+    const pricePerSqftAfter = totalSqftStock > 0 
+      ? (pricePerSqft * totalSqftStock + totalExpenses) / totalSqftStock 
+      : pricePerSqft;
 
     if (!trimmedName || !trimmedProductType || !trimmedImageUrl) {
       showToast('Please fill all required fields', 'error');
@@ -1098,7 +1157,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       totalSqftStock: totalSqftStock,
       unit: trimmedUnit || 'piece',  // Unit (piece, sqr ft, etc.)
       primaryImageUrl: trimmedImageUrl,
-      color: trimmedColor
+      color: trimmedColor,
+      labourCharges: labourCharges,
+      rtoFees: rtoFees,
+      damageExpenses: damageExpenses,
+      othersExpenses: othersExpenses,
+      pricePerSqftAfter: parseFloat(pricePerSqftAfter.toFixed(2))  // Final price per sqr ft after all expenses
     };
 
     try {
@@ -2346,7 +2410,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                 </div>
                 <div className="form-row">
                   <div className="form-group">
-                    <label>Price Per Unit (₹) *</label>
+                    <label>Price Per Sqr Ft (Before Extra Expenses) (₹) *</label>
                     <input
                       type="number"
                       name="price_per_sqft"
@@ -2406,6 +2470,91 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     placeholder="e.g., white, black, beige, multi"
                   />
                 </div>
+                
+                {/* Extra Expenses Section */}
+                <div className="form-section-divider">
+                  <h4>Extra Expenses</h4>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Labour Charges (₹)</label>
+                    <input
+                      type="number"
+                      name="labour_charges"
+                      value={formData.labour_charges}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>RTO Fees (₹)</label>
+                    <input
+                      type="number"
+                      name="rto_fees"
+                      value={formData.rto_fees}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Damage Expenses (₹)</label>
+                    <input
+                      type="number"
+                      name="damage_expenses"
+                      value={formData.damage_expenses}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Others Expenses (₹)</label>
+                    <input
+                      type="number"
+                      name="others_expenses"
+                      value={formData.others_expenses}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                
+                {/* Calculated Price Per Sqr Ft */}
+                <div className="form-section-divider">
+                  <h4>Price Per Sqr Ft Calculation</h4>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Price Per Sqr Ft (Before Extra Expenses)</label>
+                    <input
+                      type="text"
+                      value={`₹${calculatePricePerSqft(formData).pricePerSqftBefore}`}
+                      readOnly
+                      className="readonly-field"
+                      style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Price Per Sqr Ft (After Extra Expenses)</label>
+                    <input
+                      type="text"
+                      value={`₹${calculatePricePerSqft(formData).pricePerSqftAfter}`}
+                      readOnly
+                      className="readonly-field"
+                      style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed', fontWeight: 'bold', color: '#2c3e50' }}
+                    />
+                  </div>
+                </div>
+                
                 <div className="form-actions">
                   <button type="submit" className="btn btn-primary">
                     Add Item
@@ -2553,7 +2702,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             price_per_sqft: '',
             total_sqft_stock: '',
             primary_image_url: '',
-            color: ''
+            color: '',
+            labour_charges: '',
+            rto_fees: '',
+            damage_expenses: '',
+            others_expenses: ''
           });
         }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -2569,7 +2722,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   price_per_sqft: '',
                   total_sqft_stock: '',
                   primary_image_url: '',
-                  color: ''
+                  color: '',
+                  labour_charges: '',
+                  rto_fees: '',
+                  damage_expenses: '',
+                  others_expenses: ''
                 });
               }}>×</button>
             </div>
@@ -2620,7 +2777,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                 </div>
                 <div className="form-row">
                   <div className="form-group">
-                    <label>Price Per Unit (₹) *</label>
+                    <label>Price Per Sqr Ft (Before Extra Expenses) (₹) *</label>
                     <input
                       type="number"
                       name="price_per_sqft"
@@ -2680,6 +2837,91 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     placeholder="e.g., white, black, beige, multi"
                   />
                 </div>
+                
+                {/* Extra Expenses Section */}
+                <div className="form-section-divider">
+                  <h4>Extra Expenses</h4>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Labour Charges (₹)</label>
+                    <input
+                      type="number"
+                      name="labour_charges"
+                      value={formData.labour_charges}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>RTO Fees (₹)</label>
+                    <input
+                      type="number"
+                      name="rto_fees"
+                      value={formData.rto_fees}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Damage Expenses (₹)</label>
+                    <input
+                      type="number"
+                      name="damage_expenses"
+                      value={formData.damage_expenses}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Others Expenses (₹)</label>
+                    <input
+                      type="number"
+                      name="others_expenses"
+                      value={formData.others_expenses}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                
+                {/* Calculated Price Per Sqr Ft */}
+                <div className="form-section-divider">
+                  <h4>Price Per Sqr Ft Calculation</h4>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Price Per Sqr Ft (Before Extra Expenses)</label>
+                    <input
+                      type="text"
+                      value={`₹${calculatePricePerSqft(formData).pricePerSqftBefore}`}
+                      readOnly
+                      className="readonly-field"
+                      style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Price Per Sqr Ft (After Extra Expenses)</label>
+                    <input
+                      type="text"
+                      value={`₹${calculatePricePerSqft(formData).pricePerSqftAfter}`}
+                      readOnly
+                      className="readonly-field"
+                      style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed', fontWeight: 'bold', color: '#2c3e50' }}
+                    />
+                  </div>
+                </div>
+                
                 <div className="form-actions">
                   <button type="submit" className="btn btn-primary">
                     Update Item
@@ -2694,7 +2936,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                       price_per_sqft: '',
                       total_sqft_stock: '',
                       primary_image_url: '',
-                      color: ''
+                      color: '',
+                      labour_charges: '',
+                      rto_fees: '',
+                      damage_expenses: '',
+                      others_expenses: ''
                     });
                   }}>
                     Cancel

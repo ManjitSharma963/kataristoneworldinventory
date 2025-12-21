@@ -365,6 +365,29 @@ export const getCurrentUser = () => {
   return userStr ? JSON.parse(userStr) : null;
 };
 
+// Helper function to check if user is admin
+export const isAdmin = () => {
+  const user = getCurrentUser();
+  if (!user) return false;
+  const userRole = user.role || user.userRole || '';
+  return userRole.toLowerCase() === 'admin';
+};
+
+// Helper function to check if user is regular user
+export const isRegularUser = () => {
+  const user = getCurrentUser();
+  if (!user) return false;
+  const userRole = user.role || user.userRole || '';
+  return userRole.toLowerCase() === 'user';
+};
+
+// Helper function to get user role
+export const getUserRole = () => {
+  const user = getCurrentUser();
+  if (!user) return null;
+  return (user.role || user.userRole || '').toLowerCase();
+};
+
 export const isAuthenticated = () => {
   return !!getAuthToken();
 };

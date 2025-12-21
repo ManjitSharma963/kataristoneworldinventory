@@ -3,9 +3,10 @@ import Dashboard from './components/Dashboard';
 import Customers from './components/Customers';
 import Reports from './components/Reports';
 import Sales from './components/Sales';
+import Products from './components/Products';
 import Login from './components/Login';
 import Register from './components/Register';
-import { isAuthenticated, getCurrentUser, logout, setSessionExpiryHandler } from './utils/api';
+import { isAuthenticated, getCurrentUser, logout, setSessionExpiryHandler, isAdmin, getUserRole } from './utils/api';
 import './App.css';
 
 function App() {
@@ -60,21 +61,20 @@ function App() {
         const token = localStorage.getItem('authToken');
         const userData = getCurrentUser();
         
-        // Only set authenticated if we have both token and user data AND user is admin
+        // Set authenticated if we have both token and user data (admin or user)
         if (token && userData) {
-          // Check if user has admin role
           const userRole = userData.role || userData.userRole || '';
-          if (userRole.toLowerCase() === 'admin') {
+          // Allow both admin and user roles
+          if (userRole.toLowerCase() === 'admin' || userRole.toLowerCase() === 'user') {
             setAuthenticated(true);
             setUser(userData);
           } else {
-            // User is not admin - clear auth and show login with error
+            // Invalid role - clear auth and show login with error
             localStorage.removeItem('authToken');
             localStorage.removeItem('user');
             setAuthenticated(false);
             setUser(null);
-            // Set error message to show on login page
-            localStorage.setItem('authError', 'Admin can access this app');
+            localStorage.setItem('authError', 'Invalid user role. Please contact administrator.');
           }
         } else {
           // Clear any invalid/stale data
@@ -103,40 +103,48 @@ function App() {
   }, []);
 
   const handleLoginSuccess = (userData) => {
-    // Check if user is admin
+    // Allow both admin and user roles
     const userRole = userData.role || userData.userRole || '';
-    if (userRole.toLowerCase() === 'admin') {
+    if (userRole.toLowerCase() === 'admin' || userRole.toLowerCase() === 'user') {
       setAuthenticated(true);
       setUser(userData);
       setShowRegister(false);
       setAuthError('');
       localStorage.removeItem('authError');
+      // Set default nav for regular users to products
+      if (userRole.toLowerCase() === 'user') {
+        setActiveNav('products');
+      }
     } else {
-      // User is not admin - show error and stay on login
+      // Invalid role - show error and stay on login
       setAuthenticated(false);
       setUser(null);
-      setAuthError('Admin can access this app');
-      localStorage.setItem('authError', 'Admin can access this app');
+      setAuthError('Invalid user role. Please contact administrator.');
+      localStorage.setItem('authError', 'Invalid user role. Please contact administrator.');
       // Clear auth data
       logout();
     }
   };
 
   const handleRegisterSuccess = (userData) => {
-    // Check if user is admin
+    // Allow both admin and user roles
     const userRole = userData.role || userData.userRole || '';
-    if (userRole.toLowerCase() === 'admin') {
+    if (userRole.toLowerCase() === 'admin' || userRole.toLowerCase() === 'user') {
       setAuthenticated(true);
       setUser(userData);
       setShowRegister(false);
       setAuthError('');
       localStorage.removeItem('authError');
+      // Set default nav for regular users to products
+      if (userRole.toLowerCase() === 'user') {
+        setActiveNav('products');
+      }
     } else {
-      // User is not admin - show error and stay on register
+      // Invalid role - show error and stay on register
       setAuthenticated(false);
       setUser(null);
-      setAuthError('Admin can access this app');
-      localStorage.setItem('authError', 'Admin can access this app');
+      setAuthError('Invalid user role. Please contact administrator.');
+      localStorage.setItem('authError', 'Invalid user role. Please contact administrator.');
       // Clear auth data
       logout();
     }
@@ -193,16 +201,16 @@ function App() {
     );
   }
 
-  // Double-check user is admin before rendering dashboard
+  // Double-check user has valid role before rendering dashboard
   // This is a safety check in case user data changes
-  const userRole = user?.role || user?.userRole || '';
-  if (authenticated && userRole.toLowerCase() !== 'admin') {
-    // User somehow got authenticated but is not admin - redirect to login
+  const userRole = getUserRole();
+  if (authenticated && userRole !== 'admin' && userRole !== 'user') {
+    // User somehow got authenticated but has invalid role - redirect to login
     logout();
     setAuthenticated(false);
     setUser(null);
-    setAuthError('Admin can access this app');
-    localStorage.setItem('authError', 'Admin can access this app');
+    setAuthError('Invalid user role. Please contact administrator.');
+    localStorage.setItem('authError', 'Invalid user role. Please contact administrator.');
     return showRegister ? (
       <Register 
         onRegisterSuccess={handleRegisterSuccess}
@@ -226,6 +234,10 @@ function App() {
     );
   }
 
+  // Get user role for conditional rendering
+  const currentUserRole = getUserRole();
+  const userIsAdmin = isAdmin();
+
   return (
     <div className="App">
       <div className="app-layout">
@@ -246,55 +258,68 @@ function App() {
             </button>
           </div>
           <nav className="sidebar-nav">
+            {userIsAdmin && (
+              <>
+                <button 
+                  className={`nav-item ${activeNav === 'dashboard' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('dashboard')}
+                >
+                  <span className="nav-icon">📊</span>
+                  <span className="nav-label">Dashboard</span>
+                </button>
+                <button 
+                  className={`nav-item ${activeNav === 'sales' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('sales')}
+                >
+                  <span className="nav-icon">💰</span>
+                  <span className="nav-label">Sales</span>
+                </button>
+                <button 
+                  className={`nav-item ${activeNav === 'inventory' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('inventory')}
+                >
+                  <span className="nav-icon">📦</span>
+                  <span className="nav-label">Inventory</span>
+                </button>
+                <button 
+                  className={`nav-item ${activeNav === 'expenses' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('expenses')}
+                >
+                  <span className="nav-icon">💵</span>
+                  <span className="nav-label">Expenses</span>
+                </button>
+                <button
+                  className={`nav-item ${activeNav === 'home-screen' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('home-screen')}
+                >
+                  <span className="nav-icon">🏠</span>
+                  <span className="nav-label">Management</span>
+                </button>
+                <button 
+                  className={`nav-item ${activeNav === 'customers' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('customers')}
+                >
+                  <span className="nav-icon">👥</span>
+                  <span className="nav-label">Customers</span>
+                </button>
+              </>
+            )}
             <button 
-              className={`nav-item ${activeNav === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setActiveNav('dashboard')}
+              className={`nav-item ${activeNav === 'products' ? 'active' : ''}`}
+              onClick={() => setActiveNav('products')}
             >
-              <span className="nav-icon">📊</span>
-              <span className="nav-label">Dashboard</span>
+              <span className="nav-icon">🛒</span>
+              <span className="nav-label">Products</span>
             </button>
-            <button 
-              className={`nav-item ${activeNav === 'sales' ? 'active' : ''}`}
-              onClick={() => setActiveNav('sales')}
-            >
-              <span className="nav-icon">💰</span>
-              <span className="nav-label">Sales</span>
-            </button>
-            <button 
-              className={`nav-item ${activeNav === 'inventory' ? 'active' : ''}`}
-              onClick={() => setActiveNav('inventory')}
-            >
-              <span className="nav-icon">📦</span>
-              <span className="nav-label">Inventory</span>
-            </button>
-            <button 
-              className={`nav-item ${activeNav === 'expenses' ? 'active' : ''}`}
-              onClick={() => setActiveNav('expenses')}
-            >
-              <span className="nav-icon">💵</span>
-              <span className="nav-label">Expenses</span>
-            </button>
-            <button
-              className={`nav-item ${activeNav === 'home-screen' ? 'active' : ''}`}
-              onClick={() => setActiveNav('home-screen')}
-            >
-              <span className="nav-icon">🏠</span>
-              <span className="nav-label">Management</span>
-            </button>
-            <button 
-              className={`nav-item ${activeNav === 'customers' ? 'active' : ''}`}
-              onClick={() => setActiveNav('customers')}
-            >
-              <span className="nav-icon">👥</span>
-              <span className="nav-label">Customers</span>
-            </button>
-            <button 
-              className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
-              onClick={() => setActiveNav('reports')}
-            >
-              <span className="nav-icon">📊</span>
-              <span className="nav-label">Reports</span>
-            </button>
+            {userIsAdmin && (
+              {/*<button 
+                className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
+                onClick={() => setActiveNav('reports')}
+              >
+                <span className="nav-icon">📊</span>
+                <span className="nav-label">Reports</span>
+              </button>*/}
+            )}
           </nav>
           <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? '←' : '→'}
@@ -332,76 +357,92 @@ function App() {
                   <button className="mobile-close-btn" onClick={() => setMobileMenuOpen(false)}>×</button>
                 </div>
                 <nav className="sidebar-nav">
+                  {userIsAdmin && (
+                    <>
+                      <button 
+                        className={`nav-item ${activeNav === 'dashboard' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveNav('dashboard');
+                          setMobileMenuOpen(false);
+                        }}
+                      >
+                        <span className="nav-icon">📊</span>
+                        <span className="nav-label">Dashboard</span>
+                      </button>
+                      <button 
+                        className={`nav-item ${activeNav === 'sales' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveNav('sales');
+                          setMobileMenuOpen(false);
+                        }}
+                      >
+                        <span className="nav-icon">💰</span>
+                        <span className="nav-label">Sales</span>
+                      </button>
+                      <button 
+                        className={`nav-item ${activeNav === 'inventory' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveNav('inventory');
+                          setMobileMenuOpen(false);
+                        }}
+                      >
+                        <span className="nav-icon">📦</span>
+                        <span className="nav-label">Inventory</span>
+                      </button>
+                      <button 
+                        className={`nav-item ${activeNav === 'expenses' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveNav('expenses');
+                          setMobileMenuOpen(false);
+                        }}
+                      >
+                        <span className="nav-icon">💵</span>
+                        <span className="nav-label">Expenses</span>
+                      </button>
+                      <button 
+                        className={`nav-item ${activeNav === 'home-screen' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveNav('home-screen');
+                          setMobileMenuOpen(false);
+                        }}
+                      >
+                        <span className="nav-icon">🏠</span>
+                        <span className="nav-label">Home Screen</span>
+                      </button>
+                      <button 
+                        className={`nav-item ${activeNav === 'customers' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveNav('customers');
+                          setMobileMenuOpen(false);
+                        }}
+                      >
+                        <span className="nav-icon">👥</span>
+                        <span className="nav-label">Customers</span>
+                      </button>
+                    </>
+                  )}
                   <button 
-                    className={`nav-item ${activeNav === 'dashboard' ? 'active' : ''}`}
+                    className={`nav-item ${activeNav === 'products' ? 'active' : ''}`}
                     onClick={() => {
-                      setActiveNav('dashboard');
+                      setActiveNav('products');
                       setMobileMenuOpen(false);
                     }}
                   >
-                    <span className="nav-icon">📊</span>
-                    <span className="nav-label">Dashboard</span>
+                    <span className="nav-icon">🛒</span>
+                    <span className="nav-label">Products</span>
                   </button>
-                  <button 
-                    className={`nav-item ${activeNav === 'sales' ? 'active' : ''}`}
-                    onClick={() => {
-                      setActiveNav('sales');
-                      setMobileMenuOpen(false);
-                    }}
-                  >
-                    <span className="nav-icon">💰</span>
-                    <span className="nav-label">Sales</span>
-                  </button>
-                  <button 
-                    className={`nav-item ${activeNav === 'inventory' ? 'active' : ''}`}
-                    onClick={() => {
-                      setActiveNav('inventory');
-                      setMobileMenuOpen(false);
-                    }}
-                  >
-                    <span className="nav-icon">📦</span>
-                    <span className="nav-label">Inventory</span>
-                  </button>
-                  <button 
-                    className={`nav-item ${activeNav === 'expenses' ? 'active' : ''}`}
-                    onClick={() => {
-                      setActiveNav('expenses');
-                      setMobileMenuOpen(false);
-                    }}
-                  >
-                    <span className="nav-icon">💵</span>
-                    <span className="nav-label">Expenses</span>
-                  </button>
-                  <button 
-                    className={`nav-item ${activeNav === 'home-screen' ? 'active' : ''}`}
-                    onClick={() => {
-                      setActiveNav('home-screen');
-                      setMobileMenuOpen(false);
-                    }}
-                  >
-                    <span className="nav-icon">🏠</span>
-                    <span className="nav-label">Home Screen</span>
-                  </button>
-                  <button 
-                    className={`nav-item ${activeNav === 'customers' ? 'active' : ''}`}
-                    onClick={() => {
-                      setActiveNav('customers');
-                      setMobileMenuOpen(false);
-                    }}
-                  >
-                    <span className="nav-icon">👥</span>
-                    <span className="nav-label">Customers</span>
-                  </button>
-                  <button 
-                    className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
-                    onClick={() => {
-                      setActiveNav('reports');
-                      setMobileMenuOpen(false);
-                    }}
-                  >
-                    <span className="nav-icon">📊</span>
-                    <span className="nav-label">Reports</span>
-                  </button>
+                  {userIsAdmin && (
+                    <button 
+                      className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
+                      onClick={() => {
+                        setActiveNav('reports');
+                        setMobileMenuOpen(false);
+                      }}
+                    >
+                      <span className="nav-icon">📊</span>
+                      <span className="nav-label">Reports</span>
+                    </button>
+                  )}
                 </nav>
               </aside>
             </div>
@@ -409,7 +450,12 @@ function App() {
 
           {/* Dashboard Content */}
           <main className="dashboard-main">
-            {activeNav === 'customers' ? (
+            {activeNav === 'products' ? (
+              <Products />
+            ) : !userIsAdmin ? (
+              // Regular users can only access Products
+              <Products />
+            ) : activeNav === 'customers' ? (
               <Customers />
             ) : activeNav === 'reports' ? (
               <Reports />
@@ -423,40 +469,51 @@ function App() {
 
         {/* Bottom Navigation Bar - Mobile Only */}
         <nav className="bottom-nav">
+          {userIsAdmin && (
+            <>
+              <button 
+                className={`bottom-nav-item ${activeNav === 'dashboard' ? 'active' : ''}`}
+                onClick={() => setActiveNav('dashboard')}
+              >
+                <span className="bottom-nav-icon">📊</span>
+                <span className="bottom-nav-label">Dashboard</span>
+              </button>
+              <button 
+                className={`bottom-nav-item ${activeNav === 'sales' ? 'active' : ''}`}
+                onClick={() => setActiveNav('sales')}
+              >
+                <span className="bottom-nav-icon">💰</span>
+                <span className="bottom-nav-label">Sales</span>
+              </button>
+              <button 
+                className={`bottom-nav-item ${activeNav === 'inventory' ? 'active' : ''}`}
+                onClick={() => setActiveNav('inventory')}
+              >
+                <span className="bottom-nav-icon">📦</span>
+                <span className="bottom-nav-label">Inventory</span>
+              </button>
+              <button 
+                className={`bottom-nav-item ${activeNav === 'expenses' ? 'active' : ''}`}
+                onClick={() => setActiveNav('expenses')}
+              >
+                <span className="bottom-nav-icon">💵</span>
+                <span className="bottom-nav-label">Expenses</span>
+              </button>
+              <button 
+                className={`bottom-nav-item ${activeNav === 'customers' ? 'active' : ''}`}
+                onClick={() => setActiveNav('customers')}
+              >
+                <span className="bottom-nav-icon">👥</span>
+                <span className="bottom-nav-label">Customers</span>
+              </button>
+            </>
+          )}
           <button 
-            className={`bottom-nav-item ${activeNav === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveNav('dashboard')}
+            className={`bottom-nav-item ${activeNav === 'products' ? 'active' : ''}`}
+            onClick={() => setActiveNav('products')}
           >
-            <span className="bottom-nav-icon">📊</span>
-            <span className="bottom-nav-label">Dashboard</span>
-          </button>
-          <button 
-            className={`bottom-nav-item ${activeNav === 'sales' ? 'active' : ''}`}
-            onClick={() => setActiveNav('sales')}
-          >
-            <span className="bottom-nav-icon">💰</span>
-            <span className="bottom-nav-label">Sales</span>
-          </button>
-          <button 
-            className={`bottom-nav-item ${activeNav === 'inventory' ? 'active' : ''}`}
-            onClick={() => setActiveNav('inventory')}
-          >
-            <span className="bottom-nav-icon">📦</span>
-            <span className="bottom-nav-label">Inventory</span>
-          </button>
-          <button 
-            className={`bottom-nav-item ${activeNav === 'expenses' ? 'active' : ''}`}
-            onClick={() => setActiveNav('expenses')}
-          >
-            <span className="bottom-nav-icon">💵</span>
-            <span className="bottom-nav-label">Expenses</span>
-          </button>
-          <button 
-            className={`bottom-nav-item ${activeNav === 'customers' ? 'active' : ''}`}
-            onClick={() => setActiveNav('customers')}
-          >
-            <span className="bottom-nav-icon">👥</span>
-            <span className="bottom-nav-label">Customers</span>
+            <span className="bottom-nav-icon">🛒</span>
+            <span className="bottom-nav-label">Products</span>
           </button>
         </nav>
       </div>
