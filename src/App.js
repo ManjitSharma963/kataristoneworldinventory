@@ -236,7 +236,7 @@ function App() {
 
   // Get user role for conditional rendering
   const currentUserRole = getUserRole();
-  const userIsAdmin = isAdmin();
+  const userIsAdmin = Boolean(isAdmin()); // Ensure it's always a boolean
 
   return (
     <div className="App">
@@ -311,15 +311,17 @@ function App() {
               <span className="nav-icon">🛒</span>
               <span className="nav-label">Products</span>
             </button>
+            {/* Reports button commented out - uncomment if needed
             {userIsAdmin && (
-              {/*<button 
+              <button 
                 className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
                 onClick={() => setActiveNav('reports')}
               >
                 <span className="nav-icon">📊</span>
                 <span className="nav-label">Reports</span>
-              </button>*/}
+              </button>
             )}
+            */}
           </nav>
           <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? '←' : '→'}
