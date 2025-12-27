@@ -184,9 +184,16 @@ const Sales = () => {
         severity="secondary"
         onClick={async () => {
           try {
+            console.log('[Sales] Downloading PDF for bill:', {
+              id: rowData.id,
+              billType: rowData.billType,
+              billNumber: rowData.billNumber
+            });
             await downloadBillPDF(rowData.id, rowData.billType);
           } catch (error) {
-            alert(`Failed to download bill: ${error.message}`);
+            console.error('[Sales] PDF download error:', error);
+            const errorMessage = error.message || 'Unknown error occurred';
+            alert(`Failed to download bill PDF:\n\n${errorMessage}\n\nPlease check:\n1. Backend server is running\n2. Bill data is complete\n3. Backend logs for details`);
           }
         }}
         title="Download Bill PDF"

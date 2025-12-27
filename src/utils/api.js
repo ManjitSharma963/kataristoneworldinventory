@@ -101,18 +101,54 @@ const downloadPDF = async (endpoint, filename) => {
       headers['Authorization'] = `Bearer ${token}`;
     }
     
+    console.log('[PDF Download] Requesting:', url);
+    
     const response = await fetch(url, {
       method: 'GET',
       headers: headers,
     });
 
     if (!response.ok) {
+      // Try to get error details
+      let errorText = '';
+      const contentType = response.headers.get('content-type');
+      
+      try {
+        if (contentType && contentType.includes('application/json')) {
+          const errorJson = await response.json();
+          errorText = JSON.stringify(errorJson);
+        } else {
+          errorText = await response.text();
+        }
+      } catch (e) {
+        errorText = `Unable to read error response: ${e.message}`;
+      }
+      
+      console.error('[PDF Download] Error response:', {
+        status: response.status,
+        statusText: response.statusText,
+        endpoint: url,
+        errorText: errorText.substring(0, 500) // Limit error text length
+      });
+      
+      throw new Error(`Download failed: ${response.status} ${response.statusText}${errorText ? ' - ' + errorText.substring(0, 200) : ''}`);
+    }
+
+    // Check if response is actually a PDF
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/pdf')) {
       const errorText = await response.text();
-      throw new Error(`Download failed: ${response.status} ${response.statusText} - ${errorText}`);
+      console.error('[PDF Download] Unexpected content type:', contentType, 'Response:', errorText.substring(0, 500));
+      throw new Error(`Server returned non-PDF content. Content-Type: ${contentType}`);
     }
 
     // Get the blob from response
     const blob = await response.blob();
+    
+    // Verify blob is not empty
+    if (blob.size === 0) {
+      throw new Error('Downloaded PDF file is empty');
+    }
     
     // Create a temporary URL for the blob
     const blobUrl = window.URL.createObjectURL(blob);
@@ -128,6 +164,7 @@ const downloadPDF = async (endpoint, filename) => {
     document.body.removeChild(link);
     window.URL.revokeObjectURL(blobUrl);
     
+    console.log('[PDF Download] Success:', filename);
     return true;
   } catch (error) {
     console.error(`PDF download failed for ${endpoint}:`, error);

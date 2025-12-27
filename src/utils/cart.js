@@ -28,7 +28,8 @@ export const addToCart = (product, quantity = 1) => {
     existingItem.sqftOrdered = existingItem.quantity; // For compatibility
   } else {
     const unit = product.unit || 'sqft';
-    const price = product.pricePerSqft || product.pricePerUnit || product.price_per_sqft || 0;
+    // Use pricePerSqftAfter as the final price after all expenses
+    const price = product.pricePerSqftAfter || product.pricePerSqft || product.pricePerUnit || product.price_per_sqft || 0;
     const stock = product.totalSqftStock || product.quantity || product.total_sqft_stock || 0;
     
     cart.push({
@@ -36,6 +37,7 @@ export const addToCart = (product, quantity = 1) => {
       title: product.name || product.title || 'Unnamed Product',
       img: product.primaryImageUrl || product.primary_image_url || product.img || product.image_url || '',
       price: price,
+      pricePerSqftAfter: price, // Store for reference
       quantity: quantity,
       sqftOrdered: quantity, // For compatibility
       unit: unit,
@@ -81,7 +83,9 @@ export const getCartCount = () => {
 export const getCartTotal = () => {
   const cart = getCart();
   return cart.reduce((sum, item) => {
-    return sum + ((item.price || 0) * (item.quantity || 0));
+    // Use pricePerSqftAfter as the final price after all expenses
+    const price = item.pricePerSqftAfter || item.price || 0;
+    return sum + (price * (item.quantity || 0));
   }, 0);
 };
 

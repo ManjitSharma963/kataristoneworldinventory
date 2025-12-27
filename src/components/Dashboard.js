@@ -778,7 +778,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             <tbody>
               ${billItems.map(item => {
                 const qty = Number(parseFloat(item?.quantity) || 0) || 0;
-                const price = Number(parseFloat(item?.pricePerUnit || item?.price_per_unit || item?.unitPrice || item?.price) || 0) || 0;
+                // Use pricePerSqftAfter as the final price after all expenses
+                const price = Number(parseFloat(item?.pricePerSqftAfter || item?.pricePerUnit || item?.price_per_unit || item?.unitPrice || item?.price) || 0) || 0;
                 const safeQty = isNaN(qty) ? 0 : qty;
                 const safePrice = isNaN(price) ? 0 : price;
                 const safeTotal = isNaN(qty * price) ? 0 : (qty * price);
@@ -2621,7 +2622,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     <tbody>
                       {billItems.map((item, index) => {
                         const quantity = Number(parseFloat(item?.quantity) || 0) || 0;
-                        const pricePerUnit = Number(parseFloat(item?.pricePerUnit || item?.price_per_unit || item?.unitPrice || item?.price) || 0) || 0;
+                        // Use pricePerSqftAfter as the final price after all expenses
+                        const pricePerUnit = Number(parseFloat(item?.pricePerSqftAfter || item?.pricePerUnit || item?.price_per_unit || item?.unitPrice || item?.price) || 0) || 0;
                         const subtotal = Number((quantity * pricePerUnit) || 0) || 0;
                         
                         const safeQuantity = isNaN(quantity) ? 0 : quantity;

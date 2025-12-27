@@ -48,7 +48,8 @@ const Invoice = ({ bill, onClose }) => {
     }
     const total = bill.items.reduce((sum, item) => {
       const quantity = safeNumber(item?.quantity);
-      const price = safeNumber(item?.price);
+      // Use pricePerSqftAfter as the final price after all expenses
+      const price = safeNumber(item?.pricePerSqftAfter || item?.pricePerUnit || item?.price || 0);
       const itemTotal = safeNumber(quantity * price);
       return safeNumber(sum) + itemTotal;
     }, 0);
@@ -152,12 +153,13 @@ const Invoice = ({ bill, onClose }) => {
                 {bill.items && Array.isArray(bill.items) && bill.items.length > 0 ? (
                   bill.items.map((item, index) => {
                     const quantity = safeNumber(item?.quantity);
-                    const price = safeNumber(item?.price);
+                    // Use pricePerSqftAfter as the final price after all expenses
+                    const price = safeNumber(item?.pricePerSqftAfter || item?.pricePerUnit || item?.price || 0);
                     const total = safeNumber(quantity * price);
                     return (
                       <tr key={index}>
                         <td>{index + 1}</td>
-                        <td>{item?.name || item?.description || item?.productName || 'N/A'}</td>
+                        <td>{item?.name || item?.itemName || item?.description || item?.productName || 'N/A'}</td>
                         <td>{quantity} {item?.unit || 'sqft'}</td>
                         <td>₹{formatCurrency(price)}</td>
                         <td>₹{formatCurrency(total)}</td>

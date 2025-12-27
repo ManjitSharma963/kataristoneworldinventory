@@ -189,7 +189,9 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   }
 
   const subtotal = cart.reduce((sum, item) => {
-    return sum + ((item.price || 0) * (item.quantity || 0));
+    // Use pricePerSqftAfter as the final price after all expenses
+    const price = item.pricePerSqftAfter || item.price || 0;
+    return sum + (price * (item.quantity || 0));
   }, 0);
 
   const taxRateNum = taxRate === '' ? 0 : (typeof taxRate === 'number' ? taxRate : parseFloat(taxRate) || 0);
@@ -198,10 +200,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
   const formatCartItemsForBilling = (cartItems) => {
     return cartItems.map(item => {
+      // Use pricePerSqftAfter as the final price after all expenses
+      const price = item.pricePerSqftAfter || item.price || 0;
       const formattedItem = {
         itemName: item.title || item.name || item.productName || 'Unknown Product',
         category: item.type || item.category || '',
-        pricePerUnit: item.price || 0,
+        pricePerSqftAfter: price,
         quantity: item.quantity || item.sqftOrdered || 1
       };
       // Add productId if available (optional field)
@@ -257,7 +261,9 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
         setSubmitError(`Item ${i + 1}: Item name is required`);
         return;
       }
-      if (!item.price || item.price <= 0) {
+      // Check pricePerSqftAfter first, then fallback to price
+      const itemPrice = item.pricePerSqftAfter || item.price || 0;
+      if (!itemPrice || itemPrice <= 0) {
         setSubmitError(`Item ${i + 1}: Price per unit is required`);
         return;
       }
@@ -443,8 +449,16 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   <h3 className="cart-item-name">{item.title}</h3>
                   {item.type && <p className="cart-item-category">{item.type}</p>}
                   <div className="cart-item-pricing">
-                    <span className="cart-item-price">₹ {((item.price || 0) * (item.quantity || 0)).toLocaleString('en-IN')}</span>
-                    <span className="cart-item-unit-price">₹ {item.price?.toLocaleString('en-IN')} / {item.unit || 'sqft'}</span>
+                    {/* Use pricePerSqftAfter as the final price after all expenses */}
+                    {(() => {
+                      const price = item.pricePerSqftAfter || item.price || 0;
+                      return (
+                        <>
+                          <span className="cart-item-price">₹ {(price * (item.quantity || 0)).toLocaleString('en-IN')}</span>
+                          <span className="cart-item-unit-price">₹ {price.toLocaleString('en-IN')} / {item.unit || 'sqft'}</span>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
                 <div className="cart-item-qty">

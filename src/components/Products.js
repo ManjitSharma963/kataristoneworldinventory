@@ -145,7 +145,7 @@ const Products = () => {
               const productType = getProductType(product);
               const productColor = getProductColor(product);
               const unit = getProductUnit(product);
-              const price = product.pricePerSqft || product.pricePerUnit || product.price_per_sqft || 0;
+              const price = product.pricePerSqftAfter || product.pricePerSqftAfter || product.pricePerSqftAfter || 0;
               const stock = product.totalSqftStock || product.quantity || product.total_sqft_stock || 0;
               const imageUrl = product.primaryImageUrl || product.primary_image_url || product.img || product.image_url || '';
               const productName = product.name || product.title || 'Unnamed Product';
