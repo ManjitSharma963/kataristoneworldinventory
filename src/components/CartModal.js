@@ -205,7 +205,8 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       const formattedItem = {
         itemName: item.title || item.name || item.productName || 'Unknown Product',
         category: item.type || item.category || '',
-        pricePerSqftAfter: price,
+        pricePerUnit: price, // Backend expects 'pricePerUnit' field name, but we use pricePerSqftAfter value
+        pricePerSqftAfter: price, // Also send for reference/backward compatibility
         quantity: item.quantity || item.sqftOrdered || 1
       };
       // Add productId if available (optional field)
