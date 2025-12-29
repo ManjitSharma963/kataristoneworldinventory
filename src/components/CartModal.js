@@ -201,12 +201,20 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const formatCartItemsForBilling = (cartItems) => {
     return cartItems.map(item => {
       // Use pricePerSqftAfter as the final price after all expenses
-      const price = item.pricePerSqftAfter || item.price || 0;
+      // Ensure price is a valid number and greater than 0
+      let price = item.pricePerSqftAfter || item.price || 0;
+      // Convert to number if it's a string
+      price = typeof price === 'string' ? parseFloat(price) : price;
+      // Ensure it's a valid positive number
+      if (typeof price !== 'number' || isNaN(price) || price <= 0) {
+        console.error('Invalid price for item:', item, 'price:', price);
+        throw new Error(`Item "${item.title || item.name || 'Unknown'}" has an invalid price. Please remove it from cart and add it again.`);
+      }
+      
       const formattedItem = {
         itemName: item.title || item.name || item.productName || 'Unknown Product',
         category: item.type || item.category || '',
-        pricePerUnit: price, // Backend expects 'pricePerUnit' field name, but we use pricePerSqftAfter value
-        pricePerSqftAfter: price, // Also send for reference/backward compatibility
+        pricePerUnit: price, // Backend expects 'pricePerUnit' field name, must be > 0
         quantity: item.quantity || item.sqftOrdered || 1
       };
       // Add productId if available (optional field)
@@ -263,9 +271,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
         return;
       }
       // Check pricePerSqftAfter first, then fallback to price
-      const itemPrice = item.pricePerSqftAfter || item.price || 0;
-      if (!itemPrice || itemPrice <= 0) {
-        setSubmitError(`Item ${i + 1}: Price per unit is required`);
+      let itemPrice = item.pricePerSqftAfter || item.price || 0;
+      // Convert to number if it's a string
+      itemPrice = typeof itemPrice === 'string' ? parseFloat(itemPrice) : itemPrice;
+      // Ensure it's a valid positive number
+      if (typeof itemPrice !== 'number' || isNaN(itemPrice) || itemPrice <= 0) {
+        setSubmitError(`Item ${i + 1}: Price per unit is required and must be greater than 0`);
         return;
       }
       if (!item.type && !item.category) {
