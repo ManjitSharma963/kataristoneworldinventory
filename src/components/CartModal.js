@@ -57,6 +57,14 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     const saved = localStorage.getItem('cartBillType');
     return saved || 'NON-GST';
   });
+  const [labourCharge, setLabourCharge] = useState(() => {
+    const saved = localStorage.getItem('cartLabourCharge');
+    return saved ? parseFloat(saved) : 0;
+  });
+  const [transportationCharge, setTransportationCharge] = useState(() => {
+    const saved = localStorage.getItem('cartTransportationCharge');
+    return saved ? parseFloat(saved) : 0;
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const toast = React.useRef(null);
@@ -116,6 +124,14 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   useEffect(() => {
     localStorage.setItem('cartBillType', billType);
   }, [billType]);
+
+  useEffect(() => {
+    localStorage.setItem('cartLabourCharge', labourCharge.toString());
+  }, [labourCharge]);
+
+  useEffect(() => {
+    localStorage.setItem('cartTransportationCharge', transportationCharge.toString());
+  }, [transportationCharge]);
 
   const loadCart = () => {
     const cartItems = getCart();
@@ -197,6 +213,9 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const taxRateNum = taxRate === '' ? 0 : (typeof taxRate === 'number' ? taxRate : parseFloat(taxRate) || 0);
   const tax = (subtotal * taxRateNum) / 100;
   const total = Math.max(0, subtotal + tax - (discountAmount || 0));
+  const labourChargeNum = typeof labourCharge === 'number' ? labourCharge : (parseFloat(labourCharge) || 0);
+  const transportationChargeNum = typeof transportationCharge === 'number' ? transportationCharge : (parseFloat(transportationCharge) || 0);
+  const grandTotal = total + labourChargeNum + transportationChargeNum;
 
   const formatCartItemsForBilling = (cartItems) => {
     return cartItems.map(item => {
@@ -311,7 +330,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       items: formatCartItemsForBilling(cart),
       taxPercentage: taxRateNum,
       discountAmount: discountAmount || 0,
-      totalAmount: total
+      totalAmount: total,
+      labourCharge: labourChargeNum || 0,
+      transportationCharge: transportationChargeNum || 0,
+      grandTotal: grandTotal
       // Note: subtotal, taxAmount, billType, gstRate are calculated on backend if needed
     };
 
@@ -382,6 +404,8 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       setTaxRate(5);
       setDiscountAmount(0);
       setBillType('NON-GST');
+      setLabourCharge(0);
+      setTransportationCharge(0);
       clearCart();
       loadCart();
 
@@ -598,6 +622,38 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 maxLength={10}
               />
             </div>
+
+            <div className="summary-row editable-discount">
+              <span className="summary-label">Labour Charge:</span>
+              <div className="discount-input-wrapper">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={labourCharge}
+                  onChange={(e) => setLabourCharge(Math.max(0, parseFloat(e.target.value) || 0))}
+                  className="discount-input"
+                  placeholder="0"
+                />
+                <span className="summary-value">₹ {(labourChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+            </div>
+
+            <div className="summary-row editable-discount">
+              <span className="summary-label">Transportation Charge:</span>
+              <div className="discount-input-wrapper">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={transportationCharge}
+                  onChange={(e) => setTransportationCharge(Math.max(0, parseFloat(e.target.value) || 0))}
+                  className="discount-input"
+                  placeholder="0"
+                />
+                <span className="summary-value">₹ {(transportationChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+            </div>
           </div>
 
           {/* Customer Information Section */}
@@ -685,8 +741,13 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
           </div>
 
           <div className="summary-total">
-            <span className="total-label">Total</span>
+            <span className="total-label">Total (After Tax & Discount)</span>
             <span className="total-value">₹ {total.toFixed(2)}</span>
+          </div>
+
+          <div className="summary-total" style={{ marginTop: '8px', borderTop: '2px solid #e5e7eb', paddingTop: '8px' }}>
+            <span className="total-label">Grand Total</span>
+            <span className="total-value" style={{ fontSize: '1.3rem', fontWeight: 'bold', color: '#2563eb' }}>₹ {grandTotal.toFixed(2)}</span>
           </div>
 
           {/* Checkout Button */}
