@@ -111,7 +111,9 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     labour_charges: '',
     rto_fees: '',
     damage_expenses: '',
-    others_expenses: ''
+    others_expenses: '',
+    transportation_charge: '',
+    gst_charges: ''
   });
 
   const calculateStats = (billsData) => {
@@ -897,9 +899,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const rtoFees = parseFloat(data.rto_fees) || 0;
     const damageExpenses = parseFloat(data.damage_expenses) || 0;
     const othersExpenses = parseFloat(data.others_expenses) || 0;
+    const transportationCharge = parseFloat(data.transportation_charge) || 0;
+    const gstCharges = parseFloat(data.gst_charges) || 0;
     
     const pricePerSqftBefore = pricePerSqft;
-    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses;
+    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses + transportationCharge + gstCharges;
     const pricePerSqftAfter = totalSqftStock > 0 
       ? (pricePerSqft * totalSqftStock + totalExpenses) / totalSqftStock 
       : pricePerSqft;
@@ -968,9 +972,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const rtoFees = parseFloat(formData.rto_fees) || 0;
     const damageExpenses = parseFloat(formData.damage_expenses) || 0;
     const othersExpenses = parseFloat(formData.others_expenses) || 0;
+    const transportationCharge = parseFloat(formData.transportation_charge) || 0;
+    const gstCharges = parseFloat(formData.gst_charges) || 0;
     
     // Calculate total expenses and final price per sqr ft after expenses
-    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses;
+    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses + transportationCharge + gstCharges;
     const pricePerSqftAfter = totalSqftStock > 0 
       ? (pricePerSqft * totalSqftStock + totalExpenses) / totalSqftStock 
       : pricePerSqft;
@@ -988,6 +994,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       rtoFees: rtoFees,
       damageExpenses: damageExpenses,
       othersExpenses: othersExpenses,
+      transportationCharge: transportationCharge,
+      gstCharges: gstCharges,
       pricePerSqftAfter: parseFloat(pricePerSqftAfter.toFixed(2))  // Final price per sqr ft after all expenses
     };
 
@@ -1064,7 +1072,9 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         labour_charges: '',
         rto_fees: '',
         damage_expenses: '',
-        others_expenses: ''
+        others_expenses: '',
+        transportation_charge: '',
+        gst_charges: ''
       });
       setShowAddInventory(false);
       
@@ -1098,7 +1108,9 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       labour_charges: item.labourCharges || item.labour_charges || '',
       rto_fees: item.rtoFees || item.rto_fees || '',
       damage_expenses: item.damageExpenses || item.damage_expenses || '',
-      others_expenses: item.othersExpenses || item.others_expenses || ''
+      others_expenses: item.othersExpenses || item.others_expenses || '',
+      transportation_charge: item.transportationCharge || item.transportation_charge || '',
+      gst_charges: item.gstCharges || item.gst_charges || ''
     });
     setShowEditInventory(true);
   };
@@ -1138,9 +1150,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const rtoFees = parseFloat(formData.rto_fees) || 0;
     const damageExpenses = parseFloat(formData.damage_expenses) || 0;
     const othersExpenses = parseFloat(formData.others_expenses) || 0;
+    const transportationCharge = parseFloat(formData.transportation_charge) || 0;
+    const gstCharges = parseFloat(formData.gst_charges) || 0;
 
     // Calculate total expenses and final price per sqr ft after expenses
-    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses;
+    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses + transportationCharge + gstCharges;
     const pricePerSqftAfter = totalSqftStock > 0 
       ? (pricePerSqft * totalSqftStock + totalExpenses) / totalSqftStock 
       : pricePerSqft;
@@ -1163,6 +1177,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       rtoFees: rtoFees,
       damageExpenses: damageExpenses,
       othersExpenses: othersExpenses,
+      transportationCharge: transportationCharge,
+      gstCharges: gstCharges,
       pricePerSqftAfter: parseFloat(pricePerSqftAfter.toFixed(2))  // Final price per sqr ft after all expenses
     };
 
@@ -1220,7 +1236,13 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         total_sqft_stock: '',
         unit: '',
         primary_image_url: '',
-        color: ''
+        color: '',
+        labour_charges: '',
+        rto_fees: '',
+        damage_expenses: '',
+        others_expenses: '',
+        transportation_charge: '',
+        gst_charges: ''
       });
       showToast('Inventory item updated successfully!', 'success');
     } catch (error) {
@@ -2528,6 +2550,32 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     />
                   </div>
                 </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Transportation Charge (₹)</label>
+                    <input
+                      type="number"
+                      name="transportation_charge"
+                      value={formData.transportation_charge}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>GST Charges (₹)</label>
+                    <input
+                      type="number"
+                      name="gst_charges"
+                      value={formData.gst_charges}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
                 
                 {/* Calculated Price Per Sqr Ft */}
                 <div className="form-section-divider">
@@ -2889,6 +2937,32 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                       type="number"
                       name="others_expenses"
                       value={formData.others_expenses}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Transportation Charge (₹)</label>
+                    <input
+                      type="number"
+                      name="transportation_charge"
+                      value={formData.transportation_charge}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>GST Charges (₹)</label>
+                    <input
+                      type="number"
+                      name="gst_charges"
+                      value={formData.gst_charges}
                       onChange={handleInputChange}
                       min="0"
                       step="0.01"
