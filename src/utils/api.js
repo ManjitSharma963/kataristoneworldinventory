@@ -310,6 +310,70 @@ export const deleteExpense = async (id) => {
   return await apiCall(`/expenses/${id}`, { method: 'DELETE' });
 };
 
+// ==================== DAILY BUDGET ====================
+
+/**
+ * Get current daily budget (legacy endpoint)
+ * @returns {Promise<Object>} e.g. { amount: 5000 }
+ */
+export const getDailyBudget = async () => {
+  return await apiCall('/budget/daily', { method: 'GET' });
+};
+
+/**
+ * Get daily budget for a specific date (preferred when backend supports by-date)
+ * @param {string} date - Date in YYYY-MM-DD format (e.g. '2026-02-21')
+ * @returns {Promise<Object>} e.g. { amount: 5000 } or budget record for that date
+ */
+export const getDailyBudgetByDate = async (date) => {
+  const params = new URLSearchParams({ date });
+  return await apiCall(`/budget/daily/by-date?${params.toString()}`, { method: 'GET' });
+};
+
+/**
+ * Create daily budget (POST)
+ * @param {number} amount - Budget amount per day
+ * @returns {Promise<Object>}
+ */
+export const createDailyBudget = async (amount) => {
+  return await apiCall('/budget/daily', {
+    method: 'POST',
+    body: JSON.stringify({ amount: Number(amount) }),
+  });
+};
+
+/**
+ * Update daily budget (PUT)
+ * @param {number} amount - Budget amount per day
+ * @returns {Promise<Object>}
+ */
+export const updateDailyBudget = async (amount) => {
+  return await apiCall('/budget/daily', {
+    method: 'PUT',
+    body: JSON.stringify({ amount: Number(amount) }),
+  });
+};
+
+/**
+ * Delete daily budget (DELETE)
+ * @returns {Promise<void>}
+ */
+export const deleteDailyBudget = async () => {
+  return await apiCall('/budget/daily', { method: 'DELETE' });
+};
+
+/**
+ * Get all daily budget records from the table (GET /api/daily-budget/all)
+ * @returns {Promise<Array>} e.g. [{ id, amount, created_at, updated_at, location, remaining_budget }, ...]
+ */
+export const getDailyBudgetHistory = async () => {
+  const res = await apiCall('/daily-budget/all', { method: 'GET' });
+  if (Array.isArray(res)) return res;
+  if (res?.content) return res.content;
+  if (res?.data) return Array.isArray(res.data) ? res.data : [];
+  return [];
+};
+
 // ==================== BILL PDF DOWNLOAD ====================
 
 /**

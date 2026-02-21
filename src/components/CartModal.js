@@ -65,6 +65,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     const saved = localStorage.getItem('cartTransportationCharge');
     return saved ? parseFloat(saved) : 0;
   });
+  const [otherExpense, setOtherExpense] = useState(() => {
+    const saved = localStorage.getItem('cartOtherExpense');
+    return saved !== null && saved !== '' ? (parseFloat(saved) || 0) : 0;
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const toast = React.useRef(null);
@@ -133,6 +137,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     localStorage.setItem('cartTransportationCharge', transportationCharge.toString());
   }, [transportationCharge]);
 
+  useEffect(() => {
+    localStorage.setItem('cartOtherExpense', otherExpense.toString());
+  }, [otherExpense]);
+
   const loadCart = () => {
     const cartItems = getCart();
     setCart(cartItems);
@@ -153,20 +161,33 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   };
 
   const handleUpdateQuantity = (productId, quantity) => {
-    updateCartItemQuantity(productId, quantity);
-    loadCart();
+    const updatedCart = cart.map((item) => {
+      if (item.id === productId) {
+        // Retain the edited price and update only the quantity
+        return { ...item, quantity: quantity };
+      }
+      return item;
+    });
+    setCart(updatedCart);
   };
+
+  const STEP = 0.5; // decimal step for +/- buttons (e.g. 0.5 sqft)
+  const MIN_QTY = 0.01;
 
   const handleIncreaseQuantity = (item) => {
     const maxQuantity = item.totalSqft || 999999;
-    if ((item.quantity || 1) < maxQuantity) {
-      handleUpdateQuantity(item.id, (item.quantity || 1) + 1);
+    const current = parseFloat(item.quantity) || 1;
+    if (current < maxQuantity) {
+      const next = Math.round((current + STEP) * 100) / 100;
+      handleUpdateQuantity(item.id, Math.min(next, maxQuantity));
     }
   };
 
   const handleDecreaseQuantity = (item) => {
-    if ((item.quantity || 1) > 1) {
-      handleUpdateQuantity(item.id, (item.quantity || 1) - 1);
+    const current = parseFloat(item.quantity) || 1;
+    if (current > MIN_QTY) {
+      const next = Math.round((current - STEP) * 100) / 100;
+      handleUpdateQuantity(item.id, Math.max(MIN_QTY, next));
     }
   };
 
@@ -215,7 +236,15 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const total = Math.max(0, subtotal + tax - (discountAmount || 0));
   const labourChargeNum = typeof labourCharge === 'number' ? labourCharge : (parseFloat(labourCharge) || 0);
   const transportationChargeNum = typeof transportationCharge === 'number' ? transportationCharge : (parseFloat(transportationCharge) || 0);
-  const grandTotal = total + labourChargeNum + transportationChargeNum;
+  const otherExpenseNum = typeof otherExpense === 'number' ? otherExpense : (parseFloat(otherExpense) || 0);
+  const grandTotal = total + labourChargeNum + transportationChargeNum + otherExpenseNum;
+
+  // Show number without leading zeros (e.g. 1200 not 01200)
+  const chargeDisplayValue = (val) => {
+    if (val === '' || val === null || val === undefined) return '';
+    const n = parseFloat(val);
+    return isNaN(n) ? val : n;
+  };
 
   const formatCartItemsForBilling = (cartItems) => {
     return cartItems.map(item => {
@@ -333,6 +362,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       totalAmount: total,
       labourCharge: labourChargeNum || 0,
       transportationCharge: transportationChargeNum || 0,
+      otherExpenses: otherExpenseNum || 0,
       grandTotal: grandTotal
       // Note: subtotal, taxAmount, billType, gstRate are calculated on backend if needed
     };
@@ -485,42 +515,64 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   <h3 className="cart-item-name">{item.title}</h3>
                   {item.type && <p className="cart-item-category">{item.type}</p>}
                   <div className="cart-item-pricing">
-                    {/* Use pricePerSqftAfter as the final price after all expenses */}
-                    {(() => {
-                      const price = item.pricePerSqftAfter || item.price || 0;
-                      return (
-                        <>
-                          <span className="cart-item-price">₹ {(price * (item.quantity || 0)).toLocaleString('en-IN')}</span>
-                          <span className="cart-item-unit-price">₹ {price.toLocaleString('en-IN')} / {item.unit || 'sqft'}</span>
-                        </>
-                      );
-                    })()}
+                    {/* Editable price input */}
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={item.pricePerSqftAfter || 0}
+                      onChange={(e) => {
+                        let updatedPrice = e.target.value;
+                        // Remove leading zeros
+                        updatedPrice = updatedPrice.replace(/^0+(?=\d)/, '');
+                        updatedPrice = parseFloat(updatedPrice) || 0;
+                        const updatedCart = cart.map((cartItem) => {
+                          if (cartItem.id === item.id) {
+                            return { ...cartItem, pricePerSqftAfter: updatedPrice };
+                          }
+                          return cartItem;
+                        });
+                        setCart(updatedCart);
+                      }}
+                      className="price-input styled-input"
+                      placeholder="Enter price"
+                    />
+                    <span className="cart-item-unit-price">₹ {(item.pricePerSqftAfter || 0).toLocaleString('en-IN')} / {item.unit || 'sqft'}</span>
                   </div>
                 </div>
                 <div className="cart-item-qty">
                   <button
                     className="qty-btn minus"
                     onClick={() => handleDecreaseQuantity(item)}
-                    disabled={(item.quantity || 1) <= 1}
+                    disabled={(parseFloat(item.quantity) || 1) <= MIN_QTY}
                   >
                     <i className="pi pi-minus"></i>
                   </button>
                   <input
                     type="number"
-                    min="1"
+                    min={MIN_QTY}
+                    step="0.01"
                     max={item.totalSqft || 999999}
-                    value={item.quantity || 1}
+                    value={item.quantity ?? 1}
                     onChange={(e) => {
-                      const val = parseInt(e.target.value) || 1;
+                      const raw = e.target.value;
+                      if (raw === '' || raw === null) {
+                        handleUpdateQuantity(item.id, MIN_QTY);
+                        return;
+                      }
+                      const val = parseFloat(raw);
                       const maxQty = item.totalSqft || 999999;
-                      handleUpdateQuantity(item.id, Math.min(Math.max(1, val), maxQty));
+                      if (!isNaN(val)) {
+                        const clamped = Math.min(Math.max(MIN_QTY, val), maxQty);
+                        handleUpdateQuantity(item.id, Math.round(clamped * 100) / 100);
+                      }
                     }}
                     className="qty-input"
                   />
                   <button
                     className="qty-btn plus"
                     onClick={() => handleIncreaseQuantity(item)}
-                    disabled={(item.quantity || 1) >= (item.totalSqft || 999999)}
+                    disabled={(parseFloat(item.quantity) || 0) >= (item.totalSqft || 999999)}
                   >
                     <i className="pi pi-plus"></i>
                   </button>
@@ -630,8 +682,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   type="number"
                   min="0"
                   step="0.01"
-                  value={labourCharge}
-                  onChange={(e) => setLabourCharge(Math.max(0, parseFloat(e.target.value) || 0))}
+                  value={chargeDisplayValue(labourCharge)}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') setLabourCharge('');
+                    else setLabourCharge(Math.max(0, parseFloat(raw) || 0));
+                  }}
                   className="discount-input"
                   placeholder="0"
                 />
@@ -646,12 +702,36 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   type="number"
                   min="0"
                   step="0.01"
-                  value={transportationCharge}
-                  onChange={(e) => setTransportationCharge(Math.max(0, parseFloat(e.target.value) || 0))}
+                  value={chargeDisplayValue(transportationCharge)}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') setTransportationCharge('');
+                    else setTransportationCharge(Math.max(0, parseFloat(raw) || 0));
+                  }}
                   className="discount-input"
                   placeholder="0"
                 />
                 <span className="summary-value">₹ {(transportationChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+            </div>
+
+            <div className="summary-row editable-discount">
+              <span className="summary-label">Other Expense:</span>
+              <div className="discount-input-wrapper">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={chargeDisplayValue(otherExpense)}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') setOtherExpense('');
+                    else setOtherExpense(Math.max(0, parseFloat(raw) || 0));
+                  }}
+                  className="discount-input"
+                  placeholder="0"
+                />
+                <span className="summary-value">₹ {(otherExpenseNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
           </div>

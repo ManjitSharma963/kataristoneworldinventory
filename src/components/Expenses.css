@@ -49,6 +49,8 @@
 .expenses-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 20px;
   margin-top: 20px;
 }
@@ -171,6 +173,110 @@
 .expenses-header h2 {
   margin: 0;
   color: #333;
+}
+
+.expenses-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Budget in hand card (All Expenses tab) */
+.budget-in-hand-card {
+  background: #e0e5ec;
+  border-radius: 16px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+  box-shadow: 
+    6px 6px 12px rgba(163, 177, 198, 0.6),
+    -6px -6px 12px rgba(255, 255, 255, 0.8),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.6),
+    inset -1px -1px 2px rgba(163, 177, 198, 0.2);
+  border: 1px solid rgba(163, 177, 198, 0.2);
+}
+
+.budget-in-hand-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.budget-in-hand-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #333;
+}
+
+.budget-in-hand-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.budget-in-hand-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #555;
+}
+
+.budget-in-hand-input {
+  width: 140px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #333;
+  background: #e0e5ec;
+  box-shadow: 
+    inset 4px 4px 8px rgba(163, 177, 198, 0.5),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.8);
+}
+
+.budget-in-hand-input:focus {
+  outline: none;
+  box-shadow: 
+    inset 5px 5px 10px rgba(163, 177, 198, 0.6),
+    inset -5px -5px 10px rgba(255, 255, 255, 0.9);
+}
+
+.budget-in-hand-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: center;
+}
+
+.budget-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.budget-stat-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #666;
+}
+
+.budget-stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.budget-stat-value.spent {
+  color: #667eea;
+}
+
+.budget-stat-value.left {
+  color: #16a34a;
+}
+
+.budget-stat-value.over {
+  color: #dc2626;
 }
 
 .expenses-stats {

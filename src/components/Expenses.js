@@ -16,7 +16,13 @@ import {
   updateClientPurchase,
   deleteClientPurchase,
   addClientPayment,
-  fetchAllPayments
+  fetchAllPayments,
+  getDailyBudget as apiGetDailyBudget,
+  getDailyBudgetByDate as apiGetDailyBudgetByDate,
+  getDailyBudgetHistory as apiGetDailyBudgetHistory,
+  createDailyBudget as apiCreateDailyBudget,
+  updateDailyBudget as apiUpdateDailyBudget,
+  deleteDailyBudget as apiDeleteDailyBudget
 } from '../utils/api';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
@@ -40,14 +46,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     } else {
       setInternalShowForm(true);
     }
+    const today = getLocalDateString();
     // Reset form data when opening
     setFormData({
-      date: new Date().toISOString().split('T')[0],
+      date: today,
       category: '',
       description: '',
       amount: '',
       paymentMethod: 'cash'
     });
+    // Sync react-hook-form so submitted date is today (form uses register, not formData)
+    setExpenseValue('date', today);
     setEditingExpense(null);
   };
   
@@ -73,6 +82,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [showPaymentsTable, setShowPaymentsTable] = useState(false); // Toggle between purchases and payments view
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
+  // Start with 0 so we always show database value after fetch; never show stale localStorage first
+  const [budgetInHand, setBudgetInHand] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   // Default to sorting by date (newest first) for all tabs
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
@@ -80,7 +91,31 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [expandedEmployees, setExpandedEmployees] = useState(new Set());
   const [toast, setToast] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, onConfirm: null, title: '', message: '' });
+  const [showDailyBudgetModal, setShowDailyBudgetModal] = useState(false);
+  const [dailyBudgetModalValue, setDailyBudgetModalValue] = useState('');
+  const [hasDailyBudgetFromApi, setHasDailyBudgetFromApi] = useState(false);
+  const [savingBudget, setSavingBudget] = useState(false);
+  const [budgetHistory, setBudgetHistory] = useState([]);
+  const [loadingBudgetHistory, setLoadingBudgetHistory] = useState(false);
+  const [editingBudgetEntryId, setEditingBudgetEntryId] = useState(null);
+  const [editingBudgetAmount, setEditingBudgetAmount] = useState('');
   const itemsPerPage = 10;
+
+  // Use local date (not UTC) so "today" is correct in all timezones (e.g. India)
+  const getLocalDateString = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const getLocalMonthString = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+  // Convert Date (from yup) or string to local YYYY-MM-DD so API always gets correct date (not UTC ISO)
+  const toLocalDateString = (date) => {
+    if (date == null) return getLocalDateString();
+    const d = date instanceof Date ? date : new Date(date);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
 
   // Toast notification helper
   const showToast = (message, type = 'success') => {
@@ -113,6 +148,114 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     });
   };
 
+  // Parse amount from API response (handles DB row amount, budgetAmount, nested shapes, etc.)
+  const getBudgetAmountFromResponse = (res) => {
+    if (res == null || typeof res !== 'object') return 0;
+    const raw =
+      res.budgetAmount ??
+      res.amount ??
+      res.dailyBudget ??
+      res.value ??
+      res.data?.budgetAmount ??
+      res.data?.amount ??
+      res.data?.dailyBudget ??
+      res.data?.value ??
+      res.budget?.amount ??
+      res.dailyBudget?.amount ??
+      res.dailyBudget?.budgetAmount;
+    const num = Number(raw);
+    return Number.isFinite(num) ? Math.max(0, num) : 0;
+  };
+
+  const loadDailyBudget = async () => {
+    const todayStr = getLocalDateString(); // YYYY-MM-DD for today
+    try {
+      // Always fetch from API (by-date) so UI reflects database
+      const res = await apiGetDailyBudgetByDate(todayStr);
+      const amount = getBudgetAmountFromResponse(res);
+      setBudgetInHand(amount);
+      setHasDailyBudgetFromApi(true);
+      // Persist so fallback is in sync with database
+      try {
+        localStorage.setItem('expenses_budget_in_hand', String(amount));
+      } catch (_) {}
+    } catch (e) {
+      try {
+        const res = await apiGetDailyBudget();
+        const amount = getBudgetAmountFromResponse(res);
+        setBudgetInHand(amount);
+        setHasDailyBudgetFromApi(true);
+        try {
+          localStorage.setItem('expenses_budget_in_hand', String(amount));
+        } catch (_) {}
+      } catch (e2) {
+        try {
+          const saved = localStorage.getItem('expenses_budget_in_hand');
+          const val = saved !== null && saved !== '' ? Math.max(0, parseFloat(saved) || 0) : 0;
+          setBudgetInHand(val);
+        } catch (err) {
+          setBudgetInHand(0);
+        }
+        setHasDailyBudgetFromApi(false);
+      }
+    }
+  };
+
+  // Automatically fetch daily budget when user opens the Expenses tab (component mounts)
+  useEffect(() => {
+    loadDailyBudget();
+  }, []);
+
+  const loadBudgetHistory = async () => {
+    setLoadingBudgetHistory(true);
+    try {
+      const list = await apiGetDailyBudgetHistory();
+      const arr = Array.isArray(list) ? list : [];
+      // Sort by updatedAt/createdAt (camelCase) or updated_at/created_at descending (newest first)
+      const sorted = [...arr].sort((a, b) => {
+        const tA = new Date(a.updatedAt || a.createdAt || a.updated_at || a.created_at || 0).getTime();
+        const tB = new Date(b.updatedAt || b.createdAt || b.updated_at || b.created_at || 0).getTime();
+        return tB - tA;
+      });
+      setBudgetHistory(sorted.slice(0, 20));
+    } catch (_) {
+      setBudgetHistory([]);
+    } finally {
+      setLoadingBudgetHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showDailyBudgetModal) loadBudgetHistory();
+  }, [showDailyBudgetModal]);
+
+  const saveDailyBudgetToApi = async (amount) => {
+    const num = Number.isFinite(amount) ? Math.max(0, amount) : 0;
+    if (num > 0) {
+      if (hasDailyBudgetFromApi) {
+        await apiUpdateDailyBudget(num);
+      } else {
+        await apiCreateDailyBudget(num);
+      }
+      setBudgetInHand(num);
+      setHasDailyBudgetFromApi(true);
+    } else {
+      await apiDeleteDailyBudget();
+      setBudgetInHand(0);
+      setHasDailyBudgetFromApi(false);
+    }
+  };
+
+  useEffect(() => {
+    try {
+      if (budgetInHand !== '' && budgetInHand !== null && !isNaN(parseFloat(budgetInHand))) {
+        localStorage.setItem('expenses_budget_in_hand', String(budgetInHand));
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [budgetInHand]);
+
   const toggleEmployee = (employeeId) => {
     setExpandedEmployees(prev => {
       const newSet = new Set(prev);
@@ -135,7 +278,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   } = useForm({
     resolver: yupResolver(expenseSchema),
     defaultValues: {
-      date: new Date().toISOString().split('T')[0],
+      date: getLocalDateString(),
       category: '',
       description: '',
       amount: '',
@@ -145,7 +288,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
   // Keep formData for backward compatibility with existing code
   const [formData, setFormData] = useState({
-    date: new Date().toISOString().split('T')[0],
+    date: getLocalDateString(),
     category: '',
     description: '',
     amount: '',
@@ -155,12 +298,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [salaryFormData, setSalaryFormData] = useState({
     employeeName: '',
     salaryAmount: '',
-    joiningDate: new Date().toISOString().split('T')[0]
+    joiningDate: getLocalDateString()
   });
 
   const [paySalaryFormData, setPaySalaryFormData] = useState({
-    month: new Date().toISOString().slice(0, 7), // YYYY-MM format
-    date: new Date().toISOString().split('T')[0],
+    month: getLocalMonthString(), // YYYY-MM format
+    date: getLocalDateString(),
     paymentMethod: 'cash',
     amount: ''
   });
@@ -168,21 +311,21 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [payAdvanceFormData, setPayAdvanceFormData] = useState({
     employeeId: '',
     amount: '',
-    date: new Date().toISOString().split('T')[0]
+    date: getLocalDateString()
   });
 
   const [clientPurchaseFormData, setClientPurchaseFormData] = useState({
     clientName: '',
     purchaseDescription: '',
     totalAmount: '',
-    purchaseDate: new Date().toISOString().split('T')[0],
+    purchaseDate: getLocalDateString(),
     notes: ''
   });
 
   const [clientPaymentFormData, setClientPaymentFormData] = useState({
     purchaseId: '',
     amount: '',
-    date: new Date().toISOString().split('T')[0],
+    date: getLocalDateString(),
     paymentMethod: 'cash',
     notes: ''
   });
@@ -196,7 +339,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     loadExpenses();
     loadEmployees();
     loadClientPayments();
-    // Also load all payments on initial load
     loadAllPayments();
   }, []);
 
@@ -388,7 +530,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
   // Get current month salary status (using expenses from API only)
   const getCurrentMonthSalaryStatus = (employeeId) => {
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
+    const currentMonth = getLocalMonthString(); // YYYY-MM format
     const salaryPayments = expenses.filter(exp => 
       exp.type === 'salary' && 
       exp.employeeId === employeeId &&
@@ -408,8 +550,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     const amountToPay = pendingAmount > 0 ? pendingAmount : 0;
     
     setPaySalaryFormData({
-      month: new Date().toISOString().slice(0, 7),
-      date: new Date().toISOString().split('T')[0],
+      month: getLocalMonthString(),
+      date: getLocalDateString(),
       paymentMethod: 'cash',
       amount: amountToPay.toFixed(2)
     });
@@ -464,8 +606,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       setShowPaySalaryForm(false);
       setSelectedEmployee(null);
       setPaySalaryFormData({
-        month: new Date().toISOString().slice(0, 7),
-        date: new Date().toISOString().split('T')[0],
+        month: getLocalMonthString(),
+        date: getLocalDateString(),
         paymentMethod: 'cash',
         amount: ''
       });
@@ -509,7 +651,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       setPayAdvanceFormData({
         employeeId: '',
         amount: '',
-        date: new Date().toISOString().split('T')[0]
+        date: getLocalDateString()
       });
     } catch (error) {
       console.error('Error saving advance payment to API:', error);
@@ -547,12 +689,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const onSubmitExpense = async (data) => {
     const expenseData = {
       type: 'daily',
-      date: data.date,
+      date: toLocalDateString(data.date),
       category: data.category,
       description: data.description || '',
       amount: parseFloat(data.amount) || 0,
       paymentMethod: data.paymentMethod
     };
+
+    alert('Data being sent:\n\n' + JSON.stringify(expenseData, null, 2));
 
     try {
       setSubmittingExpense(true);
@@ -586,7 +730,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const handleEdit = (expense) => {
     setEditingExpense(expense);
     const editData = {
-      date: expense.date || new Date().toISOString().split('T')[0],
+      date: expense.date || getLocalDateString(),
       category: expense.category || '',
       description: expense.description || '',
       amount: expense.amount?.toString() || '',
@@ -630,13 +774,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   };
 
   const resetForm = () => {
-    setFormData({
-      date: new Date().toISOString().split('T')[0],
+    const today = getLocalDateString();
+    const defaults = {
+      date: today,
       category: '',
       description: '',
       amount: '',
       paymentMethod: 'cash'
-    });
+    };
+    setFormData(defaults);
+    // Reset react-hook-form so date and other fields stay in sync (submitted value = today)
+    resetExpense(defaults);
     if (externalShowForm !== null && onFormClose) {
       onFormClose();
     } else {
@@ -764,6 +912,62 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       return sum + (parseFloat(exp.amount) || 0);
     }, 0);
 
+  const dailyBudget = Number(parseFloat(budgetInHand) || 0) || 0;
+  // Carry-over disabled: we don't store per-day budget history, so we can't know what was actually left yesterday.
+  const carryOverFromYesterday = 0;
+  const todayBudgetWithCarryOver = dailyBudget;
+
+  // Daily budget card always uses only TODAY: only today's expenses are deducted from today's budget (no yesterday/past).
+  const todayOnlyBudgetContext = {
+    spent: todayExpenses,
+    budgetTotal: dailyBudget,
+    periodLabel: 'Today',
+    days: 1,
+    carryOver: 0,
+    baseBudget: dailyBudget
+  };
+
+  // Daily / date-wise budget: spent and budget for the current view (today, selected date, or date range)
+  const getBudgetContext = () => {
+    const start = dateFilter.start;
+    const end = dateFilter.end;
+    if (!start && !end) {
+      return {
+        spent: todayExpenses,
+        budgetTotal: todayBudgetWithCarryOver,
+        periodLabel: 'Today',
+        days: 1,
+        carryOver: carryOverFromYesterday,
+        baseBudget: dailyBudget
+      };
+    }
+    const singleDay = start && !end ? start : (!start && end ? end : null);
+    if (singleDay) {
+      const dayStart = new Date(singleDay);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(singleDay);
+      dayEnd.setHours(23, 59, 59, 999);
+      const spentOnDay = expenses
+        .filter(exp => {
+          const d = new Date(exp.date);
+          return d >= dayStart && d <= dayEnd;
+        })
+        .reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
+      return { spent: spentOnDay, budgetTotal: dailyBudget, periodLabel: `On ${formatDate(singleDay)}`, days: 1 };
+    }
+    if (start && end) {
+      const startDate = new Date(start);
+      const endDate = new Date(end);
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
+      const daysInRange = Math.max(1, Math.ceil((endDate - startDate) / (24 * 60 * 60 * 1000)) + 1);
+      const budgetForPeriod = dailyBudget * daysInRange;
+      return { spent: totalExpenses, budgetTotal: budgetForPeriod, periodLabel: `Selected period (${daysInRange} day${daysInRange !== 1 ? 's' : ''})`, days: daysInRange };
+    }
+    return { spent: todayExpenses, budgetTotal: dailyBudget, periodLabel: 'Today', days: 1 };
+  };
+  const budgetContext = getBudgetContext();
+
   // If showAddButtonInHeader is true, only render the button
   if (showAddButtonInHeader) {
     return (
@@ -778,9 +982,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       {!hideHeader && (
         <div className="expenses-header">
           <h2>Daily Expenses Management</h2>
-          <button className="btn btn-primary" onClick={handleAddClick}>
-            + Add Expense
-          </button>
+          <div className="expenses-header-actions">
+            <button type="button" className="btn btn-secondary" onClick={() => { setDailyBudgetModalValue(budgetInHand === 0 ? '' : String(budgetInHand)); setShowDailyBudgetModal(true); }}>
+              Add daily budget
+            </button>
+            <button className="btn btn-primary" onClick={handleAddClick}>
+              + Add Expense
+            </button>
+          </div>
         </div>
       )}
 
@@ -805,6 +1014,146 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         </div>
       )}
 
+
+      {/* Daily budget modal */}
+      {showDailyBudgetModal && (
+        <div className="modal-overlay" onClick={() => !savingBudget && setShowDailyBudgetModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+            <div className="modal-header">
+              <h3>{hasDailyBudgetFromApi ? 'Edit daily budget' : 'Add daily budget'}</h3>
+              <button type="button" className="modal-close" onClick={() => !savingBudget && setShowDailyBudgetModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Budget per day (₹)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="100"
+                  value={dailyBudgetModalValue}
+                  onChange={(e) => setDailyBudgetModalValue(e.target.value)}
+                  placeholder="e.g. 20000"
+                  className="budget-in-hand-input"
+                  style={{ width: '100%', padding: '8px 12px', marginTop: '4px' }}
+                  disabled={savingBudget}
+                />
+              </div>
+              <div className="form-actions" style={{ marginTop: '16px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={savingBudget}
+                  onClick={async () => {
+                    const val = parseFloat(dailyBudgetModalValue);
+                    const num = Number.isFinite(val) ? Math.max(0, val) : 0;
+                    setSavingBudget(true);
+                    try {
+                      await saveDailyBudgetToApi(num);
+                      setShowDailyBudgetModal(false);
+                      showToast(num > 0 ? `Daily budget set to ₹${num.toLocaleString('en-IN')}` : 'Daily budget cleared.');
+                    } catch (err) {
+                      console.error('Error saving daily budget:', err);
+                      showToast(err?.message || 'Failed to save budget. Please try again.', 'error');
+                    } finally {
+                      setSavingBudget(false);
+                    }
+                  }}
+                >
+                  {savingBudget ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+              {/* Budget history */}
+              <div className="budget-history-section" style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '12px' }}>
+                <h4 style={{ margin: '0 0 8px 0', fontSize: '14px', color: '#555' }}>Budget history</h4>
+                {loadingBudgetHistory ? (
+                  <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>Loading...</p>
+                ) : budgetHistory.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>No history yet.</p>
+                ) : (
+                  <ul className="budget-history-list" style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: '200px', overflowY: 'auto' }}>
+                    {budgetHistory.map((entry, idx) => {
+                      const amount = Number(entry.amount ?? entry.budgetAmount ?? 0);
+                      const dateStr = entry.updatedAt ?? entry.createdAt ?? entry.date ?? entry.updated_at ?? entry.created_at ?? '';
+                      const displayDate = dateStr ? (dateStr.length >= 10 ? dateStr.slice(0, 10) : dateStr) : '—';
+                      const remaining = Number(entry.remainingBudget ?? entry.remaining_budget ?? 0);
+                      const location = entry.location || '';
+                      const isToday = displayDate === getLocalDateString();
+                      const rowKey = entry.id != null ? entry.id : `idx-${idx}`;
+                      const isEditingThis = isToday && editingBudgetEntryId === rowKey;
+                      const handleSaveInlineBudget = async () => {
+                        const num = Math.max(0, parseFloat(editingBudgetAmount) || 0);
+                        setSavingBudget(true);
+                        try {
+                          await saveDailyBudgetToApi(num);
+                          setEditingBudgetEntryId(null);
+                          setEditingBudgetAmount('');
+                          await loadDailyBudget();
+                          await loadBudgetHistory();
+                          showToast(num > 0 ? `Budget updated to ₹${num.toLocaleString('en-IN')}` : 'Budget cleared.');
+                        } catch (err) {
+                          console.error('Error updating budget:', err);
+                          showToast(err?.message || 'Failed to update budget.', 'error');
+                        } finally {
+                          setSavingBudget(false);
+                        }
+                      };
+                      return (
+                        <li key={entry.id ?? idx} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0', fontSize: '13px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ color: '#666' }}>{displayDate}</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              {isToday && isEditingThis ? (
+                                <>
+                                  <span style={{ fontWeight: '600' }}>₹</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="100"
+                                    value={editingBudgetAmount}
+                                    onChange={(e) => setEditingBudgetAmount(e.target.value)}
+                                    onBlur={handleSaveInlineBudget}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSaveInlineBudget(); } }}
+                                    autoFocus
+                                    disabled={savingBudget}
+                                    style={{ width: '90px', padding: '4px 8px', fontSize: '13px', fontWeight: '600' }}
+                                  />
+                                </>
+                              ) : (
+                                <>
+                                  <span style={{ fontWeight: '600', background: isToday ? '#f0f0f0' : 'transparent', padding: isToday ? '2px 6px' : 0, borderRadius: '4px' }}>
+                                    ₹{Number.isFinite(amount) ? amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                                  </span>
+                                  {isToday && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary"
+                                      onClick={() => { setEditingBudgetEntryId(rowKey); setEditingBudgetAmount(String(amount)); }}
+                                      style={{ fontSize: '12px', padding: '4px 10px' }}
+                                    >
+                                      Edit
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </span>
+                          </div>
+                          {(location || Number.isFinite(remaining)) && (
+                            <div style={{ marginTop: '2px', fontSize: '12px', color: '#888' }}>
+                              {location && <span>{location}</span>}
+                              {location && Number.isFinite(remaining) && ' · '}
+                              {Number.isFinite(remaining) && <span>Left: ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Expense Form Modal */}
       {showForm && (
@@ -943,8 +1292,50 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       {/* All Expenses Tab Content */}
       {activeTab === 'all' && (
         <div>
-          {/* Add Expense Button */}
+          {/* Budget in hand card – daily / date-wise */}
+          <div className="budget-in-hand-card">
+            <div className="budget-in-hand-header">
+              <span className="budget-in-hand-title">💰 Daily budget in hand</span>
+            </div>
+            <div className="budget-in-hand-stats">
+              <div className="budget-stat">
+                <span className="budget-stat-label">Spent (Today)</span>
+                <span className="budget-stat-value spent">₹{(Number(todayOnlyBudgetContext.spent || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+              <div className="budget-stat">
+                <span className="budget-stat-label">Budget today</span>
+                <span className="budget-stat-value">₹{(Number(todayOnlyBudgetContext.budgetTotal || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+              <div className="budget-stat">
+                {(() => {
+                  const budget = Number(todayOnlyBudgetContext.budgetTotal || 0) || 0;
+                  const spent = Number(todayOnlyBudgetContext.spent || 0) || 0;
+                  const left = budget - spent;
+                  if (left >= 0) {
+                    return (
+                      <>
+                        <span className="budget-stat-label">Left in hand</span>
+                        <span className="budget-stat-value left">₹{left.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </>
+                    );
+                  } else {
+                    return (
+                      <>
+                        <span className="budget-stat-label">Over budget by</span>
+                        <span className="budget-stat-value over">₹{Math.abs(left).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </>
+                    );
+                  }
+                })()}
+              </div>
+            </div>
+          </div>
+
+          {/* Budget and Add Expense buttons */}
           <div className="expenses-actions">
+            <button type="button" className="btn btn-secondary" onClick={() => { setDailyBudgetModalValue(budgetInHand === 0 ? '' : String(budgetInHand)); setShowDailyBudgetModal(true); }}>
+              Budget
+            </button>
             <button className="btn btn-primary" onClick={handleAddClick}>
               + Add Expense
             </button>
@@ -1024,7 +1415,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           setPayAdvanceFormData({
             employeeId: '',
             amount: '',
-            date: new Date().toISOString().split('T')[0]
+            date: getLocalDateString()
           });
         }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -1035,7 +1426,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 setPayAdvanceFormData({
                   employeeId: '',
                   amount: '',
-                  date: new Date().toISOString().split('T')[0]
+                  date: getLocalDateString()
                 });
               }}>×</button>
             </div>
@@ -1091,7 +1482,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     setPayAdvanceFormData({
                       employeeId: '',
                       amount: '',
-                      date: new Date().toISOString().split('T')[0]
+                      date: getLocalDateString()
                     });
                   }}>
                     Cancel
@@ -1109,8 +1500,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           setShowPaySalaryForm(false);
           setSelectedEmployee(null);
           setPaySalaryFormData({
-            month: new Date().toISOString().slice(0, 7),
-            date: new Date().toISOString().split('T')[0],
+            month: getLocalMonthString(),
+            date: getLocalDateString(),
             paymentMethod: 'cash',
             amount: ''
           });
@@ -1122,8 +1513,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 setShowPaySalaryForm(false);
                 setSelectedEmployee(null);
                 setPaySalaryFormData({
-                  month: new Date().toISOString().slice(0, 7),
-                  date: new Date().toISOString().split('T')[0],
+                  month: getLocalMonthString(),
+                  date: getLocalDateString(),
                   paymentMethod: 'cash',
                   amount: ''
                 });
@@ -1209,8 +1600,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     setShowPaySalaryForm(false);
                     setSelectedEmployee(null);
                     setPaySalaryFormData({
-                      month: new Date().toISOString().slice(0, 7),
-                      date: new Date().toISOString().split('T')[0],
+                      month: getLocalMonthString(),
+                      date: getLocalDateString(),
                       paymentMethod: 'cash',
                       amount: ''
                     });
@@ -1231,7 +1622,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           setSalaryFormData({
             employeeName: '',
             salaryAmount: '',
-            joiningDate: new Date().toISOString().split('T')[0],
+            joiningDate: getLocalDateString(),
             otherInformation: ''
           });
         }}>
@@ -1243,7 +1634,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 setSalaryFormData({
                   employeeName: '',
                   salaryAmount: '',
-                  joiningDate: new Date().toISOString().split('T')[0]
+                  joiningDate: getLocalDateString()
                 });
               }}>×</button>
             </div>
@@ -1262,7 +1653,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   setSalaryFormData({
                     employeeName: '',
                     salaryAmount: '',
-                    joiningDate: new Date().toISOString().split('T')[0]
+                    joiningDate: getLocalDateString()
                   });
                 } catch (error) {
                   console.error('Error saving employee to API:', error);
@@ -1315,7 +1706,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     setSalaryFormData({
                       employeeName: '',
                       salaryAmount: '',
-                      joiningDate: new Date().toISOString().split('T')[0],
+                      joiningDate: getLocalDateString(),
                       otherInformation: ''
                     });
                   }}>
@@ -1342,7 +1733,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 setPayAdvanceFormData({
                   employeeId: '',
                   amount: '',
-                  date: new Date().toISOString().split('T')[0]
+                  date: getLocalDateString()
                 });
               }}>
                 💰 Pay Advance
@@ -1570,7 +1961,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 setClientPaymentFormData({
                   purchaseId: '',
                   amount: '',
-                  date: new Date().toISOString().split('T')[0],
+                  date: getLocalDateString(),
                   paymentMethod: 'cash',
                   notes: ''
                 });
@@ -1651,7 +2042,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 clientName: '',
                 purchaseDescription: '',
                 totalAmount: '',
-                purchaseDate: new Date().toISOString().split('T')[0],
+                purchaseDate: getLocalDateString(),
                 notes: ''
               });
             }}>
@@ -1664,7 +2055,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       clientName: '',
                       purchaseDescription: '',
                       totalAmount: '',
-                      purchaseDate: new Date().toISOString().split('T')[0],
+                      purchaseDate: getLocalDateString(),
                       notes: ''
                     });
                   }}>×</button>
@@ -1696,7 +2087,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         clientName: '',
                         purchaseDescription: '',
                         totalAmount: '',
-                        purchaseDate: new Date().toISOString().split('T')[0],
+                        purchaseDate: getLocalDateString(),
                         notes: ''
                       });
                     } catch (error) {
@@ -1721,7 +2112,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         clientName: '',
                         purchaseDescription: '',
                         totalAmount: '',
-                        purchaseDate: new Date().toISOString().split('T')[0],
+                        purchaseDate: getLocalDateString(),
                         notes: ''
                       });
                     }
@@ -1788,7 +2179,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           clientName: '',
                           purchaseDescription: '',
                           totalAmount: '',
-                          purchaseDate: new Date().toISOString().split('T')[0],
+                          purchaseDate: getLocalDateString(),
                           notes: ''
                         });
                       }}>
@@ -1809,7 +2200,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               setClientPaymentFormData({
                 purchaseId: '',
                 amount: '',
-                date: new Date().toISOString().split('T')[0],
+                date: getLocalDateString(),
                 paymentMethod: 'cash',
                 notes: ''
               });
@@ -1823,7 +2214,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     setClientPaymentFormData({
                       purchaseId: '',
                       amount: '',
-                      date: new Date().toISOString().split('T')[0],
+                      date: getLocalDateString(),
                       paymentMethod: 'cash',
                       notes: ''
                     });
@@ -2005,7 +2396,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       setClientPaymentFormData({
                         purchaseId: '',
                         amount: '',
-                        date: new Date().toISOString().split('T')[0],
+                        date: getLocalDateString(),
                         paymentMethod: 'cash',
                         notes: ''
                       });
@@ -2117,7 +2508,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         setClientPaymentFormData({
                           purchaseId: '',
                           amount: '',
-                          date: new Date().toISOString().split('T')[0],
+                          date: getLocalDateString(),
                           paymentMethod: 'cash',
                           notes: ''
                         });
@@ -2205,7 +2596,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                     setClientPaymentFormData({
                                       purchaseId: purchase.id,
                                       amount: pendingAmount > 0 ? pendingAmount.toString() : '',
-                                      date: new Date().toISOString().split('T')[0],
+                                      date: getLocalDateString(),
                                       paymentMethod: 'cash',
                                       notes: ''
                                     });

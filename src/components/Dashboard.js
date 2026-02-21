@@ -73,6 +73,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     totalCount: 0
   });
   const [inventory, setInventory] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [bills, setBills] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [loadingBills, setLoadingBills] = useState(true);
@@ -98,6 +99,14 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     stats: false,
     charts: false
   });
+  // Statistics Overview date filter: 'all' | 'monthly' | 'range'. Default 'all'.
+  const [statsPeriod, setStatsPeriod] = useState('all');
+  const [statsMonth, setStatsMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [statsRangeStart, setStatsRangeStart] = useState('');
+  const [statsRangeEnd, setStatsRangeEnd] = useState('');
   const itemsPerPage = 10;
   const [formData, setFormData] = useState({
     name: '',
@@ -106,6 +115,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     price_per_sqft: '',
     total_sqft_stock: '',
     unit: '',
+    hsn_number: '',
     primary_image_url: '',
     color: '',
     labour_charges: '',
@@ -245,6 +255,26 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     }
   }, []);
 
+  const fetchCategories = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const response = await fetch(`${API_BASE_URL}/categories`, { headers });
+      if (response.status === 401) {
+        await handleApiResponse(response);
+        return;
+      }
+      if (response.ok) {
+        const data = await response.json();
+        setCategories(Array.isArray(data) ? data : []);
+      }
+    } catch (error) {
+      console.error('Error fetching categories:', error);
+      setCategories([]);
+    }
+  }, []);
+
   const fetchBills = useCallback(async () => {
     try {
       setLoadingBills(true);
@@ -326,7 +356,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       try {
         await fetchInventory();
         await fetchBills();
-        await fetchExpenses(); // Load expenses for the chart
+        await fetchExpenses();
+        await fetchCategories();
       } catch (error) {
         // Errors are already handled in fetchInventory, fetchBills, and fetchExpenses
         // This just prevents unhandled promise rejection
@@ -335,7 +366,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     };
     
     loadData();
-  }, [fetchInventory, fetchBills, fetchExpenses]); // Include dependencies
+  }, [fetchInventory, fetchBills, fetchExpenses, fetchCategories]);
 
   // Chart data preparation - Must be before any early returns
   const [chartPeriod, setChartPeriod] = useState('monthly'); // daily, weekly, monthly
@@ -434,6 +465,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     });
   }, [bills, gstChartPeriod]);
 
+  // Per-unit price after all expenses (used for Total Value and display). Fallback to before-expense price.
+  const getPricePerUnitAfter = (item) => {
+    return Number(parseFloat(item?.pricePerSqftAfter ?? item?.price_per_sqft_after ?? item?.pricePerSqft ?? item?.price_per_sqft ?? item?.pricePerUnit ?? item?.unitPrice ?? item?.price) || 0) || 0;
+  };
+
   // Prepare inventory chart data (by category/type)
   const inventoryChartData = useMemo(() => {
     if (!inventory || inventory.length === 0) return [];
@@ -443,7 +479,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     inventory.forEach(item => {
       const category = item.productType || item.product_type || item.category || 'Other';
       const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
-      const price = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
+      const price = getPricePerUnitAfter(item);
       const value = stock * price;
       
       if (!categoryMap.has(category)) {
@@ -490,6 +526,105 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     return Array.from(categoryMap.values()).sort((a, b) => b.value - a.value);
   }, [expenses]);
 
+  // Statistics Overview: filter bills and expenses by selected period (all / monthly / date range)
+  const getBillDate = (bill) => {
+    const d = bill.billDate || bill.date || bill.createdAt;
+    return d ? new Date(d) : null;
+  };
+  const getExpenseDate = (exp) => {
+    const d = exp.date || exp.createdAt;
+    return d ? new Date(d) : null;
+  };
+  const getInventoryItemDate = (item) => {
+    const d = item.createdAt || item.updatedAt || item.created_at || item.updated_at;
+    return d ? new Date(d) : null;
+  };
+
+  const filteredBillsForStats = useMemo(() => {
+    if (!bills || bills.length === 0) return [];
+    if (statsPeriod === 'all') return bills;
+    if (statsPeriod === 'monthly' && statsMonth) {
+      const [y, m] = statsMonth.split('-').map(Number);
+      return bills.filter(bill => {
+        const d = getBillDate(bill);
+        if (!d || isNaN(d.getTime())) return false;
+        return d.getFullYear() === y && d.getMonth() + 1 === m;
+      });
+    }
+    if (statsPeriod === 'range' && (statsRangeStart || statsRangeEnd)) {
+      return bills.filter(bill => {
+        const d = getBillDate(bill);
+        if (!d || isNaN(d.getTime())) return false;
+        const t = d.getTime();
+        if (statsRangeStart && t < new Date(statsRangeStart).setHours(0, 0, 0, 0)) return false;
+        if (statsRangeEnd && t > new Date(statsRangeEnd).setHours(23, 59, 59, 999)) return false;
+        return true;
+      });
+    }
+    return bills;
+  }, [bills, statsPeriod, statsMonth, statsRangeStart, statsRangeEnd]);
+
+  const filteredExpensesForStats = useMemo(() => {
+    if (!expenses || expenses.length === 0) return [];
+    if (statsPeriod === 'all') return expenses;
+    if (statsPeriod === 'monthly' && statsMonth) {
+      const [y, m] = statsMonth.split('-').map(Number);
+      return expenses.filter(exp => {
+        const d = getExpenseDate(exp);
+        if (!d || isNaN(d.getTime())) return false;
+        return d.getFullYear() === y && d.getMonth() + 1 === m;
+      });
+    }
+    if (statsPeriod === 'range' && (statsRangeStart || statsRangeEnd)) {
+      return expenses.filter(exp => {
+        const d = getExpenseDate(exp);
+        if (!d || isNaN(d.getTime())) return false;
+        const t = d.getTime();
+        if (statsRangeStart && t < new Date(statsRangeStart).setHours(0, 0, 0, 0)) return false;
+        if (statsRangeEnd && t > new Date(statsRangeEnd).setHours(23, 59, 59, 999)) return false;
+        return true;
+      });
+    }
+    return expenses;
+  }, [expenses, statsPeriod, statsMonth, statsRangeStart, statsRangeEnd]);
+
+  const filteredInventoryForStats = useMemo(() => {
+    if (!inventory || inventory.length === 0) return [];
+    if (statsPeriod === 'all') return inventory;
+    if (statsPeriod === 'monthly' && statsMonth) {
+      const [y, m] = statsMonth.split('-').map(Number);
+      return inventory.filter(item => {
+        const d = getInventoryItemDate(item);
+        if (!d || isNaN(d.getTime())) return false;
+        return d.getFullYear() === y && d.getMonth() + 1 === m;
+      });
+    }
+    if (statsPeriod === 'range' && (statsRangeStart || statsRangeEnd)) {
+      return inventory.filter(item => {
+        const d = getInventoryItemDate(item);
+        if (!d || isNaN(d.getTime())) return false;
+        const t = d.getTime();
+        if (statsRangeStart && t < new Date(statsRangeStart).setHours(0, 0, 0, 0)) return false;
+        if (statsRangeEnd && t > new Date(statsRangeEnd).setHours(23, 59, 59, 999)) return false;
+        return true;
+      });
+    }
+    return inventory;
+  }, [inventory, statsPeriod, statsMonth, statsRangeStart, statsRangeEnd]);
+
+  const statsFromFiltered = useMemo(() => calculateStats(filteredBillsForStats), [filteredBillsForStats]);
+  const totalExpensesFiltered = useMemo(() => {
+    return filteredExpensesForStats.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
+  }, [filteredExpensesForStats]);
+
+  const totalInventoryValueFiltered = useMemo(() => {
+    return filteredInventoryForStats.reduce((sum, item) => {
+      const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
+      const price = getPricePerUnitAfter(item);
+      return sum + (stock * price);
+    }, 0);
+  }, [filteredInventoryForStats]);
+
   // Colors for pie chart segments
   const COLORS = ['#dc3545', '#667eea', '#17a2b8', '#28a745', '#ffc107', '#fd7e14', '#6f42c1', '#e83e8c'];
 
@@ -499,7 +634,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
 
   const totalInventoryValue = inventory.reduce((sum, item) => {
     const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
-    const price = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
+    const price = getPricePerUnitAfter(item);
     return sum + (stock * price);
   }, 0);
 
@@ -988,6 +1123,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       pricePerSqft: pricePerSqft,  // Must match API's expected field name
       totalSqftStock: totalSqftStock,  // Must match API's expected field name
       unit: trimmedUnit || 'piece',  // Unit (piece, sqr ft, etc.)
+      hsnNumber: (formData.hsn_number || '').trim() || undefined,  // Optional HSN code
       primaryImageUrl: trimmedImageUrl,  // Must match API's expected field name
       color: trimmedColor,
       labourCharges: labourCharges,
@@ -1067,6 +1203,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         price_per_sqft: '',
         total_sqft_stock: '',
         unit: '',
+        hsn_number: '',
         primary_image_url: '',
         color: '',
         labour_charges: '',
@@ -1103,6 +1240,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       price_per_sqft: item.pricePerSqft || item.price_per_sqft || '',
       total_sqft_stock: item.totalSqftStock || item.total_sqft_stock || '',
       unit: item.unit || '',
+      hsn_number: item.hsnNumber || item.hsn_number || '',
       primary_image_url: item.primaryImageUrl || item.primary_image_url || '',
       color: item.color || '',
       labour_charges: item.labourCharges || item.labour_charges || '',
@@ -1171,6 +1309,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       pricePerSqft: pricePerSqft,
       totalSqftStock: totalSqftStock,
       unit: trimmedUnit || 'piece',  // Unit (piece, sqr ft, etc.)
+      hsnNumber: (formData.hsn_number || '').trim() || undefined,  // Optional HSN code
       primaryImageUrl: trimmedImageUrl,
       color: trimmedColor,
       labourCharges: labourCharges,
@@ -1235,6 +1374,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         price_per_sqft: '',
         total_sqft_stock: '',
         unit: '',
+        hsn_number: '',
         primary_image_url: '',
         color: '',
         labour_charges: '',
@@ -1305,19 +1445,19 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     exportToCSV(csvData, `sales_${new Date().toISOString().split('T')[0]}.csv`, headers);
   };
 
-  // Export inventory to CSV
+  // Export inventory to CSV (Price/Unit and Total Value use per-unit price after all expenses)
   const exportInventoryToCSV = () => {
-    const headers = ['Product Name', 'Product Type', 'Price/Unit', 'Quantity/Stock', 'Color', 'Total Value'];
+    const headers = ['Product Name', 'Product Type', 'Price/Unit (after expenses)', 'Quantity/Stock', 'Color', 'Total Value'];
     const csvData = filteredInventory.map(item => {
-      const pricePerSqft = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
+      const pricePerUnitAfter = getPricePerUnitAfter(item);
       const totalSqftStock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
       return {
         'Product Name': item.name || '',
         'Product Type': item.productType || item.product_type || '',
-        'Price/Unit': pricePerSqft,
+        'Price/Unit (after expenses)': pricePerUnitAfter,
         'Quantity/Stock': totalSqftStock,
         'Color': item.color || '',
-        'Total Value': pricePerSqft * totalSqftStock
+        'Total Value': pricePerUnitAfter * totalSqftStock
       };
     });
     exportToCSV(csvData, `inventory_${new Date().toISOString().split('T')[0]}.csv`, headers);
@@ -1360,13 +1500,74 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             </h3>
           </div>
           <div className="section-toggle-content">
+            <div className="stats-period-filter">
+              <span className="stats-period-label">Show:</span>
+              <div className="stats-period-options">
+                <label className="stats-period-option">
+                  <input
+                    type="radio"
+                    name="statsPeriod"
+                    checked={statsPeriod === 'all'}
+                    onChange={() => setStatsPeriod('all')}
+                  />
+                  <span>All</span>
+                </label>
+                <label className="stats-period-option">
+                  <input
+                    type="radio"
+                    name="statsPeriod"
+                    checked={statsPeriod === 'monthly'}
+                    onChange={() => setStatsPeriod('monthly')}
+                  />
+                  <span>Monthly</span>
+                </label>
+                <label className="stats-period-option">
+                  <input
+                    type="radio"
+                    name="statsPeriod"
+                    checked={statsPeriod === 'range'}
+                    onChange={() => setStatsPeriod('range')}
+                  />
+                  <span>Date range</span>
+                </label>
+              </div>
+              {statsPeriod === 'monthly' && (
+                <div className="stats-period-inputs" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="month"
+                    value={statsMonth}
+                    onChange={(e) => setStatsMonth(e.target.value)}
+                    className="stats-month-input"
+                  />
+                </div>
+              )}
+              {statsPeriod === 'range' && (
+                <div className="stats-period-inputs stats-range-inputs" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="date"
+                    value={statsRangeStart}
+                    onChange={(e) => setStatsRangeStart(e.target.value)}
+                    className="stats-date-input"
+                    placeholder="Start"
+                  />
+                  <span className="stats-range-sep">to</span>
+                  <input
+                    type="date"
+                    value={statsRangeEnd}
+                    onChange={(e) => setStatsRangeEnd(e.target.value)}
+                    className="stats-date-input"
+                    placeholder="End"
+                  />
+                </div>
+              )}
+            </div>
             <div className="stats-grid">
           <div className="stat-card primary">
             <div className="stat-icon">💰</div>
             <div className="stat-content">
               <h3>Total Sales</h3>
-              <p className="stat-value">₹{stats.totalSales.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="stat-label">{stats.totalCount} sale(s)</p>
+              <p className="stat-value">₹{statsFromFiltered.totalSales.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{statsFromFiltered.totalCount} sale(s)</p>
             </div>
           </div>
 
@@ -1374,8 +1575,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             <div className="stat-icon">✓</div>
             <div className="stat-content">
               <h3>Sales with GST</h3>
-              <p className="stat-value">₹{stats.totalWithGST.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="stat-label">{stats.countWithGST} sale(s)</p>
+              <p className="stat-value">₹{statsFromFiltered.totalWithGST.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{statsFromFiltered.countWithGST} sale(s)</p>
             </div>
           </div>
 
@@ -1383,8 +1584,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             <div className="stat-icon">ℹ</div>
             <div className="stat-content">
               <h3>Sales without GST</h3>
-              <p className="stat-value">₹{stats.totalWithoutGST.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="stat-label">{stats.countWithoutGST} sale(s)</p>
+              <p className="stat-value">₹{statsFromFiltered.totalWithoutGST.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{statsFromFiltered.countWithoutGST} sale(s)</p>
             </div>
           </div>
 
@@ -1392,8 +1593,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             <div className="stat-icon">📦</div>
             <div className="stat-content">
               <h3>Inventory Value</h3>
-              <p className="stat-value">₹{totalInventoryValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="stat-label">{inventory.length} item(s)</p>
+              <p className="stat-value">₹{totalInventoryValueFiltered.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{filteredInventoryForStats.length} item(s)</p>
             </div>
           </div>
 
@@ -1401,8 +1602,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             <div className="stat-icon">💵</div>
             <div className="stat-content">
               <h3>Total Expenses</h3>
-              <p className="stat-value">₹{totalExpenses.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="stat-label">{expenses.length} expense(s)</p>
+              <p className="stat-value">₹{totalExpensesFiltered.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p className="stat-label">{filteredExpensesForStats.length} expense(s)</p>
             </div>
           </div>
             </div>
@@ -2041,7 +2242,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   <span className="summary-item">
                     Total Value: ₹{filteredInventory.reduce((sum, item) => {
                       const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
-                      const price = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
+                      const price = getPricePerUnitAfter(item);
                       return sum + (stock * price);
                     }, 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
@@ -2105,8 +2306,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                                 <span className="sort-icon">{inventorySortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                               )}
                             </th>
-                            <th className="sortable" onClick={() => handleSort('pricePerSqft', true)}>
-                              Price/Unit
+                            <th className="sortable" onClick={() => handleSort('pricePerSqft', true)} title="Per unit after all expenses">
+                              Price/Unit (after expenses)
                               {inventorySortConfig.key === 'pricePerSqft' && (
                                 <span className="sort-icon">{inventorySortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                               )}
@@ -2124,11 +2325,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                         </thead>
                       <tbody>
                         {paginatedInventory.map((item, index) => {
-                        const pricePerSqft = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
+                        const pricePerUnitAfter = getPricePerUnitAfter(item);
                         const totalSqftStock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
                         const productType = item.productType || item.product_type || item.category || '-';
                         const primaryImageUrl = item.primaryImageUrl || item.primary_image_url;
-                        const totalValue = totalSqftStock * pricePerSqft;
+                        const totalValue = totalSqftStock * pricePerUnitAfter;
                         const isLowStock = totalSqftStock < 10;
                         
                         return (
@@ -2151,7 +2352,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                             <td>
                               <span className="product-type-badge">{productType}</span>
                             </td>
-                            <td className="amount-cell">₹{pricePerSqft.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td className="amount-cell">₹{pricePerUnitAfter.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                             <td className={isLowStock ? 'low-stock-cell' : 'stock-cell'}>
                               {isLowStock && <span className="low-stock-indicator">⚠️ </span>}
                               {totalSqftStock.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -2198,11 +2399,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   {/* Mobile Card View for Inventory */}
                   <div className="mobile-inventory-cards">
                     {paginatedInventory.map((item, index) => {
-                      const pricePerSqft = item.pricePerSqft || item.price_per_sqft || item.pricePerUnit || item.unitPrice || 0;
+                      const pricePerUnitAfter = getPricePerUnitAfter(item);
                       const totalSqftStock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
                       const productType = item.productType || item.product_type || item.category || '-';
                       const primaryImageUrl = item.primaryImageUrl || item.primary_image_url;
-                      const totalValue = totalSqftStock * pricePerSqft;
+                      const totalValue = totalSqftStock * pricePerUnitAfter;
                       const isLowStock = totalSqftStock < 10;
                       
                       return (
@@ -2227,8 +2428,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                           </div>
                           <div className="inventory-card-body">
                             <div className="inventory-card-row">
-                              <span className="inventory-card-label">Price/Unit:</span>
-                              <span className="inventory-card-value">₹{pricePerSqft.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              <span className="inventory-card-label">Price/Unit (after expenses):</span>
+                              <span className="inventory-card-value">₹{pricePerUnitAfter.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             </div>
                             <div className="inventory-card-row">
                               <span className="inventory-card-label">Quantity/Stock:</span>
@@ -2414,21 +2615,23 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   <small className="form-help">URL-friendly version (auto-generated from product name)</small>
                 </div>
                 <div className="form-group">
-                  <label>Product Type *</label>
+                  <label>Product Type / Category *</label>
                   <select
                     name="product_type"
                     value={formData.product_type}
                     onChange={handleInputChange}
                     required
                   >
-                    <option value="">Select Product Type</option>
-                    <option value="table">Table</option>
-                    <option value="chair">Chair</option>
-                    <option value="marble">Marble</option>
-                    <option value="tiles">Tiles</option>
-                    <option value="counter top">Counter Top</option>
-                    <option value="granite">Granite</option>
-                    <option value="other">Other</option>
+                    <option value="">Select Category</option>
+                    {categories.filter(c => c.is_active !== false).map((cat) => (
+                      <option key={cat.id} value={cat.name || cat.category_type || ''}>
+                        {cat.name || cat.category_type || 'Unnamed'}
+                      </option>
+                    ))}
+                    {formData.product_type && !categories.some(c => (c.name || c.category_type) === formData.product_type) && (
+                      <option value={formData.product_type}>{formData.product_type}</option>
+                    )}
+                    {categories.length === 0 && <option value="other">Other</option>}
                   </select>
                 </div>
                 <div className="form-row">
@@ -2467,6 +2670,17 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                       onChange={handleInputChange}
                       maxLength="20"
                       placeholder="e.g., piece, sqr ft, kg, meter"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>HSN Number (optional)</label>
+                    <input
+                      type="text"
+                      name="hsn_number"
+                      value={formData.hsn_number}
+                      onChange={handleInputChange}
+                      maxLength="10"
+                      placeholder="e.g., 2515, 6802"
                     />
                   </div>
                 </div>
@@ -2751,12 +2965,16 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             product_type: '',
             price_per_sqft: '',
             total_sqft_stock: '',
+            unit: '',
+            hsn_number: '',
             primary_image_url: '',
             color: '',
             labour_charges: '',
             rto_fees: '',
             damage_expenses: '',
-            others_expenses: ''
+            others_expenses: '',
+            transportation_charge: '',
+            gst_charges: ''
           });
         }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -2771,12 +2989,16 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   product_type: '',
                   price_per_sqft: '',
                   total_sqft_stock: '',
+                  unit: '',
+                  hsn_number: '',
                   primary_image_url: '',
                   color: '',
                   labour_charges: '',
                   rto_fees: '',
                   damage_expenses: '',
-                  others_expenses: ''
+                  others_expenses: '',
+                  transportation_charge: '',
+                  gst_charges: ''
                 });
               }}>×</button>
             </div>
@@ -2808,21 +3030,23 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   <small className="form-help">URL-friendly version (auto-generated from product name)</small>
                 </div>
                 <div className="form-group">
-                  <label>Product Type *</label>
+                  <label>Product Type / Category *</label>
                   <select
                     name="product_type"
                     value={formData.product_type}
                     onChange={handleInputChange}
                     required
                   >
-                    <option value="">Select Product Type</option>
-                    <option value="table">Table</option>
-                    <option value="chair">Chair</option>
-                    <option value="marble">Marble</option>
-                    <option value="tiles">Tiles</option>
-                    <option value="counter top">Counter Top</option>
-                    <option value="granite">Granite</option>
-                    <option value="other">Other</option>
+                    <option value="">Select Category</option>
+                    {categories.filter(c => c.is_active !== false).map((cat) => (
+                      <option key={cat.id} value={cat.name || cat.category_type || ''}>
+                        {cat.name || cat.category_type || 'Unnamed'}
+                      </option>
+                    ))}
+                    {formData.product_type && !categories.some(c => (c.name || c.category_type) === formData.product_type) && (
+                      <option value={formData.product_type}>{formData.product_type}</option>
+                    )}
+                    {categories.length === 0 && <option value="other">Other</option>}
                   </select>
                 </div>
                 <div className="form-row">
@@ -2861,6 +3085,17 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                       onChange={handleInputChange}
                       maxLength="20"
                       placeholder="e.g., piece, sqr ft, kg, meter"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>HSN Number (optional)</label>
+                    <input
+                      type="text"
+                      name="hsn_number"
+                      value={formData.hsn_number}
+                      onChange={handleInputChange}
+                      maxLength="10"
+                      placeholder="e.g., 2515, 6802"
                     />
                   </div>
                 </div>

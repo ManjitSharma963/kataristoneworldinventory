@@ -13,7 +13,6 @@ const HomeScreenManagement = () => {
   const [editingHero, setEditingHero] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
   const [toast, setToast] = useState(null);
-
   // Hero slide form data
   const [heroFormData, setHeroFormData] = useState({
     image_url: '',

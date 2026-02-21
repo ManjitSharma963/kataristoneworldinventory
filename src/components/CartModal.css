@@ -306,25 +306,28 @@
 }
 
 .qty-input {
-  width: 60px;
-  padding: 6px;
+  width: 96px;
+  min-width: 96px;
+  padding: 10px 12px;
   border: none;
-  border-radius: 8px;
+  border-radius: 12px;
   text-align: center;
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   font-weight: 600;
   background: #e0e5ec;
   color: #333;
   box-shadow: 
-    inset 2px 2px 4px rgba(163, 177, 198, 0.5),
-    inset -2px -2px 4px rgba(255, 255, 255, 0.7);
+    inset 4px 4px 8px rgba(163, 177, 198, 0.5),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.8);
+  transition: box-shadow 0.2s ease, background 0.2s ease;
 }
 
 .qty-input:focus {
   outline: none;
+  background: #e8ecf1;
   box-shadow: 
-    inset 3px 3px 6px rgba(163, 177, 198, 0.6),
-    inset -3px -3px 6px rgba(255, 255, 255, 0.8);
+    inset 5px 5px 10px rgba(163, 177, 198, 0.6),
+    inset -5px -5px 10px rgba(255, 255, 255, 0.9);
 }
 
 /* Cart Summary */
@@ -368,38 +371,53 @@
   gap: 8px;
 }
 
+/* Shared input styling (summary + cart item inputs) */
+.cart-modal input[type="text"],
+.cart-modal input[type="number"],
+.tax-input,
+.discount-input,
+.mobile-input,
+.price-input,
+.styled-input,
+.bill-type-select {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 12px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #333;
+  background: #e0e5ec;
+  box-shadow: 
+    inset 4px 4px 8px rgba(163, 177, 198, 0.5),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.8);
+  transition: box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.cart-modal input[type="text"]:focus,
+.cart-modal input[type="number"]:focus,
+.tax-input:focus,
+.discount-input:focus,
+.mobile-input:focus,
+.price-input:focus,
+.styled-input:focus,
+.bill-type-select:focus {
+  outline: none;
+  background: #e8ecf1;
+  box-shadow: 
+    inset 5px 5px 10px rgba(163, 177, 198, 0.6),
+    inset -5px -5px 10px rgba(255, 255, 255, 0.9);
+}
+
+.cart-modal input[type="text"]::placeholder,
+.cart-modal input[type="number"]::placeholder {
+  color: #999;
+}
+
 .tax-input-wrapper,
 .discount-input-wrapper {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.tax-input,
-.discount-input,
-.mobile-input,
-.bill-type-select {
-  padding: 6px 10px;
-  border: none;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  background: #e0e5ec;
-  color: #333;
-  box-shadow: 
-    inset 2px 2px 4px rgba(163, 177, 198, 0.5),
-    inset -2px -2px 4px rgba(255, 255, 255, 0.7);
-  transition: all 0.3s ease;
-}
-
-.tax-input:focus,
-.discount-input:focus,
-.mobile-input:focus,
-.bill-type-select:focus {
-  outline: none;
-  box-shadow: 
-    inset 3px 3px 6px rgba(163, 177, 198, 0.6),
-    inset -3px -3px 6px rgba(255, 255, 255, 0.8);
 }
 
 .tax-input {
@@ -414,11 +432,20 @@
 
 .mobile-input {
   width: 140px;
+  min-width: 140px;
 }
 
 .bill-type-select {
   width: 120px;
   cursor: pointer;
+}
+
+/* Cart item price input (e.g. "2650") */
+.price-input,
+.styled-input {
+  width: 100%;
+  max-width: 120px;
+  text-align: left;
 }
 
 .tax-amount,

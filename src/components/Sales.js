@@ -10,6 +10,7 @@ import { Calendar } from 'primereact/calendar';
 import { Button } from 'primereact/button';
 import { Tag } from 'primereact/tag';
 import { FilterMatchMode, FilterOperator } from 'primereact/api';
+import { Dialog } from 'primereact/dialog';
 import './Sales.css';
 
 const Sales = () => {
@@ -31,6 +32,9 @@ const Sales = () => {
     { label: 'GST', value: 'GST' },
     { label: 'NON-GST', value: 'NON-GST' }
   ];
+
+  const [isBillPopupVisible, setBillPopupVisible] = useState(false);
+  const [selectedBill, setSelectedBill] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -177,28 +181,48 @@ const Sales = () => {
 
   const actionsBodyTemplate = (rowData) => {
     return (
-      <Button
-        icon="pi pi-download"
-        rounded
-        outlined
-        severity="secondary"
-        onClick={async () => {
-          try {
-            console.log('[Sales] Downloading PDF for bill:', {
-              id: rowData.id,
-              billType: rowData.billType,
-              billNumber: rowData.billNumber
-            });
-            await downloadBillPDF(rowData.id, rowData.billType);
-          } catch (error) {
-            console.error('[Sales] PDF download error:', error);
-            const errorMessage = error.message || 'Unknown error occurred';
-            alert(`Failed to download bill PDF:\n\n${errorMessage}\n\nPlease check:\n1. Backend server is running\n2. Bill data is complete\n3. Backend logs for details`);
-          }
-        }}
-        title="Download Bill PDF"
-      />
+      <div className="actions-buttons">
+        <Button
+          icon="pi pi-eye"
+          rounded
+          outlined
+          severity="info"
+          onClick={() => handleViewBillDetails(rowData)}
+          title="View Bill Details"
+        />
+        <Button
+          icon="pi pi-download"
+          rounded
+          outlined
+          severity="secondary"
+          onClick={async () => {
+            try {
+              console.log('[Sales] Downloading PDF for bill:', {
+                id: rowData.id,
+                billType: rowData.billType,
+                billNumber: rowData.billNumber
+              });
+              await downloadBillPDF(rowData.id, rowData.billType);
+            } catch (error) {
+              console.error('[Sales] PDF download error:', error);
+              const errorMessage = error.message || 'Unknown error occurred';
+              alert(`Failed to download bill PDF:\n\n${errorMessage}\n\nPlease check:\n1. Backend server is running\n2. Bill data is complete\n3. Backend logs for details`);
+            }
+          }}
+          title="Download Bill PDF"
+        />
+      </div>
     );
+  };
+
+  const handleViewBillDetails = (bill) => {
+    setSelectedBill(bill);
+    setBillPopupVisible(true);
+  };
+
+  const closeBillPopup = () => {
+    setBillPopupVisible(false);
+    setSelectedBill(null);
   };
 
   // Filter templates for row-based filtering
@@ -328,6 +352,104 @@ const Sales = () => {
           </DataTable>
         </div>
       </div>
+
+      {/* Bill Details Popup */}
+      <Dialog
+        header="Bill Details"
+        visible={isBillPopupVisible}
+        style={{ width: '70vw' }}
+        onHide={closeBillPopup}
+        className="bill-details-dialog"
+        contentClassName="bill-details-dialog-content"
+      >
+        {selectedBill ? (
+          <div className="bill-details">
+            <h3>Invoice No: {selectedBill.billNumber}</h3>
+            <div className="bill-customer-details">
+              <div className="detail-row">
+                <span className="label">Name:</span>
+                <span className="value">{selectedBill.originalSale.customerName}</span>
+              </div>
+              <div className="detail-row">
+                <span className="label">Mobile:</span>
+                <span className="value">{selectedBill.customerNumber}</span>
+              </div>
+              <div className="detail-row">
+                <span className="label">Address:</span>
+                <span className="value">{selectedBill.originalSale.address}</span>
+              </div>
+              <div className="detail-row">
+                <span className="label">Date:</span>
+                <span className="value">{formatDate(selectedBill.billDate)}</span>
+              </div>
+            </div>
+
+            <table className="bill-table">
+              <thead>
+                <tr>
+                  <th>Sr. No.</th>
+                  <th>Item Description</th>
+                  <th>Quantity</th>
+                  <th>Rate</th>
+                  <th>Amount (₹)</th>
+                  <th>Purchase Price (₹)</th>
+                  <th>Total Purchase Amount (₹)</th>
+                  <th>Gross Profit (₹)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedBill.originalSale.items.map((item, index) => {
+                  const grossProfit = (item.pricePerUnit - item.purchasePrice) * item.quantity;
+                  return (
+                    <tr key={index}>
+                      <td>{index + 1}</td>
+                      <td>{item.itemName || item.description || 'N/A'}</td>
+                      <td>{item.quantity} ({item.unit || 'unit'})</td>
+                      <td>₹ {item.pricePerUnit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                      <td>₹ {(item.pricePerUnit * item.quantity).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                      <td>₹ {item.purchasePrice ? item.purchasePrice.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : 'N/A'}</td>
+                      <td>₹ {item.purchasePrice ? (item.purchasePrice * item.quantity).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : 'N/A'}</td>
+                      <td>₹ {grossProfit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan="4" style={{ textAlign: 'right', fontWeight: 'bold' }}>Subtotal for Sale:</td>
+                  <td colSpan="3"></td>
+                  <td style={{ fontWeight: 'bold', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    ₹ {selectedBill.originalSale.items.reduce((total, item) => {
+                      return total + (item.pricePerUnit * item.quantity);
+                    }, 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+                <tr>
+                  <td colSpan="4" style={{ textAlign: 'right', fontWeight: 'bold' }}>Total Gross Profit:</td>
+                  <td colSpan="3"></td>
+                  <td style={{ fontWeight: 'bold', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    ₹ {selectedBill.originalSale.items.reduce((total, item) => {
+                      const grossProfit = (item.pricePerUnit - item.purchasePrice) * item.quantity;
+                      return total + grossProfit;
+                    }, 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+
+            <div className="bill-summary">
+              <p><strong>Discount Amount:</strong> ₹ {selectedBill.originalSale.discountAmount.toLocaleString('en-IN')}</p>
+              <p><strong>Labour Charge:</strong> ₹ {selectedBill.originalSale.labourCharge.toLocaleString('en-IN')}</p>
+              <p><strong>Transportation Charge:</strong> ₹ {selectedBill.originalSale.transportationCharge.toLocaleString('en-IN')}</p>
+              <p><strong>Other Expense:</strong> ₹ {(selectedBill.originalSale.otherExpenses ?? selectedBill.originalSale.otherExpense ?? 0).toLocaleString('en-IN')}</p>
+              <p><strong>GST Value:</strong> ₹ {(selectedBill.isGST ? (selectedBill.gstAmount ?? selectedBill.originalSale?.taxAmount ?? 0) : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+              <p><strong>Total Amount:</strong> ₹ {selectedBill.totalAmount.toLocaleString('en-IN')}</p>
+            </div>
+          </div>
+        ) : (
+          <p>No bill details available.</p>
+        )}
+      </Dialog>
     </div>
   );
 };

@@ -1,9 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { getInventory, addInventoryItem, updateInventoryItem, deleteInventoryItem } from '../utils/storage';
+import { API_BASE_URL } from '../config/api';
+import { handleApiResponse } from '../utils/api';
 import './Inventory.css';
 
 const Inventory = () => {
   const [inventory, setInventory] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [formData, setFormData] = useState({
@@ -11,12 +14,37 @@ const Inventory = () => {
     description: '',
     quantity: '',
     unitPrice: '',
-    category: ''
+    category: '',
+    hsnNumber: ''
   });
+
+  const fetchCategories = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const response = await fetch(`${API_BASE_URL}/categories`, { headers });
+      if (response.status === 401) {
+        await handleApiResponse(response);
+        return;
+      }
+      if (response.ok) {
+        const data = await response.json();
+        setCategories(Array.isArray(data) ? data : []);
+      }
+    } catch (error) {
+      console.error('Error fetching categories:', error);
+      setCategories([]);
+    }
+  }, []);
 
   useEffect(() => {
     loadInventory();
   }, []);
+
+  useEffect(() => {
+    fetchCategories();
+  }, [fetchCategories]);
 
   const loadInventory = () => {
     setInventory(getInventory());
@@ -37,7 +65,8 @@ const Inventory = () => {
       description: formData.description,
       quantity: parseFloat(formData.quantity) || 0,
       unitPrice: parseFloat(formData.unitPrice) || 0,
-      category: formData.category
+      category: formData.category,
+      hsnNumber: (formData.hsnNumber || '').trim() || undefined
     };
 
     if (editingItem) {
@@ -58,7 +87,8 @@ const Inventory = () => {
       description: item.description || '',
       quantity: item.quantity || '',
       unitPrice: item.unitPrice || '',
-      category: item.category || ''
+      category: item.category || '',
+      hsnNumber: item.hsnNumber || ''
     });
     setShowForm(true);
   };
@@ -76,7 +106,8 @@ const Inventory = () => {
       description: '',
       quantity: '',
       unitPrice: '',
-      category: ''
+      category: '',
+      hsnNumber: ''
     });
     setShowForm(false);
     setEditingItem(null);
@@ -145,12 +176,31 @@ const Inventory = () => {
               </div>
               <div className="form-group">
                 <label>Category</label>
-                <input
-                  type="text"
+                <select
                   name="category"
                   value={formData.category}
                   onChange={handleInputChange}
-                  placeholder="e.g., Stone, Tile, etc."
+                >
+                  <option value="">Select Category</option>
+                  {categories.filter(c => c.is_active !== false).map((cat) => (
+                    <option key={cat.id} value={cat.name || cat.category_type || ''}>
+                      {cat.name || cat.category_type || 'Unnamed'}
+                    </option>
+                  ))}
+                  {formData.category && !categories.some(c => (c.name || c.category_type) === formData.category) && (
+                    <option value={formData.category}>{formData.category}</option>
+                  )}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>HSN Number (optional)</label>
+                <input
+                  type="text"
+                  name="hsnNumber"
+                  value={formData.hsnNumber}
+                  onChange={handleInputChange}
+                  placeholder="e.g., 2515, 6802"
+                  maxLength={10}
                 />
               </div>
             </div>
@@ -184,6 +234,7 @@ const Inventory = () => {
               <th>Name</th>
               <th>Description</th>
               <th>Category</th>
+              <th>HSN</th>
               <th>Quantity</th>
               <th>Unit Price</th>
               <th>Total Value</th>
@@ -193,7 +244,7 @@ const Inventory = () => {
           <tbody>
             {inventory.length === 0 ? (
               <tr>
-                <td colSpan="7" className="empty-state">No items in inventory</td>
+                <td colSpan="8" className="empty-state">No items in inventory</td>
               </tr>
             ) : (
               inventory.map(item => (
@@ -201,6 +252,7 @@ const Inventory = () => {
                   <td>{item.name}</td>
                   <td>{item.description || '-'}</td>
                   <td>{item.category || '-'}</td>
+                  <td>{item.hsnNumber || '-'}</td>
                   <td>{item.quantity}</td>
                   <td>₹{item.unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   <td>₹{(item.quantity * item.unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>

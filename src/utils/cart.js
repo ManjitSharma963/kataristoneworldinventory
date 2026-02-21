@@ -63,7 +63,9 @@ export const updateCartItemQuantity = (productId, quantity) => {
   const item = cart.find(item => item.id === productId);
   if (item) {
     const maxQuantity = item.totalSqft || 999999;
-    item.quantity = Math.min(Math.max(1, quantity), maxQuantity);
+    const num = typeof quantity === 'number' ? quantity : parseFloat(quantity);
+    const clamped = Math.min(Math.max(0.01, isNaN(num) ? 0.01 : num), maxQuantity);
+    item.quantity = Math.round(clamped * 100) / 100; // allow decimals, 2 places
     item.sqftOrdered = item.quantity; // For compatibility
     saveCart(cart);
   }
