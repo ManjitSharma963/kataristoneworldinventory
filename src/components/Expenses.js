@@ -696,8 +696,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       paymentMethod: data.paymentMethod
     };
 
-    alert('Data being sent:\n\n' + JSON.stringify(expenseData, null, 2));
-
     try {
       setSubmittingExpense(true);
       if (editingExpense) {
