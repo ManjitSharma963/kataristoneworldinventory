@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { getCart, removeFromCart, updateCartItemQuantity, clearCart, getCartCount, getCartTotal } from '../utils/cart';
+import { getCart, saveCart, removeFromCart, updateCartItemQuantity, clearCart, getCartCount, getCartTotal } from '../utils/cart';
 import { API_BASE_URL } from '../config/api';
-import { handleApiResponse } from '../utils/api';
+import { handleApiResponse, isAdmin } from '../utils/api';
 import { Button } from 'primereact/button';
 import { InputText } from 'primereact/inputtext';
 import { Toast } from 'primereact/toast';
@@ -142,7 +142,16 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   }, [otherExpense]);
 
   const loadCart = () => {
-    const cartItems = getCart();
+    let cartItems = getCart();
+    // For user (employee) role only: default price to 0 so they enter daily price in cart
+    if (!isAdmin()) {
+      cartItems = cartItems.map((item) => ({
+        ...item,
+        pricePerSqftAfter: 0,
+        price: 0
+      }));
+      saveCart(cartItems);
+    }
     setCart(cartItems);
     setCartCount(getCartCount());
   };
@@ -528,11 +537,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                         updatedPrice = parseFloat(updatedPrice) || 0;
                         const updatedCart = cart.map((cartItem) => {
                           if (cartItem.id === item.id) {
-                            return { ...cartItem, pricePerSqftAfter: updatedPrice };
+                            return { ...cartItem, pricePerSqftAfter: updatedPrice, price: updatedPrice };
                           }
                           return cartItem;
                         });
                         setCart(updatedCart);
+                        if (!isAdmin()) saveCart(updatedCart);
                       }}
                       className="price-input styled-input"
                       placeholder="Enter price"

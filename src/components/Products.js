@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../config/api';
-import { handleApiResponse } from '../utils/api';
+import { handleApiResponse, isAdmin } from '../utils/api';
 import { addToCart, getCartCount } from '../utils/cart';
 import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
@@ -31,7 +31,9 @@ const Products = () => {
 
   const handleAddToCart = (product) => {
     try {
-      addToCart(product, 1);
+      // For user (employee) role, don't send price so they enter it at billing
+      const productForCart = isAdmin() ? product : { ...product, pricePerSqftAfter: 0, pricePerSqft: 0, price: 0 };
+      addToCart(productForCart, 1);
       updateCartCount();
       if (toast.current) {
         toast.current.show({
@@ -170,10 +172,12 @@ const Products = () => {
                         <span style={{ textTransform: 'capitalize' }}>{productColor}</span>
                       )}
                     </div>
-                    <div className="product-price">
-                      ₹{price.toLocaleString('en-IN')}
-                      <span className="price-unit">/ {unit}</span>
-                    </div>
+                    {isAdmin() && (
+                      <div className="product-price">
+                        ₹{price.toLocaleString('en-IN')}
+                        <span className="price-unit">/ {unit}</span>
+                      </div>
+                    )}
                     {stock > 0 && (
                       <div className="product-stock">
                         <i className="pi pi-warehouse"></i>
