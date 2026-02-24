@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../config/api';
-import { handleApiResponse, isAdmin } from '../utils/api';
+import { handleApiResponse, isAdmin, getInventoryEndpoint } from '../utils/api';
 import { addToCart, getCartCount } from '../utils/cart';
 import { Button } from 'primereact/button';
 import { Toast } from 'primereact/toast';
@@ -74,7 +74,7 @@ const Products = () => {
         headers['Authorization'] = `Bearer ${token}`;
       }
       
-      const response = await fetch(`${API_BASE_URL}/inventory`, {
+      const response = await fetch(`${API_BASE_URL}${getInventoryEndpoint()}`, {
         method: 'GET',
         headers: headers
       });

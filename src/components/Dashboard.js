@@ -3,7 +3,7 @@ import { getInventory, getExpenses, getSales } from '../utils/storage';
 import Expenses from './Expenses';
 import Invoice from './Invoice';
 import HomeScreenManagement from './HomeScreenManagement';
-import { downloadBillPDF, handleApiResponse } from '../utils/api';
+import { downloadBillPDF, handleApiResponse, getInventoryEndpoint } from '../utils/api';
 import { fetchExpenses as apiFetchExpenses } from '../utils/api';
 import { API_BASE_URL } from '../config/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -169,7 +169,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
-      const response = await fetch(`${API_BASE_URL}/inventory`, {
+      const response = await fetch(`${API_BASE_URL}${getInventoryEndpoint()}`, {
         method: 'GET',
         headers: headers
       });

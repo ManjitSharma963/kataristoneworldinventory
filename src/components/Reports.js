@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { fetchExpenses as apiFetchExpenses, handleApiResponse } from '../utils/api';
+import { fetchExpenses as apiFetchExpenses, handleApiResponse, getInventoryEndpoint } from '../utils/api';
 import { API_BASE_URL } from '../config/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import Loading from './Loading';
@@ -60,7 +60,7 @@ const Reports = () => {
       if (token) {
         inventoryHeaders['Authorization'] = `Bearer ${token}`;
       }
-      const inventoryResponse = await fetch(`${API_BASE_URL}/inventory`, {
+      const inventoryResponse = await fetch(`${API_BASE_URL}${getInventoryEndpoint()}`, {
         method: 'GET',
         headers: inventoryHeaders
       });

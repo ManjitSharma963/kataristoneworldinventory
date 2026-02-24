@@ -466,6 +466,22 @@ export const getCurrentUser = () => {
   return userStr ? JSON.parse(userStr) : null;
 };
 
+/**
+ * Build inventory endpoint with user and location query params for filtered fetch
+ * @returns {string} e.g. '/inventory' or '/inventory?userId=3&location=Bhondsi'
+ */
+export const getInventoryEndpoint = () => {
+  const user = getCurrentUser();
+  if (!user) return '/inventory';
+  const params = new URLSearchParams();
+  const userId = user.userId ?? user.id;
+  if (userId != null && userId !== '') params.set('userId', String(userId));
+  const location = user.location ?? user.userLocation;
+  if (location) params.set('location', String(location).trim());
+  const qs = params.toString();
+  return qs ? `/inventory?${qs}` : '/inventory';
+};
+
 // Helper function to check if user is admin
 export const isAdmin = () => {
   const user = getCurrentUser();
