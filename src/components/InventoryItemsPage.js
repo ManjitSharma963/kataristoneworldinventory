@@ -27,12 +27,42 @@ const exportToCSV = (data, filename, headers) => {
   URL.revokeObjectURL(url);
 };
 
+const initialFormData = {
+  name: '',
+  slug: '',
+  product_type: '',
+  price_per_sqft: '',
+  total_sqft_stock: '',
+  unit: '',
+  hsn_number: '',
+  primary_image_url: '',
+  color: '',
+  labour_charges: '',
+  rto_fees: '',
+  damage_expenses: '',
+  others_expenses: '',
+  transportation_charge: '',
+  gst_charges: ''
+};
+
+const generateSlug = (text) => {
+  return (text || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/[\s_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+};
+
 const InventoryItemsPage = () => {
   const [inventory, setInventory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+  const [showAddInventory, setShowAddInventory] = useState(false);
+  const [formData, setFormData] = useState(initialFormData);
+  const [categories, setCategories] = useState([]);
 
   const fetchInventory = useCallback(async () => {
     try {
@@ -71,6 +101,143 @@ const InventoryItemsPage = () => {
   useEffect(() => {
     fetchInventory();
   }, [fetchInventory]);
+
+  const fetchCategories = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const response = await fetch(`${API_BASE_URL}/categories`, { headers });
+      if (response.ok) {
+        const data = await response.json();
+        setCategories(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error('Error fetching categories:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCategories();
+  }, [fetchCategories]);
+
+  const calculatePricePerSqft = (data) => {
+    const pricePerSqft = parseFloat(data.price_per_sqft) || 0;
+    const totalSqftStock = parseFloat(data.total_sqft_stock) || 0;
+    const labourCharges = parseFloat(data.labour_charges) || 0;
+    const rtoFees = parseFloat(data.rto_fees) || 0;
+    const damageExpenses = parseFloat(data.damage_expenses) || 0;
+    const othersExpenses = parseFloat(data.others_expenses) || 0;
+    const transportationCharge = parseFloat(data.transportation_charge) || 0;
+    const gstCharges = parseFloat(data.gst_charges) || 0;
+    const pricePerSqftBefore = pricePerSqft;
+    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses + transportationCharge + gstCharges;
+    const pricePerSqftAfter = totalSqftStock > 0
+      ? (pricePerSqft * totalSqftStock + totalExpenses) / totalSqftStock
+      : pricePerSqft;
+    return {
+      pricePerSqftBefore: pricePerSqftBefore.toFixed(2),
+      pricePerSqftAfter: pricePerSqftAfter.toFixed(2)
+    };
+  };
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => {
+      const newData = { ...prev, [name]: value };
+      if (name === 'name') newData.slug = generateSlug(value);
+      return newData;
+    });
+  };
+
+  const handleAddInventory = async (e) => {
+    e.preventDefault();
+    if (!formData.name || !formData.product_type || !formData.price_per_sqft || !formData.total_sqft_stock || !formData.primary_image_url) {
+      alert('Please fill all required fields');
+      return;
+    }
+    const pricePerSqft = parseFloat(formData.price_per_sqft);
+    const totalSqftStock = parseFloat(formData.total_sqft_stock);
+    if (isNaN(pricePerSqft) || pricePerSqft < 0) {
+      alert('Please enter a valid price per unit');
+      return;
+    }
+    if (isNaN(totalSqftStock) || totalSqftStock < 0) {
+      alert('Please enter a valid quantity/stock');
+      return;
+    }
+    const trimmedName = formData.name.trim();
+    const trimmedSlug = (formData.slug || generateSlug(formData.name)).trim();
+    const trimmedProductType = formData.product_type.trim();
+    const trimmedImageUrl = formData.primary_image_url.trim();
+    const trimmedColor = (formData.color || '').trim();
+    if (!trimmedName || !trimmedProductType || !trimmedImageUrl) {
+      alert('Please fill all required fields (name, product type, and image URL cannot be empty)');
+      return;
+    }
+    const trimmedUnit = (formData.unit || '').trim();
+    const labourCharges = parseFloat(formData.labour_charges) || 0;
+    const rtoFees = parseFloat(formData.rto_fees) || 0;
+    const damageExpenses = parseFloat(formData.damage_expenses) || 0;
+    const othersExpenses = parseFloat(formData.others_expenses) || 0;
+    const transportationCharge = parseFloat(formData.transportation_charge) || 0;
+    const gstCharges = parseFloat(formData.gst_charges) || 0;
+    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses + transportationCharge + gstCharges;
+    const pricePerSqftAfter = totalSqftStock > 0
+      ? (pricePerSqft * totalSqftStock + totalExpenses) / totalSqftStock
+      : pricePerSqft;
+    const itemData = {
+      name: trimmedName,
+      slug: trimmedSlug,
+      productTypeString: trimmedProductType,
+      pricePerSqft: pricePerSqft,
+      totalSqftStock: totalSqftStock,
+      unit: trimmedUnit || 'piece',
+      hsnNumber: (formData.hsn_number || '').trim() || undefined,
+      primaryImageUrl: trimmedImageUrl,
+      color: trimmedColor,
+      labourCharges,
+      rtoFees,
+      damageExpenses,
+      othersExpenses,
+      transportationCharge,
+      gstCharges,
+      pricePerSqftAfter: parseFloat(pricePerSqftAfter.toFixed(2))
+    };
+    try {
+      const token = localStorage.getItem('authToken');
+      const userData = JSON.parse(localStorage.getItem('user') || '{}');
+      const userRole = userData?.role || userData?.userRole || 'admin';
+      const requestBody = { ...itemData, role: userRole, userRole: userRole };
+      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const response = await fetch(`${API_BASE_URL}/inventory`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody)
+      });
+      if (response.status === 401) {
+        await handleApiResponse(response);
+        return;
+      }
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+          errorData = { message: errorText || 'Failed to add inventory item' };
+        }
+        throw new Error(errorData.message || `Server error: ${response.status}`);
+      }
+      setFormData(initialFormData);
+      setShowAddInventory(false);
+      await fetchInventory();
+    } catch (err) {
+      console.error(err);
+      alert(err.message || 'Failed to add inventory item');
+    }
+  };
 
   const handleSort = (key) => {
     setSortConfig(prev => ({
@@ -171,7 +338,7 @@ const InventoryItemsPage = () => {
               <button type="button" className="btn btn-export" onClick={handleExportCSV} title="Export to CSV">📥 Export CSV</button>
             </>
           )}
-          <button type="button" className="btn btn-primary" onClick={() => alert('Go to Dashboard → Inventory to add or edit items.')}>
+          <button type="button" className="btn btn-primary" onClick={() => setShowAddInventory(true)}>
             + Add Inventory
           </button>
         </div>
@@ -200,7 +367,8 @@ const InventoryItemsPage = () => {
           <div className="empty-state-wrapper">
             <span className="empty-icon">📦</span>
             <p className="empty-state">No inventory items yet</p>
-            <p className="empty-subtitle">Use Dashboard → Inventory to add items, or add here when available.</p>
+            <p className="empty-subtitle">Click &quot;+ Add Inventory&quot; to add your first item.</p>
+            <button type="button" className="btn btn-primary" onClick={() => setShowAddInventory(true)}>+ Add Inventory</button>
           </div>
         ) : filteredInventory.length === 0 ? (
           <div className="empty-state-wrapper">
@@ -280,6 +448,249 @@ const InventoryItemsPage = () => {
           </>
         )}
       </div>
+
+      {showAddInventory && (
+        <div className="modal-overlay" onClick={() => setShowAddInventory(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Add New Inventory Item</h3>
+              <button className="modal-close" onClick={() => setShowAddInventory(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={handleAddInventory}>
+                <div className="form-group">
+                  <label>Product Name *</label>
+                  <input
+                    type="text"
+                    name="name"
+                    value={formData.name}
+                    onChange={handleInputChange}
+                    maxLength="200"
+                    placeholder="e.g., Carrara White Marble"
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Slug *</label>
+                  <input
+                    type="text"
+                    name="slug"
+                    value={formData.slug}
+                    onChange={handleInputChange}
+                    maxLength="250"
+                    placeholder="e.g., carrara-white-marble"
+                    required
+                  />
+                  <small className="form-help">URL-friendly version (auto-generated from product name)</small>
+                </div>
+                <div className="form-group">
+                  <label>Product Type / Category *</label>
+                  <select
+                    name="product_type"
+                    value={formData.product_type}
+                    onChange={handleInputChange}
+                    required
+                  >
+                    <option value="">Select Category</option>
+                    {categories.filter(c => c.is_active !== false).map((cat) => (
+                      <option key={cat.id} value={cat.name || cat.category_type || ''}>
+                        {cat.name || cat.category_type || 'Unnamed'}
+                      </option>
+                    ))}
+                    {formData.product_type && !categories.some(c => (c.name || c.category_type) === formData.product_type) && (
+                      <option value={formData.product_type}>{formData.product_type}</option>
+                    )}
+                    {categories.length === 0 && <option value="other">Other</option>}
+                  </select>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Price Per Sqr Ft (Before Extra Expenses) (₹) *</label>
+                    <input
+                      type="number"
+                      name="price_per_sqft"
+                      value={formData.price_per_sqft}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="e.g., 180.00"
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Quantity/Stock *</label>
+                    <input
+                      type="number"
+                      name="total_sqft_stock"
+                      value={formData.total_sqft_stock}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="e.g., 150.00"
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Unit</label>
+                    <input
+                      type="text"
+                      name="unit"
+                      value={formData.unit}
+                      onChange={handleInputChange}
+                      maxLength="20"
+                      placeholder="e.g., piece, sqr ft, kg, meter"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>HSN Number (optional)</label>
+                    <input
+                      type="text"
+                      name="hsn_number"
+                      value={formData.hsn_number}
+                      onChange={handleInputChange}
+                      maxLength="10"
+                      placeholder="e.g., 2515, 6802"
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Primary Image URL *</label>
+                  <input
+                    type="url"
+                    name="primary_image_url"
+                    value={formData.primary_image_url}
+                    onChange={handleInputChange}
+                    maxLength="500"
+                    placeholder="https://example.com/image.jpg"
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Color</label>
+                  <input
+                    type="text"
+                    name="color"
+                    value={formData.color}
+                    onChange={handleInputChange}
+                    maxLength="50"
+                    placeholder="e.g., white, black, beige, multi"
+                  />
+                </div>
+                <div className="form-section-divider">
+                  <h4>Extra Expenses</h4>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Labour Charges (₹)</label>
+                    <input
+                      type="number"
+                      name="labour_charges"
+                      value={formData.labour_charges}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>RTO Fees (₹)</label>
+                    <input
+                      type="number"
+                      name="rto_fees"
+                      value={formData.rto_fees}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Damage Expenses (₹)</label>
+                    <input
+                      type="number"
+                      name="damage_expenses"
+                      value={formData.damage_expenses}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Others Expenses (₹)</label>
+                    <input
+                      type="number"
+                      name="others_expenses"
+                      value={formData.others_expenses}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Transportation Charge (₹)</label>
+                    <input
+                      type="number"
+                      name="transportation_charge"
+                      value={formData.transportation_charge}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>GST Charges (₹)</label>
+                    <input
+                      type="number"
+                      name="gst_charges"
+                      value={formData.gst_charges}
+                      onChange={handleInputChange}
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                <div className="form-section-divider">
+                  <h4>Price Per Sqr Ft Calculation</h4>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Price Per Sqr Ft (Before Extra Expenses)</label>
+                    <input
+                      type="text"
+                      value={`₹${calculatePricePerSqft(formData).pricePerSqftBefore}`}
+                      readOnly
+                      className="readonly-field"
+                      style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Price Per Sqr Ft (After Extra Expenses)</label>
+                    <input
+                      type="text"
+                      value={`₹${calculatePricePerSqft(formData).pricePerSqftAfter}`}
+                      readOnly
+                      className="readonly-field"
+                      style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed', fontWeight: 'bold', color: '#2c3e50' }}
+                    />
+                  </div>
+                </div>
+                <div className="form-actions">
+                  <button type="submit" className="btn btn-primary">Add Item</button>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowAddInventory(false)}>Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
