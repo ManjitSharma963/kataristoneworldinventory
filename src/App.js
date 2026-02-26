@@ -4,6 +4,7 @@ import Customers from './components/Customers';
 import Reports from './components/Reports';
 import Sales from './components/Sales';
 import Products from './components/Products';
+import InventoryItemsTabs from './components/InventoryItemsTabs';
 import Login from './components/Login';
 import Register from './components/Register';
 import { isAuthenticated, getCurrentUser, logout, setSessionExpiryHandler, isAdmin, getUserRole } from './utils/api';
@@ -452,11 +453,12 @@ function App() {
 
           {/* Dashboard Content */}
           <main className="dashboard-main">
-            {activeNav === 'products' ? (
+            {!userIsAdmin ? (
               <Products />
-            ) : !userIsAdmin ? (
-              // Regular users can only access Products
+            ) : activeNav === 'products' ? (
               <Products />
+            ) : activeNav === 'inventory' ? (
+              <InventoryItemsTabs defaultTab="inventory-items" />
             ) : activeNav === 'customers' ? (
               <Customers />
             ) : activeNav === 'reports' ? (

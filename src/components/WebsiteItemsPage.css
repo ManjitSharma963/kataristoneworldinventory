@@ -1,0 +1,149 @@
+.website-items-section .section-header-enhanced {
+  margin-bottom: 1rem;
+}
+
+/* Center all table content for consistent alignment */
+.website-items-table th,
+.website-items-table td {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.website-items-table .product-name-cell {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.website-items-table .product-name-cell .product-with-image {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 45px;
+  vertical-align: middle;
+}
+
+.website-items-table .product-thumbnail {
+  width: 45px;
+  height: 45px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex-shrink: 0;
+  vertical-align: middle;
+  display: block;
+}
+
+.website-items-table .product-name-cell .product-name {
+  line-height: 45px;
+  vertical-align: middle;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.website-items-table .actions-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.website-items-table .description-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.website-items-table .slug-cell {
+  font-family: monospace;
+  font-size: 0.9em;
+  display: inline-block;
+}
+
+.website-items-table .image-link {
+  color: #1976d2;
+  text-decoration: none;
+}
+
+.website-items-table .image-link:hover {
+  text-decoration: underline;
+}
+
+.badge-active {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.badge-inactive {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.website-items-modal {
+  max-width: 480px;
+  position: relative;
+  padding: 24px;
+}
+
+.website-items-modal .form-group {
+  margin-bottom: 1rem;
+}
+
+.website-items-modal .form-group label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 500;
+  color: #555;
+}
+
+.website-items-modal .form-group input[type="text"],
+.website-items-modal .form-group input[type="url"],
+.website-items-modal .form-group textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+.website-items-modal .form-group textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.website-items-modal .form-group-checkbox label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.website-items-modal .form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 1.25rem;
+}
+
+.website-items-modal .modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: #666;
+  line-height: 1;
+  padding: 4px;
+}
+
+.website-items-modal .modal-close:hover {
+  color: #333;
+}
+
+.website-items-modal h3 {
+  margin: 0 0 1rem 0;
+  padding-right: 32px;
+}
