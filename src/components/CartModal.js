@@ -73,6 +73,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [editingPriceValue, setEditingPriceValue] = useState('');
   const [editingQtyItemId, setEditingQtyItemId] = useState(null);
   const [editingQtyValue, setEditingQtyValue] = useState('');
+  const [customerSectionCollapsed, setCustomerSectionCollapsed] = useState(false);
   const toast = React.useRef(null);
 
   useEffect(() => {
@@ -85,6 +86,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       setEditingPriceValue('');
       setEditingQtyItemId(null);
       setEditingQtyValue('');
+      setCustomerSectionCollapsed(false);
     }
     return () => {
       document.body.style.overflow = '';
@@ -808,8 +810,17 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
           </div>
 
           {/* Customer Information Section */}
-          <div className="customer-info-section">
-            <h3>Customer Information</h3>
+          <div className={`customer-info-section ${customerSectionCollapsed ? 'customer-section-collapsed' : ''}`}>
+            <button
+              type="button"
+              className="customer-info-header"
+              onClick={() => setCustomerSectionCollapsed((c) => !c)}
+              aria-expanded={!customerSectionCollapsed}
+            >
+              <h3>Customer Information</h3>
+              <i className={`pi ${customerSectionCollapsed ? 'pi-chevron-down' : 'pi-chevron-up'}`} aria-hidden />
+            </button>
+            {!customerSectionCollapsed && (
             <div className="customer-form">
               <div className="form-row">
                 <label>Name: *</label>
@@ -889,6 +900,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 </div>
               </div>
             </div>
+            )}
           </div>
 
           <div className="neumorphic-card discount-section" style={{ marginTop: '1rem' }}>
