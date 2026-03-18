@@ -558,6 +558,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 >
                   <i className="pi pi-times"></i>
                 </button>
+                <div className="cart-item-main">
                 {item.img ? (
                   <img src={item.img} alt={item.title} className="cart-item-image" />
                 ) : (
@@ -671,6 +672,13 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   >
                     <i className="pi pi-plus"></i>
                   </button>
+                </div>
+                </div>
+                <div className="cart-item-total-box">
+                  <span className="cart-item-total-label">Total</span>
+                  <span className="cart-item-total-value">
+                    ₹ {((Number(item.pricePerSqftAfter ?? item.price ?? 0)) * (Number(parseFloat(item.quantity)) || 1)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
                 </div>
               </div>
             ))}
