@@ -19,12 +19,19 @@ export const saveCart = (cart) => {
   }
 };
 
+const normalizeQuantity = (q) => {
+  const n = typeof q === 'number' ? q : parseFloat(String(q).replace(/^0+(?=\d)/, ''));
+  const num = Number(n);
+  return isNaN(num) || num < 0.01 ? 0.01 : Math.round(num * 100) / 100;
+};
+
 export const addToCart = (product, quantity = 1) => {
   const cart = getCart();
   const existingItem = cart.find(item => item.id === product.id);
-  
+  const qty = normalizeQuantity(quantity);
+
   if (existingItem) {
-    existingItem.quantity = (existingItem.quantity || 0) + quantity;
+    existingItem.quantity = normalizeQuantity((existingItem.quantity || 0) + qty);
     existingItem.sqftOrdered = existingItem.quantity; // For compatibility
   } else {
     const unit = product.unit || 'sqft';
@@ -38,8 +45,8 @@ export const addToCart = (product, quantity = 1) => {
       img: product.primaryImageUrl || product.primary_image_url || product.img || product.image_url || '',
       price: price,
       pricePerSqftAfter: price, // Store for reference
-      quantity: quantity,
-      sqftOrdered: quantity, // For compatibility
+      quantity: qty,
+      sqftOrdered: qty, // For compatibility
       unit: unit,
       totalSqft: stock,
       type: product.productType || product.product_type || product.productTypeString || 'other',
@@ -63,7 +70,7 @@ export const updateCartItemQuantity = (productId, quantity) => {
   const item = cart.find(item => item.id === productId);
   if (item) {
     const maxQuantity = item.totalSqft || 999999;
-    const num = typeof quantity === 'number' ? quantity : parseFloat(quantity);
+    const num = typeof quantity === 'number' ? quantity : parseFloat(String(quantity).replace(/^0+(?=\d)/, ''));
     const clamped = Math.min(Math.max(0.01, isNaN(num) ? 0.01 : num), maxQuantity);
     item.quantity = Math.round(clamped * 100) / 100; // allow decimals, 2 places
     item.sqftOrdered = item.quantity; // For compatibility

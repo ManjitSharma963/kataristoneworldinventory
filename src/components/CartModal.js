@@ -13,13 +13,11 @@ import './CartModal.css';
 export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [cart, setCart] = useState([]);
   const [cartCount, setCartCount] = useState(0);
-  const [taxRate, setTaxRate] = useState(() => {
-    const saved = localStorage.getItem('cartTaxRate');
-    return saved ? parseFloat(saved) : 5;
-  });
+  const [taxRate, setTaxRate] = useState(0);
   const [discountAmount, setDiscountAmount] = useState(() => {
     const saved = localStorage.getItem('cartDiscountAmount');
-    return saved ? parseFloat(saved) : 0;
+    const n = saved !== null && saved !== '' ? parseFloat(String(saved).replace(/^0+(?=\d)/, '')) : 0;
+    return isNaN(n) ? 0 : n;
   });
   const [mobileNumber, setMobileNumber] = useState(() => {
     const saved = localStorage.getItem('cartMobileNumber');
@@ -71,6 +69,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [editingPriceItemId, setEditingPriceItemId] = useState(null);
+  const [editingPriceValue, setEditingPriceValue] = useState('');
+  const [editingQtyItemId, setEditingQtyItemId] = useState(null);
+  const [editingQtyValue, setEditingQtyValue] = useState('');
   const toast = React.useRef(null);
 
   useEffect(() => {
@@ -79,6 +81,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       loadCart();
     } else {
       document.body.style.overflow = '';
+      setEditingPriceItemId(null);
+      setEditingPriceValue('');
+      setEditingQtyItemId(null);
+      setEditingQtyValue('');
     }
     return () => {
       document.body.style.overflow = '';
@@ -143,15 +149,17 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
   const loadCart = () => {
     let cartItems = getCart();
-    // For user (employee) role only: default price to 0 so they enter daily price in cart
-    if (!isAdmin()) {
-      cartItems = cartItems.map((item) => ({
-        ...item,
-        pricePerSqftAfter: 0,
-        price: 0
-      }));
-      saveCart(cartItems);
-    }
+    // Normalize quantity to number so no leading zeros (e.g. "00001" -> 1)
+    cartItems = cartItems.map((item) => {
+      const qty = Number(parseFloat(item.quantity)) || 1;
+      const next = { ...item, quantity: qty };
+      if (!isAdmin()) {
+        next.pricePerSqftAfter = 0;
+        next.price = 0;
+      }
+      return next;
+    });
+    saveCart(cartItems);
     setCart(cartItems);
     setCartCount(getCartCount());
   };
@@ -170,14 +178,16 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   };
 
   const handleUpdateQuantity = (productId, quantity) => {
+    const numQty = Number(parseFloat(quantity));
+    const normalizedQty = isNaN(numQty) || numQty < MIN_QTY ? MIN_QTY : numQty;
     const updatedCart = cart.map((item) => {
       if (item.id === productId) {
-        // Retain the edited price and update only the quantity
-        return { ...item, quantity: quantity };
+        return { ...item, quantity: normalizedQty };
       }
       return item;
     });
     setCart(updatedCart);
+    saveCart(updatedCart);
   };
 
   const STEP = 0.5; // decimal step for +/- buttons (e.g. 0.5 sqft)
@@ -247,6 +257,39 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const transportationChargeNum = typeof transportationCharge === 'number' ? transportationCharge : (parseFloat(transportationCharge) || 0);
   const otherExpenseNum = typeof otherExpense === 'number' ? otherExpense : (parseFloat(otherExpense) || 0);
   const grandTotal = total + labourChargeNum + transportationChargeNum + otherExpenseNum;
+
+  // Strip leading zeros so "00001" -> "1", "000333" -> "333", keep "0" or "0.5"
+  const stripLeadingZeros = (str) => {
+    if (str === '' || str === null || str === undefined) return str;
+    const s = String(str).trim();
+    let out = s.replace(/^0+(?=\d)|^0+(?=\.\d)/, '');
+    if (out.startsWith('.')) out = '0' + out;
+    return out === '' ? '0' : out;
+  };
+
+  // Display number as string with no leading zeros (so input never shows "00001")
+  const toDisplayNumber = (num, fallback = '') => {
+    if (num === '' || num === null || num === undefined) return fallback;
+    const n = Number(parseFloat(num));
+    if (isNaN(n)) return fallback;
+    return n.toString();
+  };
+
+  // Display price with exactly 2 decimal places (e.g. 59 -> "59.00")
+  const toDisplayPrice = (num, fallback = '') => {
+    if (num === '' || num === null || num === undefined) return fallback;
+    const n = Number(parseFloat(num));
+    if (isNaN(n)) return fallback;
+    return n.toFixed(2);
+  };
+
+  // Display quantity with 2 decimal places (default 1.00)
+  const toDisplayQuantity = (num, fallback = '1.00') => {
+    if (num === '' || num === null || num === undefined) return fallback;
+    const n = Number(parseFloat(num));
+    if (isNaN(n)) return fallback;
+    return (Math.max(MIN_QTY, n)).toFixed(2);
+  };
 
   // Show number without leading zeros (e.g. 1200 not 01200)
   const chargeDisplayValue = (val) => {
@@ -440,7 +483,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       setState('');
       setPincode('');
       setGstin('');
-      setTaxRate(5);
+      setTaxRate(0);
       setDiscountAmount(0);
       setBillType('NON-GST');
       setLabourCharge(0);
@@ -524,17 +567,21 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   <h3 className="cart-item-name">{item.title}</h3>
                   {item.type && <p className="cart-item-category">{item.type}</p>}
                   <div className="cart-item-pricing">
-                    {/* Editable price input */}
+                    {/* Editable price input - local state while editing so 59.10 → 59.12 works */}
                     <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={item.pricePerSqftAfter || 0}
+                      type="text"
+                      inputMode="decimal"
+                      value={editingPriceItemId === item.id
+                        ? editingPriceValue
+                        : ((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''))}
+                      onFocus={() => {
+                        setEditingPriceItemId(item.id);
+                        setEditingPriceValue((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''));
+                      }}
                       onChange={(e) => {
-                        let updatedPrice = e.target.value;
-                        // Remove leading zeros
-                        updatedPrice = updatedPrice.replace(/^0+(?=\d)/, '');
-                        updatedPrice = parseFloat(updatedPrice) || 0;
+                        const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
+                        setEditingPriceValue(raw);
+                        const updatedPrice = parseFloat(raw) || 0;
                         const updatedCart = cart.map((cartItem) => {
                           if (cartItem.id === item.id) {
                             return { ...cartItem, pricePerSqftAfter: updatedPrice, price: updatedPrice };
@@ -544,10 +591,24 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                         setCart(updatedCart);
                         if (!isAdmin()) saveCart(updatedCart);
                       }}
+                      onBlur={() => {
+                        const parsed = parseFloat(editingPriceValue);
+                        const rounded = isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
+                        const updatedCart = cart.map((cartItem) => {
+                          if (cartItem.id === item.id) {
+                            return { ...cartItem, pricePerSqftAfter: rounded, price: rounded };
+                          }
+                          return cartItem;
+                        });
+                        setCart(updatedCart);
+                        if (!isAdmin()) saveCart(updatedCart);
+                        setEditingPriceItemId(null);
+                        setEditingPriceValue('');
+                      }}
                       className="price-input styled-input"
-                      placeholder="Enter price"
+                      placeholder="e.g. 58 or 58.50"
                     />
-                    <span className="cart-item-unit-price">₹ {(item.pricePerSqftAfter || 0).toLocaleString('en-IN')} / {item.unit || 'sqft'}</span>
+                    <span className="cart-item-unit-price">₹ {(Number(item.pricePerSqftAfter ?? item.price ?? 0)).toFixed(2)} / {item.unit || 'sqft'}</span>
                   </div>
                 </div>
                 <div className="cart-item-qty">
@@ -559,15 +620,23 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                     <i className="pi pi-minus"></i>
                   </button>
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     min={MIN_QTY}
                     step="0.01"
                     max={item.totalSqft || 999999}
-                    value={item.quantity ?? 1}
+                    value={editingQtyItemId === item.id
+                      ? editingQtyValue
+                      : toDisplayQuantity(Number(parseFloat(item.quantity)) || 1, '1.00')}
+                    onFocus={() => {
+                      setEditingQtyItemId(item.id);
+                      setEditingQtyValue(toDisplayQuantity(Number(parseFloat(item.quantity)) || 1, '1.00'));
+                    }}
                     onChange={(e) => {
-                      const raw = e.target.value;
-                      if (raw === '' || raw === null) {
-                        handleUpdateQuantity(item.id, MIN_QTY);
+                      const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
+                      setEditingQtyValue(raw === '' ? '' : raw);
+                      if (raw === '' || raw === '0') {
+                        handleUpdateQuantity(item.id, 1); // default 1.00
                         return;
                       }
                       const val = parseFloat(raw);
@@ -577,7 +646,21 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                         handleUpdateQuantity(item.id, Math.round(clamped * 100) / 100);
                       }
                     }}
+                    onBlur={() => {
+                      const raw = editingQtyValue.trim();
+                      if (raw === '' || raw === '0') {
+                        handleUpdateQuantity(item.id, 1); // default 1.00
+                      } else {
+                        const parsed = parseFloat(raw);
+                        const maxQty = item.totalSqft || 999999;
+                        const rounded = isNaN(parsed) ? 1 : Math.round(Math.min(Math.max(MIN_QTY, parsed), maxQty) * 100) / 100;
+                        handleUpdateQuantity(item.id, rounded);
+                      }
+                      setEditingQtyItemId(null);
+                      setEditingQtyValue('');
+                    }}
                     className="qty-input"
+                    placeholder="1.00"
                   />
                   <button
                     className="qty-btn plus"
@@ -593,27 +676,20 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
           {/* Summary Section */}
           <div className="cart-summary">
-            <div className="summary-row">
-              <span className="summary-label">Subtotal</span>
-              <span className="summary-value">₹ {subtotal.toLocaleString('en-IN')}</span>
-            </div>
-
             <div className="summary-row editable-tax">
               <span className="summary-label">Tax (%):</span>
               <div className="tax-input-wrapper">
                 <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.1"
-                  value={taxRate}
+                  type="text"
+                  inputMode="decimal"
+                  value={taxRate === '' || taxRate === null || taxRate === undefined ? '' : toDisplayNumber(taxRate, '')}
                   onChange={(e) => {
-                    const val = e.target.value;
-                    if (val === '' || val === null || val === undefined) {
+                    const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
+                    if (raw === '' || raw === null || raw === undefined) {
                       setTaxRate('');
                       return;
                     }
-                    const parsed = parseFloat(val);
+                    const parsed = parseFloat(raw);
                     if (!isNaN(parsed)) {
                       setTaxRate(Math.max(0, Math.min(100, parsed)));
                     } else {
@@ -626,10 +702,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                       setTaxRate(0);
                       return;
                     }
-                    let cleaned = val.replace(/^0+/, '');
-                    if (cleaned === '') {
-                      cleaned = '0';
-                    }
+                    const cleaned = stripLeadingZeros(val.replace(/[^\d.]/g, ''));
                     const parsed = parseFloat(cleaned);
                     if (!isNaN(parsed)) {
                       setTaxRate(Math.max(0, Math.min(100, parsed)));
@@ -638,23 +711,9 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                     }
                   }}
                   className="tax-input"
+                  placeholder="0"
                 />
                 <span className="summary-value tax-amount">₹ {tax.toFixed(2)}</span>
-              </div>
-            </div>
-
-            <div className="summary-row editable-discount">
-              <span className="summary-label">Discount Amount:</span>
-              <div className="discount-input-wrapper">
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={discountAmount}
-                  onChange={(e) => setDiscountAmount(Math.max(0, parseFloat(e.target.value) || 0))}
-                  className="discount-input"
-                />
-                <span className="summary-value discount-amount" style={{ color: '#10b981' }}>- ₹ {(discountAmount || 0).toLocaleString('en-IN')}</span>
               </div>
             </div>
 
@@ -689,12 +748,11 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               <span className="summary-label">Labour Charge:</span>
               <div className="discount-input-wrapper">
                 <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={chargeDisplayValue(labourCharge)}
+                  type="text"
+                  inputMode="decimal"
+                  value={labourCharge === '' || labourCharge === 0 ? '' : toDisplayNumber(labourCharge, '')}
                   onChange={(e) => {
-                    const raw = e.target.value;
+                    const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
                     if (raw === '') setLabourCharge('');
                     else setLabourCharge(Math.max(0, parseFloat(raw) || 0));
                   }}
@@ -709,12 +767,11 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               <span className="summary-label">Transportation Charge:</span>
               <div className="discount-input-wrapper">
                 <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={chargeDisplayValue(transportationCharge)}
+                  type="text"
+                  inputMode="decimal"
+                  value={transportationCharge === '' || transportationCharge === 0 ? '' : toDisplayNumber(transportationCharge, '')}
                   onChange={(e) => {
-                    const raw = e.target.value;
+                    const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
                     if (raw === '') setTransportationCharge('');
                     else setTransportationCharge(Math.max(0, parseFloat(raw) || 0));
                   }}
@@ -729,12 +786,11 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               <span className="summary-label">Other Expense:</span>
               <div className="discount-input-wrapper">
                 <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={chargeDisplayValue(otherExpense)}
+                  type="text"
+                  inputMode="decimal"
+                  value={otherExpense === '' || otherExpense === 0 ? '' : toDisplayNumber(otherExpense, '')}
                   onChange={(e) => {
-                    const raw = e.target.value;
+                    const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
                     if (raw === '') setOtherExpense('');
                     else setOtherExpense(Math.max(0, parseFloat(raw) || 0));
                   }}
@@ -743,6 +799,11 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 />
                 <span className="summary-value">₹ {(otherExpenseNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
+            </div>
+
+            <div className="summary-row">
+              <span className="summary-label">Subtotal</span>
+              <span className="summary-value">₹ {subtotal.toLocaleString('en-IN')}</span>
             </div>
           </div>
 
@@ -826,6 +887,27 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                     maxLength={20}
                   />
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="neumorphic-card discount-section" style={{ marginTop: '1rem' }}>
+            <div className="summary-row editable-discount">
+              <span className="summary-label">Discount Amount:</span>
+              <div className="discount-input-wrapper">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  min="0"
+                  value={discountAmount === 0 ? '' : toDisplayNumber(discountAmount, '')}
+                  onChange={(e) => {
+                    const raw = stripLeadingZeros(e.target.value.replace(/\D/g, ''));
+                    setDiscountAmount(raw === '' ? 0 : Math.max(0, parseFloat(raw) || 0));
+                  }}
+                  className="discount-input"
+                  placeholder="0"
+                />
+                <span className="summary-value discount-amount" style={{ color: '#10b981' }}>- ₹ {(discountAmount || 0).toLocaleString('en-IN')}</span>
               </div>
             </div>
           </div>

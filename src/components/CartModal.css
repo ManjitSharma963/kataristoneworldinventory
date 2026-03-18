@@ -371,7 +371,32 @@
   gap: 8px;
 }
 
-/* Shared input styling (summary + cart item inputs) */
+/* Neumorphism: soft inset (pressed-in) effect */
+.neumorphic-inset {
+  box-shadow: 
+    inset 4px 4px 8px rgba(163, 177, 198, 0.6),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.9);
+}
+
+.neumorphic-inset:focus {
+  box-shadow: 
+    inset 6px 6px 12px rgba(163, 177, 198, 0.65),
+    inset -6px -6px 12px rgba(255, 255, 255, 0.95);
+}
+
+/* Neumorphic card: soft raised with inner glow */
+.neumorphic-card {
+  background: #e0e5ec;
+  border-radius: 16px;
+  padding: 16px 20px;
+  box-shadow: 
+    6px 6px 12px rgba(163, 177, 198, 0.6),
+    -6px -6px 12px rgba(255, 255, 255, 0.9),
+    inset 2px 2px 4px rgba(255, 255, 255, 0.5),
+    inset -2px -2px 4px rgba(163, 177, 198, 0.2);
+}
+
+/* Shared input styling (summary + cart item inputs) - neumorphic */
 .cart-modal input[type="text"],
 .cart-modal input[type="number"],
 .tax-input,
@@ -388,8 +413,8 @@
   color: #333;
   background: #e0e5ec;
   box-shadow: 
-    inset 4px 4px 8px rgba(163, 177, 198, 0.5),
-    inset -4px -4px 8px rgba(255, 255, 255, 0.8);
+    inset 4px 4px 8px rgba(163, 177, 198, 0.55),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.85);
   transition: box-shadow 0.2s ease, background 0.2s ease;
 }
 
@@ -405,7 +430,20 @@
   background: #e8ecf1;
   box-shadow: 
     inset 5px 5px 10px rgba(163, 177, 198, 0.6),
+    inset -5px -5px 10px rgba(255, 255, 255, 0.95);
+}
+
+/* Discount input: stronger neumorphic (embossed) effect */
+.discount-input {
+  box-shadow: 
+    inset 5px 5px 10px rgba(163, 177, 198, 0.6),
     inset -5px -5px 10px rgba(255, 255, 255, 0.9);
+}
+
+.discount-input:focus {
+  box-shadow: 
+    inset 6px 6px 12px rgba(163, 177, 198, 0.65),
+    inset -6px -6px 12px rgba(255, 255, 255, 0.95);
 }
 
 .cart-modal input[type="text"]::placeholder,
