@@ -151,6 +151,30 @@
   gap: 12px;
 }
 
+/* Additional Charges card - under items */
+.cart-charges-card {
+  background: #e0e5ec;
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow:
+    4px 4px 8px rgba(163, 177, 198, 0.6),
+    -4px -4px 8px rgba(255, 255, 255, 0.8),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.5),
+    inset -1px -1px 2px rgba(163, 177, 198, 0.2);
+}
+
+.cart-charges-card-title {
+  margin: 0 0 4px 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #334155;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(163, 177, 198, 0.4);
+}
+
 .cart-item-card {
   background: #e0e5ec;
   border-radius: 14px;

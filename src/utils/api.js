@@ -60,6 +60,8 @@ const apiCall = async (endpoint, options = {}) => {
       const errorText = await response.text();
       
       // Handle session expiry - 401 Unauthorized
+      // Session length is set by the backend (e.g. JWT exp claim). Frontend does not set any timeout;
+      // we only logout when the backend returns 401. To increase session duration, update the backend.
       if (response.status === 401 && !isAuthEndpoint) {
         // Session expired - logout automatically
         handleSessionExpiry();

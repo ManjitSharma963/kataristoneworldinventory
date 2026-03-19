@@ -121,6 +121,36 @@ const InventoryItemsPage = () => {
     fetchCategories();
   }, [fetchCategories]);
 
+  const handleDeleteInventory = useCallback(async (item) => {
+    const id = item?.id ?? item?.inventoryId;
+    if (id == null) {
+      alert('Cannot delete: item has no id');
+      return;
+    }
+    if (!window.confirm(`Delete "${item.name || 'this item'}"? This cannot be undone.`)) return;
+    try {
+      const token = localStorage.getItem('authToken');
+      const headers = { 'Accept': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const response = await fetch(`${API_BASE_URL}/inventory/${id}`, {
+        method: 'DELETE',
+        headers
+      });
+      if (response.status === 401) {
+        await handleApiResponse(response);
+        return;
+      }
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Delete failed (${response.status})`);
+      }
+      await fetchInventory();
+    } catch (err) {
+      console.error('Error deleting inventory:', err);
+      alert(err.message || 'Failed to delete item');
+    }
+  }, [fetchInventory]);
+
   const calculatePricePerSqft = (data) => {
     const pricePerSqft = parseFloat(data.price_per_sqft) || 0;
     const totalSqftStock = parseFloat(data.total_sqft_stock) || 0;
@@ -420,8 +450,7 @@ const InventoryItemsPage = () => {
                         <td>{item.color ? <span className="color-badge">{item.color}</span> : '-'}</td>
                         <td className="total-cell total-col"><span className="total-amount">₹{totalValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></td>
                         <td className="actions-cell">
-                          <button type="button" className="btn-icon btn-edit" title="Edit (use Dashboard → Inventory)">✏️</button>
-                          <button type="button" className="btn-icon btn-delete" title="Delete (use Dashboard → Inventory)">🗑️</button>
+                          <button type="button" className="btn-icon btn-delete" title="Delete" onClick={() => handleDeleteInventory(item)}>🗑️</button>
                         </td>
                       </tr>
                     );

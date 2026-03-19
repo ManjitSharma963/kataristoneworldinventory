@@ -28,12 +28,57 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
 }
 
 .products-header h2 {
   margin: 0;
   color: #333;
   font-weight: 600;
+}
+
+.products-search-wrap {
+  flex: 1;
+  min-width: 200px;
+  max-width: 400px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.products-search-icon {
+  position: absolute;
+  left: 14px;
+  color: #64748b;
+  font-size: 1rem;
+  pointer-events: none;
+}
+
+.products-search-input {
+  width: 100%;
+  padding: 10px 16px 10px 40px;
+  border: none;
+  border-radius: 12px;
+  font-size: 0.95rem;
+  color: #334155;
+  background: #e0e5ec;
+  box-shadow:
+    inset 4px 4px 8px rgba(163, 177, 198, 0.5),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.8);
+  transition: box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.products-search-input::placeholder {
+  color: #94a3b8;
+}
+
+.products-search-input:focus {
+  outline: none;
+  background: #e8ecf1;
+  box-shadow:
+    inset 5px 5px 10px rgba(163, 177, 198, 0.55),
+    inset -5px -5px 10px rgba(255, 255, 255, 0.9);
 }
 
 .cart-header-btn {

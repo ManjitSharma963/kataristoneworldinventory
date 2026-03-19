@@ -684,76 +684,9 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
             ))}
           </div>
 
-          {/* Summary Section */}
-          <div className="cart-summary">
-            <div className="summary-row editable-tax">
-              <span className="summary-label">Tax (%):</span>
-              <div className="tax-input-wrapper">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={taxRate === '' || taxRate === null || taxRate === undefined ? '' : toDisplayNumber(taxRate, '')}
-                  onChange={(e) => {
-                    const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
-                    if (raw === '' || raw === null || raw === undefined) {
-                      setTaxRate('');
-                      return;
-                    }
-                    const parsed = parseFloat(raw);
-                    if (!isNaN(parsed)) {
-                      setTaxRate(Math.max(0, Math.min(100, parsed)));
-                    } else {
-                      setTaxRate('');
-                    }
-                  }}
-                  onBlur={(e) => {
-                    const val = e.target.value;
-                    if (val === '' || val === null || val === undefined) {
-                      setTaxRate(0);
-                      return;
-                    }
-                    const cleaned = stripLeadingZeros(val.replace(/[^\d.]/g, ''));
-                    const parsed = parseFloat(cleaned);
-                    if (!isNaN(parsed)) {
-                      setTaxRate(Math.max(0, Math.min(100, parsed)));
-                    } else {
-                      setTaxRate(0);
-                    }
-                  }}
-                  className="tax-input"
-                  placeholder="0"
-                />
-                <span className="summary-value tax-amount">₹ {tax.toFixed(2)}</span>
-              </div>
-            </div>
-
-            <div className="summary-row editable-field">
-              <span className="summary-label">Bill Type:</span>
-              <select
-                value={billType}
-                onChange={(e) => setBillType(e.target.value)}
-                className="bill-type-select"
-              >
-                <option value="NON-GST">NON-GST</option>
-                <option value="GST">GST</option>
-              </select>
-            </div>
-
-            <div className="summary-row editable-field">
-              <span className="summary-label">Mobile Number:</span>
-              <input
-                type="tel"
-                placeholder="Enter mobile (10 digits)"
-                value={mobileNumber}
-                onChange={(e) => {
-                  const value = e.target.value.replace(/\D/g, '').slice(0, 10);
-                  setMobileNumber(value);
-                }}
-                className="mobile-input"
-                maxLength={10}
-              />
-            </div>
-
+          {/* Additional Charges Card - under items */}
+          <div className="cart-charges-card">
+            <h3 className="cart-charges-card-title">Additional Charges</h3>
             <div className="summary-row editable-discount">
               <span className="summary-label">Labour Charge:</span>
               <div className="discount-input-wrapper">
@@ -772,7 +705,6 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 <span className="summary-value">₹ {(labourChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
-
             <div className="summary-row editable-discount">
               <span className="summary-label">Transportation Charge:</span>
               <div className="discount-input-wrapper">
@@ -791,7 +723,6 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 <span className="summary-value">₹ {(transportationChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
-
             <div className="summary-row editable-discount">
               <span className="summary-label">Other Expense:</span>
               <div className="discount-input-wrapper">
@@ -810,14 +741,13 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 <span className="summary-value">₹ {(otherExpenseNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
-
             <div className="summary-row">
               <span className="summary-label">Subtotal</span>
               <span className="summary-value">₹ {subtotal.toLocaleString('en-IN')}</span>
             </div>
           </div>
 
-          {/* Customer Information Section */}
+          {/* Customer Information Section - contains Name, Email, Mobile Number, Address, etc. */}
           <div className={`customer-info-section ${customerSectionCollapsed ? 'customer-section-collapsed' : ''}`}>
             <button
               type="button"
@@ -848,6 +778,21 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="customer-input"
+                />
+              </div>
+
+              <div className="form-row">
+                <label>Mobile Number: *</label>
+                <input
+                  type="tel"
+                  placeholder="Enter mobile (10 digits)"
+                  value={mobileNumber}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    setMobileNumber(value);
+                  }}
+                  className="customer-input mobile-input"
+                  maxLength={10}
                 />
               </div>
 
@@ -909,6 +854,62 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               </div>
             </div>
             )}
+          </div>
+
+          {/* Summary Section - Tax & Bill Type only */}
+          <div className="cart-summary">
+            <div className="summary-row editable-tax">
+              <span className="summary-label">Tax (%):</span>
+              <div className="tax-input-wrapper">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={taxRate === '' || taxRate === null || taxRate === undefined ? '' : toDisplayNumber(taxRate, '')}
+                  onChange={(e) => {
+                    const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
+                    if (raw === '' || raw === null || raw === undefined) {
+                      setTaxRate('');
+                      return;
+                    }
+                    const parsed = parseFloat(raw);
+                    if (!isNaN(parsed)) {
+                      setTaxRate(Math.max(0, Math.min(100, parsed)));
+                    } else {
+                      setTaxRate('');
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const val = e.target.value;
+                    if (val === '' || val === null || val === undefined) {
+                      setTaxRate(0);
+                      return;
+                    }
+                    const cleaned = stripLeadingZeros(val.replace(/[^\d.]/g, ''));
+                    const parsed = parseFloat(cleaned);
+                    if (!isNaN(parsed)) {
+                      setTaxRate(Math.max(0, Math.min(100, parsed)));
+                    } else {
+                      setTaxRate(0);
+                    }
+                  }}
+                  className="tax-input"
+                  placeholder="0"
+                />
+                <span className="summary-value tax-amount">₹ {tax.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div className="summary-row editable-field">
+              <span className="summary-label">Bill Type:</span>
+              <select
+                value={billType}
+                onChange={(e) => setBillType(e.target.value)}
+                className="bill-type-select"
+              >
+                <option value="NON-GST">NON-GST</option>
+                <option value="GST">GST</option>
+              </select>
+            </div>
           </div>
 
           <div className="neumorphic-card discount-section" style={{ marginTop: '1rem' }}>

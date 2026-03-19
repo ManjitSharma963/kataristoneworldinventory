@@ -15,6 +15,7 @@ const Products = () => {
   const [loading, setLoading] = useState(true);
   const [cartCount, setCartCount] = useState(0);
   const [showCartModal, setShowCartModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const toast = React.useRef(null);
 
   useEffect(() => {
@@ -114,11 +115,32 @@ const Products = () => {
     return product.unit || 'sqft';
   };
 
+  // Filter products by search (name, type, color)
+  const filteredProducts = searchQuery.trim() === ''
+    ? products
+    : products.filter((product) => {
+        const q = searchQuery.trim().toLowerCase();
+        const name = (product.name || product.title || '').toLowerCase();
+        const type = (product.productType || product.product_type || product.productTypeString || '').toLowerCase();
+        const color = (product.color || '').toLowerCase();
+        return name.includes(q) || type.includes(q) || color.includes(q);
+      });
+
   return (
     <div className="products-container">
       <Toast ref={toast} />
       <div className="products-header">
         <h2>Products to Buy</h2>
+        <div className="products-search-wrap">
+          <i className="pi pi-search products-search-icon" aria-hidden />
+          <input
+            type="text"
+            placeholder="Search products by name, type or color..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="products-search-input"
+          />
+        </div>
         <Button
           icon="pi pi-shopping-cart"
           label={cartCount > 0 ? `Cart (${cartCount})` : 'Cart'}
@@ -141,9 +163,15 @@ const Products = () => {
             <h4>No products found</h4>
             <p>No products are available at the moment.</p>
           </div>
+        ) : filteredProducts.length === 0 ? (
+          <div className="no-products">
+            <i className="pi pi-search-minus" style={{ fontSize: '3rem', color: '#999', marginBottom: '1rem' }}></i>
+            <h4>No matching products</h4>
+            <p>Try a different search term (name, type or color).</p>
+          </div>
         ) : (
           <div className="products-grid">
-            {products.map((product) => {
+            {filteredProducts.map((product) => {
               const productType = getProductType(product);
               const productColor = getProductColor(product);
               const unit = getProductUnit(product);
