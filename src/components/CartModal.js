@@ -74,6 +74,9 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     const saved = localStorage.getItem('cartOtherExpense');
     return saved !== null && saved !== '' ? (parseFloat(saved) || 0) : 0;
   });
+  const [gstHsnCode, setGstHsnCode] = useState(() => localStorage.getItem('cartGstHsnCode') || '');
+  const [gstVehicleNo, setGstVehicleNo] = useState(() => localStorage.getItem('cartGstVehicleNo') || '');
+  const [gstDeliveryAddress, setGstDeliveryAddress] = useState(() => localStorage.getItem('cartGstDeliveryAddress') || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [editingPriceItemId, setEditingPriceItemId] = useState(null);
@@ -147,6 +150,18 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   useEffect(() => {
     localStorage.setItem('cartPaymentMode', paymentMode);
   }, [paymentMode]);
+
+  useEffect(() => {
+    localStorage.setItem('cartGstHsnCode', gstHsnCode);
+  }, [gstHsnCode]);
+
+  useEffect(() => {
+    localStorage.setItem('cartGstVehicleNo', gstVehicleNo);
+  }, [gstVehicleNo]);
+
+  useEffect(() => {
+    localStorage.setItem('cartGstDeliveryAddress', gstDeliveryAddress);
+  }, [gstDeliveryAddress]);
 
   useEffect(() => {
     localStorage.setItem('cartLabourCharge', labourCharge.toString());
@@ -429,7 +444,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       transportationCharge: transportationChargeNum || 0,
       otherExpenses: otherExpenseNum || 0,
       grandTotal: grandTotal,
-      paymentMode: paymentMode
+      paymentMode: paymentMode,
+      ...(billType === 'GST' && {
+        hsnCode: gstHsnCode.trim() || null,
+        vehicleNo: gstVehicleNo.trim() || null,
+        deliveryAddress: gstDeliveryAddress.trim() || null
+      })
       // Note: subtotal, taxAmount, billType, gstRate are calculated on backend if needed
     };
 
@@ -501,6 +521,9 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       setDiscountAmount(0);
       setBillType('NON-GST');
       setPaymentMode('CASH');
+      setGstHsnCode('');
+      setGstVehicleNo('');
+      setGstDeliveryAddress('');
       setLabourCharge(0);
       setTransportationCharge(0);
       setOtherExpense(0);
@@ -940,6 +963,41 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               </select>
             </div>
           </div>
+
+          {billType === 'GST' && (
+            <div className="gst-bill-details-card">
+              <h3 className="gst-bill-details-title">GST invoice details</h3>
+              <div className="customer-form">
+                <div className="form-row">
+                  <label>HSN Code</label>
+                  <InputText
+                    placeholder="Enter HSN code"
+                    value={gstHsnCode}
+                    onChange={(e) => setGstHsnCode(e.target.value.slice(0, 32))}
+                    className="customer-input"
+                  />
+                </div>
+                <div className="form-row">
+                  <label>Vehicle No</label>
+                  <InputText
+                    placeholder="Enter vehicle number"
+                    value={gstVehicleNo}
+                    onChange={(e) => setGstVehicleNo(e.target.value.slice(0, 32))}
+                    className="customer-input"
+                  />
+                </div>
+                <div className="form-row">
+                  <label>Delivery Address</label>
+                  <InputText
+                    placeholder="Enter delivery address"
+                    value={gstDeliveryAddress}
+                    onChange={(e) => setGstDeliveryAddress(e.target.value.slice(0, 500))}
+                    className="customer-input"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="neumorphic-card discount-section" style={{ marginTop: '1rem' }}>
             <div className="summary-row editable-discount">

@@ -175,6 +175,38 @@
   border-bottom: 1px solid rgba(163, 177, 198, 0.4);
 }
 
+/* GST-only extra fields card (HSN, vehicle, delivery) */
+.gst-bill-details-card {
+  background: #e0e5ec;
+  border-radius: 16px;
+  padding: 18px 20px;
+  margin-top: 12px;
+  box-shadow:
+    4px 4px 8px rgba(163, 177, 198, 0.6),
+    -4px -4px 8px rgba(255, 255, 255, 0.8),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.5),
+    inset -1px -1px 2px rgba(163, 177, 198, 0.2);
+}
+
+.gst-bill-details-title {
+  margin: 0 0 14px 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #667eea;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(163, 177, 198, 0.35);
+}
+
+.gst-bill-details-card .customer-form {
+  gap: 12px;
+}
+
+.gst-bill-details-card .form-row label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #475569;
+}
+
 .cart-item-card {
   background: #e0e5ec;
   border-radius: 14px;
