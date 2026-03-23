@@ -13,6 +13,19 @@ import { FilterMatchMode, FilterOperator } from 'primereact/api';
 import { Dialog } from 'primereact/dialog';
 import './Sales.css';
 
+const PAYMENT_MODE_LABELS = {
+  CASH: 'CASH',
+  UPI: 'UPI',
+  NETBANKING: 'NETBANKING',
+  CREDIT: 'CREDIT'
+};
+
+const formatPaymentModeLabel = (mode) => {
+  if (!mode) return '—';
+  const key = String(mode).toUpperCase().replace(/\s+/g, '_');
+  return PAYMENT_MODE_LABELS[key] || mode;
+};
+
 const Sales = () => {
   const [sales, setSales] = useState([]);
   const [inventory, setInventory] = useState([]);
@@ -382,6 +395,14 @@ const Sales = () => {
                 <span className="label">Date:</span>
                 <span className="value">{formatDate(selectedBill.billDate)}</span>
               </div>
+              {(selectedBill.originalSale?.paymentMode || selectedBill.paymentMode) && (
+                <div className="detail-row">
+                  <span className="label">Payment Mode:</span>
+                  <span className="value">
+                    {formatPaymentModeLabel(selectedBill.originalSale?.paymentMode || selectedBill.paymentMode)}
+                  </span>
+                </div>
+              )}
             </div>
 
             <table className="bill-table">

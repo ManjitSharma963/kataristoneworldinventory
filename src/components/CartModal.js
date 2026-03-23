@@ -10,6 +10,8 @@ import 'primereact/resources/primereact.min.css';
 import 'primeicons/primeicons.css';
 import './CartModal.css';
 
+const VALID_PAYMENT_MODES = ['CASH', 'UPI', 'NETBANKING', 'CREDIT'];
+
 export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [cart, setCart] = useState([]);
   const [cartCount, setCartCount] = useState(0);
@@ -54,6 +56,11 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [billType, setBillType] = useState(() => {
     const saved = localStorage.getItem('cartBillType');
     return saved || 'NON-GST';
+  });
+  const [paymentMode, setPaymentMode] = useState(() => {
+    const saved = localStorage.getItem('cartPaymentMode');
+    if (saved && VALID_PAYMENT_MODES.includes(saved)) return saved;
+    return 'CASH';
   });
   const [labourCharge, setLabourCharge] = useState(() => {
     const saved = localStorage.getItem('cartLabourCharge');
@@ -136,6 +143,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   useEffect(() => {
     localStorage.setItem('cartBillType', billType);
   }, [billType]);
+
+  useEffect(() => {
+    localStorage.setItem('cartPaymentMode', paymentMode);
+  }, [paymentMode]);
 
   useEffect(() => {
     localStorage.setItem('cartLabourCharge', labourCharge.toString());
@@ -417,7 +428,8 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       labourCharge: labourChargeNum || 0,
       transportationCharge: transportationChargeNum || 0,
       otherExpenses: otherExpenseNum || 0,
-      grandTotal: grandTotal
+      grandTotal: grandTotal,
+      paymentMode: paymentMode
       // Note: subtotal, taxAmount, billType, gstRate are calculated on backend if needed
     };
 
@@ -488,8 +500,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       setTaxRate(0);
       setDiscountAmount(0);
       setBillType('NON-GST');
+      setPaymentMode('CASH');
       setLabourCharge(0);
       setTransportationCharge(0);
+      setOtherExpense(0);
       clearCart();
       loadCart();
 
@@ -908,6 +922,21 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               >
                 <option value="NON-GST">NON-GST</option>
                 <option value="GST">GST</option>
+              </select>
+            </div>
+
+            <div className="summary-row editable-field">
+              <span className="summary-label">Payment Mode:</span>
+              <select
+                value={paymentMode}
+                onChange={(e) => setPaymentMode(e.target.value)}
+                className="bill-type-select"
+                title="How the customer will pay"
+              >
+                <option value="CASH">CASH</option>
+                <option value="UPI">UPI</option>
+                <option value="NETBANKING">NETBANKING</option>
+                <option value="CREDIT">CREDIT</option>
               </select>
             </div>
           </div>
