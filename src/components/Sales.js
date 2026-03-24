@@ -14,9 +14,11 @@ import { Dialog } from 'primereact/dialog';
 import './Sales.css';
 
 const PAYMENT_MODE_LABELS = {
-  CASH: 'CASH',
   UPI: 'UPI',
-  NETBANKING: 'NETBANKING',
+  CASH: 'CASH',
+  BANK_TRANSFER: 'BANK TRANSFER',
+  CHEQUE: 'CHEQUE',
+  NETBANKING: 'BANK TRANSFER',
   CREDIT: 'CREDIT'
 };
 
@@ -24,6 +26,23 @@ const formatPaymentModeLabel = (mode) => {
   if (!mode) return '—';
   const key = String(mode).toUpperCase().replace(/\s+/g, '_');
   return PAYMENT_MODE_LABELS[key] || mode;
+};
+
+/** Normalize stored/API values for banding (legacy NETBANKING → bank transfer) */
+const normalizePaymentModeKey = (mode) => {
+  const m = String(mode || '').toUpperCase().replace(/\s+/g, '_').trim();
+  if (m === 'NETBANKING' || m === 'NET_BANKING') return 'BANK_TRANSFER';
+  return m;
+};
+
+/** Group payment modes for header totals */
+const getPaymentBand = (mode) => {
+  const m = normalizePaymentModeKey(mode);
+  if (m === 'UPI') return 'UPI';
+  if (m === 'CASH') return 'CASH';
+  if (m === 'BANK_TRANSFER') return 'BANK_TRANSFER';
+  if (m === 'CHEQUE') return 'CHEQUE';
+  return 'OTHER';
 };
 
 const Sales = () => {
@@ -126,6 +145,18 @@ const Sales = () => {
       const subtotal = sale.subtotal || sale.subTotal || 0;
       const gstAmount = sale.taxAmount || sale.gstAmount || sale.gst || 0;
       const totalAmount = sale.totalAmount || sale.total || sale.amount || 0;
+      const paymentModeRaw =
+        sale.paymentMode ??
+        sale.payment_mode ??
+        sale.paymentMethod ??
+        sale.payment_method ??
+        '';
+      const paymentModeNorm = String(paymentModeRaw).trim();
+      const isNoPayment =
+        !paymentModeNorm || paymentModeNorm === '-' || paymentModeNorm === '—';
+      const paymentMode = isNoPayment
+        ? null
+        : normalizePaymentModeKey(paymentModeNorm) || null;
 
       // Ensure billDate is a proper Date object
       let dateObj = null;
@@ -152,10 +183,32 @@ const Sales = () => {
         subtotal: Number(subtotal) || 0,
         gstAmount: Number(gstAmount) || 0,
         totalAmount: Number(totalAmount) || 0,
+        paymentMode: paymentMode,
         originalSale: sale
       };
     });
   }, [sales]);
+
+  const paymentBandTotals = useMemo(() => {
+    let upi = 0;
+    let cash = 0;
+    let bankTransfer = 0;
+    let cheque = 0;
+    let other = 0;
+    prepareSalesData.forEach((row) => {
+      const amt = Number(row.totalAmount) || 0;
+      const band = getPaymentBand(row.paymentMode);
+      if (band === 'UPI') upi += amt;
+      else if (band === 'CASH') cash += amt;
+      else if (band === 'BANK_TRANSFER') bankTransfer += amt;
+      else if (band === 'CHEQUE') cheque += amt;
+      else other += amt;
+    });
+    return { upi, cash, bankTransfer, cheque, other };
+  }, [prepareSalesData]);
+
+  const formatCurrency = (n) =>
+    `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   // Format date for display
   const formatDate = (dateString) => {
@@ -274,6 +327,28 @@ const Sales = () => {
     <div className="sales-container">
       <div className="sales-header">
         <h2>Sales Management</h2>
+        <div className="sales-payment-totals" role="region" aria-label="Payment mode totals">
+          <div className="sales-payment-total-card">
+            <span className="sales-payment-total-label">UPI Total</span>
+            <span className="sales-payment-total-value">{formatCurrency(paymentBandTotals.upi)}</span>
+          </div>
+          <div className="sales-payment-total-card">
+            <span className="sales-payment-total-label">Cash Total</span>
+            <span className="sales-payment-total-value">{formatCurrency(paymentBandTotals.cash)}</span>
+          </div>
+          <div className="sales-payment-total-card">
+            <span className="sales-payment-total-label">Bank Transfer Total</span>
+            <span className="sales-payment-total-value">{formatCurrency(paymentBandTotals.bankTransfer)}</span>
+          </div>
+          <div className="sales-payment-total-card">
+            <span className="sales-payment-total-label">Cheque Total</span>
+            <span className="sales-payment-total-value">{formatCurrency(paymentBandTotals.cheque)}</span>
+          </div>
+          <div className="sales-payment-total-card">
+            <span className="sales-payment-total-label">Other Total</span>
+            <span className="sales-payment-total-value">{formatCurrency(paymentBandTotals.other)}</span>
+          </div>
+        </div>
       </div>
 
       <div className="sales-list">
@@ -356,6 +431,14 @@ const Sales = () => {
               dataType="numeric"
               style={{ minWidth: '10rem' }}
               body={totalAmountBodyTemplate}
+            />
+            <Column
+              field="paymentMode"
+              header="Payment Mode"
+              style={{ minWidth: '10rem' }}
+              body={(rowData) => (
+                <span className="payment-mode-cell">{formatPaymentModeLabel(rowData.paymentMode)}</span>
+              )}
             />
             <Column
               header="Actions"

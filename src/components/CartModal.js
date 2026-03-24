@@ -10,7 +10,7 @@ import 'primereact/resources/primereact.min.css';
 import 'primeicons/primeicons.css';
 import './CartModal.css';
 
-const VALID_PAYMENT_MODES = ['CASH', 'UPI', 'NETBANKING', 'CREDIT'];
+const VALID_PAYMENT_MODES = ['UPI', 'CASH', 'BANK_TRANSFER', 'CHEQUE'];
 
 export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [cart, setCart] = useState([]);
@@ -74,7 +74,6 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     const saved = localStorage.getItem('cartOtherExpense');
     return saved !== null && saved !== '' ? (parseFloat(saved) || 0) : 0;
   });
-  const [gstHsnCode, setGstHsnCode] = useState(() => localStorage.getItem('cartGstHsnCode') || '');
   const [gstVehicleNo, setGstVehicleNo] = useState(() => localStorage.getItem('cartGstVehicleNo') || '');
   const [gstDeliveryAddress, setGstDeliveryAddress] = useState(() => localStorage.getItem('cartGstDeliveryAddress') || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -150,10 +149,6 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   useEffect(() => {
     localStorage.setItem('cartPaymentMode', paymentMode);
   }, [paymentMode]);
-
-  useEffect(() => {
-    localStorage.setItem('cartGstHsnCode', gstHsnCode);
-  }, [gstHsnCode]);
 
   useEffect(() => {
     localStorage.setItem('cartGstVehicleNo', gstVehicleNo);
@@ -430,7 +425,11 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     const gstRate = isGST ? (taxRateNum > 0 ? taxRateNum : 18) : 0;
 
     // Prepare bill data - matching backend API structure
+    // Many APIs persist payment under `paymentMethod` only; send both + snake_case so one maps.
+    const paymentModeValue = String(paymentMode || 'CASH').trim() || 'CASH';
+
     const billData = {
+      billType: finalBillType,
       customerMobileNumber: mobileNumber,
       customerName: customerName.trim(),
       address: address, // Backend expects 'address', not 'customerAddress'
@@ -444,9 +443,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       transportationCharge: transportationChargeNum || 0,
       otherExpenses: otherExpenseNum || 0,
       grandTotal: grandTotal,
-      paymentMode: paymentMode,
+      paymentMode: paymentModeValue,
+      payment_method: paymentModeValue,
+      paymentMethod: paymentModeValue,
       ...(billType === 'GST' && {
-        hsnCode: gstHsnCode.trim() || null,
         vehicleNo: gstVehicleNo.trim() || null,
         deliveryAddress: gstDeliveryAddress.trim() || null
       })
@@ -521,7 +521,6 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       setDiscountAmount(0);
       setBillType('NON-GST');
       setPaymentMode('CASH');
-      setGstHsnCode('');
       setGstVehicleNo('');
       setGstDeliveryAddress('');
       setLabourCharge(0);
@@ -956,10 +955,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 className="bill-type-select"
                 title="How the customer will pay"
               >
-                <option value="CASH">CASH</option>
                 <option value="UPI">UPI</option>
-                <option value="NETBANKING">NETBANKING</option>
-                <option value="CREDIT">CREDIT</option>
+                <option value="CASH">CASH</option>
+                <option value="BANK_TRANSFER">BANK TRANSFER</option>
+                <option value="CHEQUE">CHEQUE</option>
               </select>
             </div>
           </div>
@@ -968,15 +967,6 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
             <div className="gst-bill-details-card">
               <h3 className="gst-bill-details-title">GST invoice details</h3>
               <div className="customer-form">
-                <div className="form-row">
-                  <label>HSN Code</label>
-                  <InputText
-                    placeholder="Enter HSN code"
-                    value={gstHsnCode}
-                    onChange={(e) => setGstHsnCode(e.target.value.slice(0, 32))}
-                    className="customer-input"
-                  />
-                </div>
                 <div className="form-row">
                   <label>Vehicle No</label>
                   <InputText

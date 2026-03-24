@@ -6,8 +6,63 @@ import HomeScreenManagement from './HomeScreenManagement';
 import { downloadBillPDF, handleApiResponse, getInventoryEndpoint } from '../utils/api';
 import { fetchExpenses as apiFetchExpenses } from '../utils/api';
 import { API_BASE_URL } from '../config/api';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import './Dashboard.css';
+
+/** Extract payment mode from bills that may use different API field names or nesting */
+function getRawPaymentModeFromBill(bill) {
+  if (!bill || typeof bill !== 'object') return '';
+  const candidates = [
+    bill.paymentMode,
+    bill.payment_mode,
+    bill.paymentMethod,
+    bill.payment_method,
+    bill.payMode,
+    bill.pay_mode,
+    bill.mode,
+    bill.paymentType,
+    bill.payment_type,
+    bill.payment?.mode,
+    bill.payment?.paymentMode,
+    bill.paymentDetails?.mode,
+    bill.payment_details?.mode
+  ];
+  for (const v of candidates) {
+    if (v !== undefined && v !== null && String(v).trim() !== '') {
+      return String(v).trim();
+    }
+  }
+  return '';
+}
+
+/** Map API/display strings to analytics buckets (UPI, Cash, Bank Transfer, Cheque, Other) */
+function normalizePaymentModeCategory(raw) {
+  if (raw === undefined || raw === null) return 'OTHER';
+  const s = String(raw).trim();
+  if (!s) return 'OTHER';
+  const m = s.toUpperCase().replace(/[\s-]+/g, '_').replace(/_+/g, '_');
+  if (m === 'CASH') return 'CASH';
+  if (m === 'UPI') return 'UPI';
+  if (
+    m === 'BANK_TRANSFER' ||
+    m === 'BANKTRANSFER' ||
+    m === 'BANK' ||
+    m === 'TRANSFER' ||
+    m === 'NETBANKING' ||
+    m === 'NET_BANKING' ||
+    m === 'NEFT' ||
+    m === 'RTGS' ||
+    m === 'IMPS' ||
+    m === 'ONLINE' ||
+    m === 'ONLINE_TRANSFER' ||
+    m === 'WIRE' ||
+    m === 'WIRE_TRANSFER'
+  ) {
+    return 'BANK_TRANSFER';
+  }
+  if (m === 'CHEQUE' || m === 'CHECK' || m === 'DD' || m === 'DEMAND_DRAFT') return 'CHEQUE';
+  return 'OTHER';
+}
 
 const Dashboard = ({ activeNav, setActiveNav }) => {
   // Shared state for Expenses form
@@ -625,7 +680,39 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     }, 0);
   }, [filteredInventoryForStats]);
 
-  // Colors for pie chart segments
+  /** Sales totals by payment mode — same date filter as Statistics Overview */
+  const paymentModeChartData = useMemo(() => {
+    if (!filteredBillsForStats || filteredBillsForStats.length === 0) return [];
+    const totals = { CASH: 0, UPI: 0, BANK_TRANSFER: 0, CHEQUE: 0, OTHER: 0 };
+    filteredBillsForStats.forEach((bill) => {
+      const amt =
+        Number(
+          bill.totalAmount ??
+            bill.grandTotal ??
+            bill.grand_total ??
+            bill.total ??
+            bill.amount ??
+            0
+        ) || 0;
+      const raw = getRawPaymentModeFromBill(bill);
+      const cat = normalizePaymentModeCategory(raw);
+      totals[cat] += amt;
+    });
+    return [
+      { name: 'Cash', key: 'CASH', value: totals.CASH },
+      { name: 'UPI', key: 'UPI', value: totals.UPI },
+      { name: 'Bank Transfer', key: 'BANK_TRANSFER', value: totals.BANK_TRANSFER },
+      { name: 'Cheque', key: 'CHEQUE', value: totals.CHEQUE },
+      { name: 'Other', key: 'OTHER', value: totals.OTHER }
+    ].filter((d) => d.value > 0);
+  }, [filteredBillsForStats]);
+
+  const paymentModeChartTotal = useMemo(
+    () => paymentModeChartData.reduce((s, d) => s + (Number(d.value) || 0), 0),
+    [paymentModeChartData]
+  );
+
+  // Colors for chart segments (payment mode, etc.)
   const COLORS = ['#dc3545', '#667eea', '#17a2b8', '#28a745', '#ffc107', '#fd7e14', '#6f42c1', '#e83e8c'];
 
   if (loadingBills && bills.length === 0) {
@@ -1666,6 +1753,95 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   <Bar dataKey="withoutGST" fill="#ffc107" name="NON-GST" />
                 </BarChart>
               </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Payment mode — horizontal bars + breakdown list (same period as Statistics Overview) */}
+          <div className="chart-card chart-card-payment-modes">
+            <div className="chart-header">
+              <h3>Sales by Payment Mode</h3>
+            </div>
+            <p className="chart-subtitle-muted">
+              Reads payment from common bill fields; bank-style labels (NEFT, RTGS, Net Banking, etc.) map to Bank
+              Transfer. Missing or unknown values count as Other. Same period as Statistics Overview above.
+            </p>
+            <div className="chart-container payment-mode-chart-wrap">
+              {paymentModeChartData.length === 0 ? (
+                <div className="chart-empty-message">
+                  No sales with amounts in this period, or try &quot;All time&quot; in Statistics Overview.
+                </div>
+              ) : (
+                <>
+                  <ResponsiveContainer
+                    width="100%"
+                    height={Math.max(200, paymentModeChartData.length * 52)}
+                  >
+                    <BarChart
+                      layout="vertical"
+                      data={paymentModeChartData}
+                      margin={{ top: 8, right: 16, left: 8, bottom: 8 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" horizontal stroke="#c8d0dc" vertical={false} />
+                      <XAxis
+                        type="number"
+                        tick={{ fontSize: 11 }}
+                        tickFormatter={(v) =>
+                          `₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                        }
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={122}
+                        tick={{ fontSize: 12 }}
+                      />
+                      <Tooltip
+                        formatter={(value) => {
+                          const num = Number(value) || 0;
+                          return [
+                            `₹${num.toLocaleString('en-IN', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2
+                            })}`,
+                            'Amount'
+                          ];
+                        }}
+                      />
+                      <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={34}>
+                        {paymentModeChartData.map((entry, index) => (
+                          <Cell key={entry.key} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <ul className="payment-mode-breakdown-list" aria-label="Payment mode totals">
+                    {paymentModeChartData.map((row, index) => {
+                      const amt = Number(row.value) || 0;
+                      const pct =
+                        paymentModeChartTotal > 0
+                          ? ((amt / paymentModeChartTotal) * 100).toFixed(1)
+                          : '0.0';
+                      return (
+                        <li key={row.key}>
+                          <span
+                            className="payment-mode-breakdown-swatch"
+                            style={{ background: COLORS[index % COLORS.length] }}
+                          />
+                          <span className="payment-mode-breakdown-name">{row.name}</span>
+                          <span className="payment-mode-breakdown-amt">
+                            ₹
+                            {amt.toLocaleString('en-IN', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2
+                            })}
+                          </span>
+                          <span className="payment-mode-breakdown-pct">{pct}%</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
             </div>
           </div>
 
