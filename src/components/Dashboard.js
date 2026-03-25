@@ -135,6 +135,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   const [showAddInventory, setShowAddInventory] = useState(false);
   const [showEditInventory, setShowEditInventory] = useState(false);
   const [editingInventoryItem, setEditingInventoryItem] = useState(null);
+  /** On-hand qty when edit form opened; saved total = baseline + stock_quantity_to_add */
+  const [editStockBaseline, setEditStockBaseline] = useState(null);
   const [showBillItems, setShowBillItems] = useState(false);
   const [selectedBill, setSelectedBill] = useState(null);
   const [billItems, setBillItems] = useState([]);
@@ -169,6 +171,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     product_type: '',
     price_per_sqft: '',
     total_sqft_stock: '',
+    stock_quantity_to_add: '0',
     unit: '',
     hsn_number: '',
     primary_image_url: '',
@@ -685,6 +688,15 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     if (!filteredBillsForStats || filteredBillsForStats.length === 0) return [];
     const totals = { CASH: 0, UPI: 0, BANK_TRANSFER: 0, CHEQUE: 0, OTHER: 0 };
     filteredBillsForStats.forEach((bill) => {
+      const lines = bill.payments;
+      if (Array.isArray(lines) && lines.length > 0) {
+        lines.forEach((p) => {
+          const a = Number(p.amount) || 0;
+          const cat = normalizePaymentModeCategory(p.paymentMode || p.payment_mode || '');
+          totals[cat] += a;
+        });
+        return;
+      }
       const amt =
         Number(
           bill.totalAmount ??
@@ -710,6 +722,15 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   const paymentModeChartTotal = useMemo(
     () => paymentModeChartData.reduce((s, d) => s + (Number(d.value) || 0), 0),
     [paymentModeChartData]
+  );
+
+  /** Edit-inventory modal: price preview uses baseline + quantity to add (must run before any early return). */
+  const editInventoryPricingFormData = useMemo(
+    () => ({
+      ...formData,
+      total_sqft_stock: String((editStockBaseline ?? 0) + (parseFloat(formData.stock_quantity_to_add) || 0))
+    }),
+    [formData, editStockBaseline]
   );
 
   // Colors for chart segments (payment mode, etc.)
@@ -1289,6 +1310,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         product_type: '',
         price_per_sqft: '',
         total_sqft_stock: '',
+        stock_quantity_to_add: '0',
         unit: '',
         hsn_number: '',
         primary_image_url: '',
@@ -1320,12 +1342,15 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   // Handle edit inventory
   const handleEditInventory = (item) => {
     setEditingInventoryItem(item);
+    const baseline = Number(item.totalSqftStock || item.total_sqft_stock || item.quantity || 0);
+    setEditStockBaseline(baseline);
     setFormData({
       name: item.name || '',
       slug: item.slug || '',
       product_type: item.productType || item.product_type || '',
       price_per_sqft: item.pricePerSqft || item.price_per_sqft || '',
-      total_sqft_stock: item.totalSqftStock || item.total_sqft_stock || '',
+      total_sqft_stock: '',
+      stock_quantity_to_add: '0',
       unit: item.unit || '',
       hsn_number: item.hsnNumber || item.hsn_number || '',
       primary_image_url: item.primaryImageUrl || item.primary_image_url || '',
@@ -1347,21 +1372,24 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     if (!editingInventoryItem) return;
 
     // Validate required fields
-    if (!formData.name || !formData.product_type || !formData.price_per_sqft || !formData.total_sqft_stock || !formData.primary_image_url) {
+    if (!formData.name || !formData.product_type || !formData.price_per_sqft || !formData.primary_image_url) {
       showToast('Please fill all required fields', 'error');
       return;
     }
 
     const pricePerSqft = parseFloat(formData.price_per_sqft);
-    const totalSqftStock = parseFloat(formData.total_sqft_stock);
+    const baseline = editStockBaseline ?? 0;
+    const addRaw = parseFloat(formData.stock_quantity_to_add);
+    const addQty = Number.isNaN(addRaw) ? 0 : addRaw;
+    const totalSqftStock = baseline + addQty;
     
     if (isNaN(pricePerSqft) || pricePerSqft < 0) {
       showToast('Please enter a valid price per unit', 'error');
       return;
     }
     
-    if (isNaN(totalSqftStock) || totalSqftStock < 0) {
-      showToast('Please enter a valid quantity/stock', 'error');
+    if (totalSqftStock < 0) {
+      showToast('Resulting stock cannot be negative — adjust quantity to add', 'error');
       return;
     }
 
@@ -1454,12 +1482,14 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       await fetchInventory();
       setShowEditInventory(false);
       setEditingInventoryItem(null);
+      setEditStockBaseline(null);
       setFormData({
         name: '',
         slug: '',
         product_type: '',
         price_per_sqft: '',
         total_sqft_stock: '',
+        stock_quantity_to_add: '0',
         unit: '',
         hsn_number: '',
         primary_image_url: '',
@@ -2515,14 +2545,15 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                                 <div className="product-with-image">
                                   <img 
                                     src={primaryImageUrl} 
-                                    alt={item.name} 
+                                    alt={item.name}
+                                    title={item.name}
                                     className="product-thumbnail" 
                                     onError={(e) => { e.target.style.display = 'none'; }} 
                                   />
-                                  <span className="product-name">{item.name}</span>
+                                  <span className="product-name" title={item.name}>{item.name}</span>
                                 </div>
                               ) : (
-                                <span className="product-name">{item.name}</span>
+                                <span className="product-name" title={item.name}>{item.name}</span>
                               )}
                             </td>
                             <td>
@@ -2591,13 +2622,14 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                             {primaryImageUrl && (
                               <img 
                                 src={primaryImageUrl} 
-                                alt={item.name} 
+                                alt={item.name}
+                                title={item.name}
                                 className="inventory-card-image" 
                                 onError={(e) => { e.target.style.display = 'none'; }} 
                               />
                             )}
                             <div className="inventory-card-title-section">
-                              <h4 className="inventory-card-title">{item.name}</h4>
+                              <h4 className="inventory-card-title" title={item.name}>{item.name}</h4>
                               <span className="product-type-badge">{productType}</span>
                             </div>
                             {isLowStock && <span className="low-stock-badge">⚠️ Low Stock</span>}
@@ -3135,12 +3167,14 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         <div className="modal-overlay" onClick={() => {
           setShowEditInventory(false);
           setEditingInventoryItem(null);
+          setEditStockBaseline(null);
           setFormData({
             name: '',
             slug: '',
             product_type: '',
             price_per_sqft: '',
             total_sqft_stock: '',
+            stock_quantity_to_add: '0',
             unit: '',
             hsn_number: '',
             primary_image_url: '',
@@ -3159,12 +3193,14 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
               <button className="modal-close" onClick={() => {
                 setShowEditInventory(false);
                 setEditingInventoryItem(null);
+                setEditStockBaseline(null);
                 setFormData({
                   name: '',
                   slug: '',
                   product_type: '',
                   price_per_sqft: '',
                   total_sqft_stock: '',
+                  stock_quantity_to_add: '0',
                   unit: '',
                   hsn_number: '',
                   primary_image_url: '',
@@ -3240,16 +3276,46 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     />
                   </div>
                   <div className="form-group">
-                    <label>Quantity/Stock *</label>
+                    <label>Current stock on hand</label>
+                    <input
+                      type="text"
+                      readOnly
+                      className="readonly-field"
+                      style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
+                      value={
+                        editStockBaseline != null
+                          ? Number(editStockBaseline).toLocaleString('en-IN', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2
+                            })
+                          : '—'
+                      }
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Quantity to add *</label>
                     <input
                       type="number"
-                      name="total_sqft_stock"
-                      value={formData.total_sqft_stock}
+                      name="stock_quantity_to_add"
+                      value={formData.stock_quantity_to_add}
                       onChange={handleInputChange}
-                      min="0"
                       step="0.01"
-                      placeholder="e.g., 150.00"
-                      required
+                      placeholder="0 — leave 0 to keep stock unchanged"
+                    />
+                    <small className="form-help">
+                      Saved stock = current + this amount (negative reduces without a sale)
+                    </small>
+                  </div>
+                  <div className="form-group">
+                    <label>Resulting stock (after save)</label>
+                    <input
+                      type="text"
+                      readOnly
+                      className="readonly-field"
+                      style={{ backgroundColor: '#e8f4fd', cursor: 'not-allowed', fontWeight: 600 }}
+                      value={Number(
+                        (editStockBaseline ?? 0) + (parseFloat(formData.stock_quantity_to_add) || 0)
+                      ).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     />
                   </div>
                   <div className="form-group">
@@ -3391,7 +3457,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     <label>Price Per Sqr Ft (Before Extra Expenses)</label>
                     <input
                       type="text"
-                      value={`₹${calculatePricePerSqft(formData).pricePerSqftBefore}`}
+                      value={`₹${calculatePricePerSqft(editInventoryPricingFormData).pricePerSqftBefore}`}
                       readOnly
                       className="readonly-field"
                       style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
@@ -3401,7 +3467,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                     <label>Price Per Sqr Ft (After Extra Expenses)</label>
                     <input
                       type="text"
-                      value={`₹${calculatePricePerSqft(formData).pricePerSqftAfter}`}
+                      value={`₹${calculatePricePerSqft(editInventoryPricingFormData).pricePerSqftAfter}`}
                       readOnly
                       className="readonly-field"
                       style={{ backgroundColor: '#f5f5f5', cursor: 'not-allowed', fontWeight: 'bold', color: '#2c3e50' }}
@@ -3416,18 +3482,24 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   <button type="button" className="btn btn-secondary" onClick={() => {
                     setShowEditInventory(false);
                     setEditingInventoryItem(null);
+                    setEditStockBaseline(null);
                     setFormData({
                       name: '',
                       slug: '',
                       product_type: '',
                       price_per_sqft: '',
                       total_sqft_stock: '',
+                      stock_quantity_to_add: '0',
+                      unit: '',
+                      hsn_number: '',
                       primary_image_url: '',
                       color: '',
                       labour_charges: '',
                       rto_fees: '',
                       damage_expenses: '',
-                      others_expenses: ''
+                      others_expenses: '',
+                      transportation_charge: '',
+                      gst_charges: ''
                     });
                   }}>
                     Cancel

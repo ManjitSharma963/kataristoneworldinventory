@@ -219,13 +219,14 @@ const WebsiteItemsPage = () => {
                             <img
                               src={imgUrl}
                               alt={name}
+                              title={name}
                               className="product-thumbnail"
                               onError={(e) => { e.target.style.display = 'none'; }}
                             />
-                            <span className="product-name">{name}</span>
+                            <span className="product-name" title={name}>{name}</span>
                           </div>
                         ) : (
-                          <span className="product-name">{name}</span>
+                          <span className="product-name" title={name}>{name}</span>
                         )}
                       </td>
                       <td><span className="slug-cell">{slug}</span></td>

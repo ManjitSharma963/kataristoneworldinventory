@@ -1,401 +1,702 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { fetchExpenses as apiFetchExpenses, handleApiResponse, getInventoryEndpoint } from '../utils/api';
-import { API_BASE_URL } from '../config/api';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { fetchDailyClosingReport, downloadBillPDF } from '../utils/api';
 import Loading from './Loading';
 import './Reports.css';
 
-const Reports = () => {
-  const [bills, setBills] = useState([]);
-  const [expenses, setExpenses] = useState([]);
-  const [inventory, setInventory] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [reportType, setReportType] = useState('profit-loss');
-  const [dateRange, setDateRange] = useState({
-    start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
-    end: new Date().toISOString().split('T')[0]
-  });
+/** Today in local timezone (avoids UTC off-by-one from toISOString). */
+function localISODate(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
-  useEffect(() => {
-    loadData();
+const money = (n) =>
+  `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+function formatDayLabel(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T12:00:00');
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+/** Normalize API date (ISO string or Jackson [y,m,d]) for display. */
+function toIsoDateString(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string') {
+    return v.length >= 10 ? v.slice(0, 10) : v;
+  }
+  if (Array.isArray(v) && v.length >= 3) {
+    const y = v[0];
+    const m = v[1];
+    const d = v[2];
+    return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  return null;
+}
+
+function formatShortDate(iso) {
+  const raw = toIsoDateString(iso);
+  if (!raw) return '—';
+  const d = new Date(raw + 'T12:00:00');
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function parseReportError(err) {
+  const raw = err?.message || String(err);
+  const dash = raw.indexOf('- ');
+  const tail = dash >= 0 ? raw.slice(dash + 2).trim() : raw;
+  try {
+    const j = JSON.parse(tail);
+    if (j.message) return j.message;
+    if (j.error) return typeof j.error === 'string' ? j.error : JSON.stringify(j.error);
+  } catch {
+    const m = tail.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        const j = JSON.parse(m[0]);
+        if (j.message) return j.message;
+        if (j.error) return String(j.error);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+  if (/\b403\b/.test(raw)) {
+    return 'You do not have permission to view this report.';
+  }
+  return tail || 'Could not load report.';
+}
+
+/** User-facing message + optional server reference for ops (matches API `requestId`). */
+function parseReportErrorMeta(err) {
+  const requestId = err?.requestId || err?.responseBody?.requestId;
+  if (err?.rawMessage) {
+    return { message: parseReportError({ message: err.rawMessage }), requestId };
+  }
+  const raw = err?.message || String(err);
+  if (raw === 'Failed to fetch' || /NetworkError|Load failed|network/i.test(String(raw))) {
+    return { message: 'Network error. Check your connection and try again.', requestId };
+  }
+  return { message: raw || 'Could not load report.', requestId };
+}
+
+/** Client-only paging for bill/expense tables; full payload is still loaded (server paging is a future option). */
+function csvEscapeCell(val) {
+  const t = val == null ? '' : String(val);
+  if (/[",\n\r]/.test(t)) {
+    return `"${t.replace(/"/g, '""')}"`;
+  }
+  return t;
+}
+
+/** UTF-8 BOM helps Excel open CSV with correct encoding. */
+function buildDailyClosingCsv(data, from, to) {
+  const rows = [];
+  rows.push(['Daily Closing Report', from, to].map(csvEscapeCell).join(','));
+  rows.push(['Location', data.location ?? ''].map(csvEscapeCell).join(','));
+  rows.push(['Total bills', data.totalBills ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Total sales', data.totalSales ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Total paid on bills', data.totalPaidOnBills ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Total due on bills', data.totalDueOnBills ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Total collected', data.totalCollected ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Total expenses', data.totalExpenses ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Cash in hand', data.cashInHand ?? 0].map(csvEscapeCell).join(','));
+  const ps = data.paymentSummary || {};
+  rows.push(['Mode summary', 'Amount'].map(csvEscapeCell).join(','));
+  Object.entries(ps).forEach(([k, v]) => {
+    rows.push([k, v].map(csvEscapeCell).join(','));
+  });
+  rows.push('');
+  rows.push(
+    [
+      'Bill date',
+      'Bill #',
+      'Type',
+      'Total',
+      'Paid',
+      'Due',
+      'Cash',
+      'UPI',
+      'Bank',
+      'Other',
+      'Status',
+      'Overpaid'
+    ]
+      .map(csvEscapeCell)
+      .join(',')
+  );
+  (data.bills || []).forEach((row) => {
+    rows.push(
+      [
+        toIsoDateString(row.billDate) || '',
+        row.billNumber,
+        row.billType,
+        row.totalAmount,
+        row.paidAmount,
+        row.dueAmount,
+        row.cashAmount,
+        row.upiAmount,
+        row.bankTransferAmount,
+        row.otherAmount,
+        row.status,
+        row.overpaidAmount ?? 0
+      ]
+        .map(csvEscapeCell)
+        .join(',')
+    );
+  });
+  rows.push('');
+  rows.push(['Expense id', 'Type', 'Category', 'Amount'].map(csvEscapeCell).join(','));
+  (data.expenseLines || []).forEach((ex) => {
+    rows.push([ex.id, ex.expenseType, ex.category, ex.amount].map(csvEscapeCell).join(','));
+  });
+  return `\uFEFF${rows.join('\n')}`;
+}
+
+const PAGE_SIZE = 10;
+
+function TablePagination({ page, pageCount, total, label, onPrev, onNext }) {
+  if (total <= 0) return null;
+  if (pageCount <= 1) return null;
+  const from = (page - 1) * PAGE_SIZE + 1;
+  const to = Math.min(page * PAGE_SIZE, total);
+  return (
+    <nav className="report-pagination" aria-label={label}>
+      <button type="button" className="report-pagination-btn" disabled={page <= 1} onClick={onPrev}>
+        Previous
+      </button>
+      <span className="report-pagination-meta">
+        {from}–{to} of {total} · Page {page} / {pageCount}
+      </span>
+      <button type="button" className="report-pagination-btn" disabled={page >= pageCount} onClick={onNext}>
+        Next
+      </button>
+    </nav>
+  );
+}
+
+const Reports = () => {
+  const defaultDay = useMemo(() => localISODate(), []);
+  const [dateFrom, setDateFrom] = useState(defaultDay);
+  const [dateTo, setDateTo] = useState(defaultDay);
+  const [closingLoading, setClosingLoading] = useState(true);
+  const [closingData, setClosingData] = useState(null);
+  const [closingError, setClosingError] = useState('');
+  const [closingErrorRequestId, setClosingErrorRequestId] = useState('');
+  const [fetchedRange, setFetchedRange] = useState(null);
+  const [expensesPage, setExpensesPage] = useState(1);
+  const [billsPage, setBillsPage] = useState(1);
+
+  const isRange = dateFrom !== dateTo;
+
+  const loadDailyClosing = useCallback(async (from, to) => {
+    setClosingError('');
+    setClosingErrorRequestId('');
+    setClosingLoading(true);
+    try {
+      const data = await fetchDailyClosingReport({
+        date: from,
+        dateTo: to,
+        backfillLegacy: false
+      });
+      setClosingData(data);
+      setClosingError('');
+      setFetchedRange({ from, to });
+    } catch (e) {
+      console.error(e);
+      const meta = parseReportErrorMeta(e);
+      setClosingError(meta.message);
+      setClosingErrorRequestId(meta.requestId || '');
+    } finally {
+      setClosingLoading(false);
+    }
   }, []);
 
-  const loadData = async () => {
+  const initialLoadDone = useRef(false);
+  useEffect(() => {
+    if (initialLoadDone.current) return;
+    initialLoadDone.current = true;
+    loadDailyClosing(dateFrom, dateTo);
+  }, [loadDailyClosing, dateFrom, dateTo]);
+
+  const datesPendingSearch =
+    fetchedRange != null && (fetchedRange.from !== dateFrom || fetchedRange.to !== dateTo);
+
+  useEffect(() => {
+    setExpensesPage(1);
+    setBillsPage(1);
+  }, [closingData]);
+
+  const expenseLines = closingData?.expenseLines ?? [];
+  const billsRows = closingData?.bills ?? [];
+
+  const expensePageCount = Math.max(1, Math.ceil(expenseLines.length / PAGE_SIZE));
+  const billsPageCount = Math.max(1, Math.ceil(billsRows.length / PAGE_SIZE));
+
+  const expensePageSafe = Math.min(Math.max(1, expensesPage), expensePageCount);
+  const billsPageSafe = Math.min(Math.max(1, billsPage), billsPageCount);
+
+  useEffect(() => {
+    setExpensesPage((p) => Math.min(p, expensePageCount));
+  }, [expensePageCount]);
+
+  useEffect(() => {
+    setBillsPage((p) => Math.min(p, billsPageCount));
+  }, [billsPageCount]);
+
+  const paginatedExpenses = useMemo(() => {
+    const start = (expensePageSafe - 1) * PAGE_SIZE;
+    return expenseLines.slice(start, start + PAGE_SIZE);
+  }, [expenseLines, expensePageSafe]);
+
+  const paginatedBills = useMemo(() => {
+    const start = (billsPageSafe - 1) * PAGE_SIZE;
+    return billsRows.slice(start, start + PAGE_SIZE);
+  }, [billsRows, billsPageSafe]);
+
+  const onChangeFrom = (e) => {
+    const v = e.target.value;
+    setDateFrom(v);
+    setDateTo((prev) => (prev < v ? v : prev));
+  };
+
+  const onChangeTo = (e) => {
+    const v = e.target.value;
+    setDateTo(v);
+    setDateFrom((prev) => (v < prev ? v : prev));
+  };
+
+  const handleClearDates = () => {
+    const t = localISODate();
+    setDateFrom(t);
+    setDateTo(t);
+  };
+
+  const periodLabel = useMemo(() => {
+    if (!dateFrom || !dateTo) return '';
+    if (dateFrom === dateTo) return formatDayLabel(dateFrom);
+    return `${formatDayLabel(dateFrom)} – ${formatDayLabel(dateTo)}`;
+  }, [dateFrom, dateTo]);
+
+  const paySummary = closingData?.paymentSummary || {};
+  const otherCollected =
+    (Number(paySummary.CHEQUE) || 0) + (Number(paySummary.OTHER) || 0);
+
+  const billsHeading = isRange ? 'Bills in this period' : "Today's bills";
+  const expensesHeading = isRange ? 'Expenses in this period' : "Today's expenses";
+
+  const handleExportCsv = useCallback(() => {
+    if (!closingData) return;
+    const blob = new Blob([buildDailyClosingCsv(closingData, dateFrom, dateTo)], {
+      type: 'text/csv;charset=utf-8;'
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `daily-closing_${dateFrom}_${dateTo}.csv`;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [closingData, dateFrom, dateTo]);
+
+  const handleBillPdf = async (row) => {
     try {
-      setLoading(true);
-      // Load bills
-      const token = localStorage.getItem('authToken');
-      const billsHeaders = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      };
-      if (token) {
-        billsHeaders['Authorization'] = `Bearer ${token}`;
-      }
-      const billsResponse = await fetch(`${API_BASE_URL}/bills`, {
-        method: 'GET',
-        headers: billsHeaders
-      });
-      
-      // Check for session expiry (401)
-      if (billsResponse.status === 401) {
-        await handleApiResponse(billsResponse);
-        return;
-      }
-      
-      if (billsResponse.ok) {
-        const billsData = await billsResponse.json();
-        setBills(billsData || []);
-      }
-
-      // Load expenses
-      const expensesData = await apiFetchExpenses();
-      setExpenses(expensesData || []);
-
-      // Load inventory
-      const inventoryHeaders = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      };
-      if (token) {
-        inventoryHeaders['Authorization'] = `Bearer ${token}`;
-      }
-      const inventoryResponse = await fetch(`${API_BASE_URL}${getInventoryEndpoint()}`, {
-        method: 'GET',
-        headers: inventoryHeaders
-      });
-      
-      // Check for session expiry (401)
-      if (inventoryResponse.status === 401) {
-        await handleApiResponse(inventoryResponse);
-        return;
-      }
-      
-      if (inventoryResponse.ok) {
-        const inventoryData = await inventoryResponse.json();
-        setInventory(inventoryData || []);
-      }
-    } catch (error) {
-      console.error('Error loading data:', error);
-    } finally {
-      setLoading(false);
+      await downloadBillPDF(row.billId, row.billType);
+    } catch (e) {
+      console.error(e);
+      window.alert(parseReportError(e));
     }
   };
 
-  // Filter data by date range
-  const filteredBills = useMemo(() => {
-    if (!dateRange.start && !dateRange.end) return bills;
-    return bills.filter(bill => {
-      const billDate = new Date(bill.date || bill.createdAt);
-      if (dateRange.start && billDate < new Date(dateRange.start)) return false;
-      if (dateRange.end) {
-        const endDate = new Date(dateRange.end);
-        endDate.setHours(23, 59, 59, 999);
-        if (billDate > endDate) return false;
-      }
-      return true;
-    });
-  }, [bills, dateRange]);
-
-  const filteredExpenses = useMemo(() => {
-    if (!dateRange.start && !dateRange.end) return expenses;
-    return expenses.filter(exp => {
-      const expDate = new Date(exp.date || exp.createdAt);
-      if (dateRange.start && expDate < new Date(dateRange.start)) return false;
-      if (dateRange.end) {
-        const endDate = new Date(dateRange.end);
-        endDate.setHours(23, 59, 59, 999);
-        if (expDate > endDate) return false;
-      }
-      return true;
-    });
-  }, [expenses, dateRange]);
-
-  // Calculate Profit & Loss
-  const profitLossData = useMemo(() => {
-    const totalRevenue = filteredBills.reduce((sum, bill) => sum + (parseFloat(bill.totalAmount) || 0), 0);
-    const totalExpenses = filteredExpenses.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
-    const netProfit = totalRevenue - totalExpenses;
-    const profitMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(2) : 0;
-
-    return {
-      totalRevenue,
-      totalExpenses,
-      netProfit,
-      profitMargin
-    };
-  }, [filteredBills, filteredExpenses]);
-
-  // GST Report Data
-  const gstReportData = useMemo(() => {
-    const gstBills = filteredBills.filter(bill => bill.billType === 'GST');
-    const gstCollected = gstBills.reduce((sum, bill) => sum + (parseFloat(bill.taxAmount) || 0), 0);
-    const gstSales = gstBills.reduce((sum, bill) => sum + (parseFloat(bill.totalAmount) || 0), 0);
-    const nonGstSales = filteredBills.filter(bill => bill.billType !== 'GST')
-      .reduce((sum, bill) => sum + (parseFloat(bill.totalAmount) || 0), 0);
-
-    return {
-      gstBills: gstBills.length,
-      gstCollected,
-      gstSales,
-      nonGstSales,
-      totalSales: gstSales + nonGstSales
-    };
-  }, [filteredBills]);
-
-  // Expense Report by Category
-  const expenseCategoryData = useMemo(() => {
-    const categoryMap = new Map();
-    filteredExpenses.forEach(exp => {
-      const category = exp.category || exp.type || 'Other';
-      const amount = parseFloat(exp.amount) || 0;
-      if (!categoryMap.has(category)) {
-        categoryMap.set(category, { name: category, value: 0, count: 0 });
-      }
-      const data = categoryMap.get(category);
-      data.value += amount;
-      data.count += 1;
-    });
-    return Array.from(categoryMap.values()).sort((a, b) => b.value - a.value);
-  }, [filteredExpenses]);
-
-  // Sales Report Data
-  const salesReportData = useMemo(() => {
-    const dailySales = {};
-    filteredBills.forEach(bill => {
-      const date = new Date(bill.date || bill.createdAt).toISOString().split('T')[0];
-      if (!dailySales[date]) {
-        dailySales[date] = { date, sales: 0, count: 0 };
-      }
-      dailySales[date].sales += parseFloat(bill.totalAmount) || 0;
-      dailySales[date].count += 1;
-    });
-    return Object.values(dailySales).sort((a, b) => a.date.localeCompare(b.date));
-  }, [filteredBills]);
-
-  const COLORS = ['#dc3545', '#667eea', '#17a2b8', '#28a745', '#ffc107', '#fd7e14', '#6f42c1', '#e83e8c'];
-
-  if (loading) {
-    return <Loading message="Loading reports..." />;
+  if (closingLoading && !closingData) {
+    return (
+      <div className="reports-container reports-layout reports-daily-only">
+        <Loading message="Loading report…" />
+      </div>
+    );
   }
 
   return (
-    <div className="reports-container">
-      <div className="reports-header">
-        <h2>Financial Reports</h2>
-        <div className="reports-actions">
-          <button className="btn btn-secondary" onClick={() => window.print()}>
-            🖨️ Print Report
+    <div className="reports-container reports-layout reports-daily-only">
+      <header className="reports-top">
+        <div>
+          <h2 className="reports-title">Daily Closing Report</h2>
+        </div>
+        <div className="reports-header-actions">
+          <button
+            type="button"
+            className="reports-btn-export"
+            onClick={handleExportCsv}
+            disabled={!closingData || closingLoading}
+          >
+            Export CSV
+          </button>
+          <button type="button" className="reports-btn-print" onClick={() => window.print()} disabled={!closingData}>
+            Print
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Date Range Filter */}
-      <div className="report-filters">
-        <div className="form-row">
+      <section className="report-filters report-filters-bar" aria-label="Report period">
+        <div className="report-filters-inner daily-closing-date-row daily-closing-daterange-row">
           <div className="form-group">
-            <label>Start Date</label>
-            <input
-              type="date"
-              value={dateRange.start}
-              onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
-            />
+            <label htmlFor="closing-date-from">From (bill date &amp; period start)</label>
+            <input id="closing-date-from" type="date" value={dateFrom} onChange={onChangeFrom} />
           </div>
           <div className="form-group">
-            <label>End Date</label>
-            <input
-              type="date"
-              value={dateRange.end}
-              onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
-            />
+            <label htmlFor="closing-date-to">To (inclusive)</label>
+            <input id="closing-date-to" type="date" value={dateTo} onChange={onChangeTo} />
           </div>
-          <div className="form-group">
-            <label>&nbsp;</label>
-            <button className="btn btn-secondary" onClick={() => setDateRange({ start: '', end: '' })}>
-              Clear Filter
-            </button>
+          <div className="form-group daily-filter-actions">
+            <label className="daily-filter-actions-label">Find on date</label>
+            <div className="daily-filter-buttons">
+              <button
+                type="button"
+                className="btn-clear-dates"
+                onClick={handleClearDates}
+                title="Reset From and To to today"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                className="btn-primary-soft"
+                onClick={() => loadDailyClosing(dateFrom, dateTo)}
+                disabled={closingLoading}
+              >
+                {closingLoading ? 'Loading…' : 'Search'}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* Report Type Selector */}
-      <div className="report-type-selector">
-        <button
-          className={`report-type-btn ${reportType === 'profit-loss' ? 'active' : ''}`}
-          onClick={() => setReportType('profit-loss')}
-        >
-          Profit & Loss
-        </button>
-        <button
-          className={`report-type-btn ${reportType === 'gst' ? 'active' : ''}`}
-          onClick={() => setReportType('gst')}
-        >
-          GST Report
-        </button>
-        <button
-          className={`report-type-btn ${reportType === 'sales' ? 'active' : ''}`}
-          onClick={() => setReportType('sales')}
-        >
-          Sales Report
-        </button>
-        <button
-          className={`report-type-btn ${reportType === 'expenses' ? 'active' : ''}`}
-          onClick={() => setReportType('expenses')}
-        >
-          Expense Report
-        </button>
-      </div>
-
-      {/* Profit & Loss Report */}
-      {reportType === 'profit-loss' && (
-        <div className="report-section">
-          <h3>Profit & Loss Statement</h3>
-          <div className="report-card">
-            <div className="report-row">
-              <span className="report-label">Total Revenue (Sales):</span>
-              <span className="report-value positive">
-                ₹{(Number(profitLossData?.totalRevenue || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-            <div className="report-row">
-              <span className="report-label">Total Expenses:</span>
-              <span className="report-value negative">
-                ₹{(Number(profitLossData?.totalExpenses || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-            <div className="report-row total">
-              <span className="report-label">Net Profit/Loss:</span>
-              <span className={`report-value ${profitLossData.netProfit >= 0 ? 'positive' : 'negative'}`}>
-                ₹{(Number(profitLossData?.netProfit || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-            <div className="report-row">
-              <span className="report-label">Profit Margin:</span>
-              <span className={`report-value ${profitLossData.profitMargin >= 0 ? 'positive' : 'negative'}`}>
-                {profitLossData.profitMargin}%
-              </span>
-            </div>
+      {closingError && (
+        <div className="report-error-banner report-error-banner--with-actions" role="alert">
+          <div className="report-error-banner-text">
+            <p className="report-error-message">{closingError}</p>
+            {closingErrorRequestId ? (
+              <p className="report-error-ref">
+                Reference for support: <code>{closingErrorRequestId}</code>
+              </p>
+            ) : null}
           </div>
+          <button
+            type="button"
+            className="report-error-retry"
+            onClick={() => loadDailyClosing(dateFrom, dateTo)}
+            disabled={closingLoading}
+          >
+            Retry
+          </button>
         </div>
       )}
-
-      {/* GST Report */}
-      {reportType === 'gst' && (
-        <div className="report-section">
-          <h3>GST Report</h3>
-          <div className="report-card">
-            <div className="report-row">
-              <span className="report-label">Total GST Bills:</span>
-              <span className="report-value">{gstReportData.gstBills}</span>
-            </div>
-            <div className="report-row">
-              <span className="report-label">GST Collected:</span>
-              <span className="report-value positive">
-                ₹{(Number(gstReportData?.gstCollected || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-            <div className="report-row">
-              <span className="report-label">GST Sales:</span>
-              <span className="report-value">
-                ₹{(Number(gstReportData?.gstSales || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-            <div className="report-row">
-              <span className="report-label">Non-GST Sales:</span>
-              <span className="report-value">
-                ₹{(Number(gstReportData?.nonGstSales || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-            <div className="report-row total">
-              <span className="report-label">Total Sales:</span>
-              <span className="report-value positive">
-                ₹{(Number(gstReportData?.totalSales || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-          </div>
+      {datesPendingSearch && !closingError && (
+        <div className="report-stale-dates-banner" role="status">
+          Dates changed — click <strong>Search</strong> to load the report for the new range.
         </div>
       )}
-
-      {/* Sales Report */}
-      {reportType === 'sales' && (
-        <div className="report-section">
-          <h3>Sales Report</h3>
-          <div className="chart-card">
-            <div className="chart-container">
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={salesReportData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" angle={-45} textAnchor="end" height={80} />
-                  <YAxis />
-                  <Tooltip 
-                    formatter={(value) => {
-                      const num = Number(value) || 0;
-                      return `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-                    }}
-                  />
-                  <Legend />
-                  <Bar dataKey="sales" fill="#667eea" name="Sales (₹)" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+      {closingLoading && closingData && (
+        <div className="report-info-banner" role="status">
+          Updating report…
         </div>
       )}
-
-      {/* Expense Report */}
-      {reportType === 'expenses' && (
-        <div className="report-section">
-          <h3>Expense Report by Category</h3>
-          <div className="chart-card">
-            <div className="chart-container">
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie
-                    data={expenseCategoryData}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                    outerRadius={100}
-                    fill="#8884d8"
-                    dataKey="value"
-                  >
-                    {expenseCategoryData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    formatter={(value) => {
-                      const num = Number(value) || 0;
-                      return `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-                    }}
-                  />
-                  <Legend 
-                    formatter={(value, entry) => {
-                      const num = Number(entry?.payload?.value) || 0;
-                      return `${entry?.payload?.name || value}: ₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-          <div className="report-card">
-            <h4>Expense Summary</h4>
-            {expenseCategoryData.map((item, index) => (
-              <div key={index} className="report-row">
-                <span className="report-label">{item.name}:</span>
-                <span className="report-value negative">
-                  ₹{(Number(item?.value || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({item?.count || 0} transactions)
-                </span>
-              </div>
+      {closingData && Array.isArray(closingData.warnings) && closingData.warnings.length > 0 && (
+        <div className="report-warnings-banner" role="status">
+          <ul className="report-warnings-list">
+            {closingData.warnings.map((w, i) => (
+              <li key={i}>{w}</li>
             ))}
-          </div>
+          </ul>
         </div>
       )}
+
+      {closingData ? (
+        <>
+          <div className="daily-closing-header daily-closing-header-inline">
+            <span className="daily-closing-date-badge" role="status">
+              {periodLabel}
+            </span>
+            {isRange && <span className="daily-range-pill">Date range</span>}
+            {closingData.location != null && String(closingData.location).trim() !== '' && (
+              <span className="reports-location-chip" title="Data filtered by your account location">
+                {String(closingData.location).trim()}
+              </span>
+            )}
+          </div>
+
+          <div className="daily-summary-grid">
+            <div className="daily-summary-card">
+              <span className="daily-summary-label">Total bills</span>
+              <span className="daily-summary-value">{closingData.totalBills ?? 0}</span>
+              <span className="daily-summary-hint">
+                Invoices with bill date in the selected {isRange ? 'range' : 'day'}
+              </span>
+            </div>
+            <div className="daily-summary-card">
+              <span className="daily-summary-label">Total sales</span>
+              <span className="daily-summary-value">{money(closingData.totalSales)}</span>
+              <span className="daily-summary-hint">Sum of bill totals for those invoices</span>
+            </div>
+            <div className="daily-summary-card">
+              <span className="daily-summary-label">Total paid</span>
+              <span className="daily-summary-value">{money(closingData.totalPaidOnBills)}</span>
+              <span className="daily-summary-hint">Allocated on those bills (split payments)</span>
+            </div>
+            <div className="daily-summary-card">
+              <span className="daily-summary-label">Total due</span>
+              <span className="daily-summary-value">{money(closingData.totalDueOnBills)}</span>
+              <span className="daily-summary-hint">Still unpaid on those bills</span>
+            </div>
+          </div>
+
+          <div className="daily-paymode-grid daily-paymode-grid--tight-top" aria-label="Collections by payment mode">
+            <div className="daily-paymode cash">
+              <span>Cash</span>
+              <strong>{money(paySummary.CASH)}</strong>
+            </div>
+            <div className="daily-paymode upi">
+              <span>UPI</span>
+              <strong>{money(paySummary.UPI)}</strong>
+            </div>
+            <div className="daily-paymode bank">
+              <span>Bank transfer</span>
+              <strong>{money(paySummary.BANK_TRANSFER)}</strong>
+            </div>
+            <div className="daily-paymode other">
+              <span>Other (cheque, etc.)</span>
+              <strong>{money(otherCollected)}</strong>
+            </div>
+          </div>
+          <p className="report-muted daily-microcopy daily-total-collected-line">
+            <strong>Total collected</strong> (all modes, payment date in period): {money(closingData.totalCollected)}
+            {closingData.collectionsReconciliationOk === false && (
+              <span className="daily-recon-warn">
+                {' '}
+                · Modes vs total Δ {money(closingData.collectionsReconciliationDelta)}
+              </span>
+            )}
+          </p>
+
+          <h4 className="daily-subheading">{billsHeading}</h4>
+          <p className="report-table-scroll-hint">Scroll sideways to see all columns.</p>
+          <div className="daily-bills-table-block">
+            <div
+              className="report-table-wrap report-table-scroll-region"
+              role="region"
+              aria-label="Bills in period. Scroll horizontally if columns are cut off."
+              tabIndex={0}
+            >
+              <table className="report-data-table daily-bills-table">
+                <thead>
+                  <tr>
+                    <th>Bill date</th>
+                    <th>Bill</th>
+                    <th>Type</th>
+                    <th>Total</th>
+                    <th>Paid</th>
+                    <th>Due</th>
+                    <th>Cash</th>
+                    <th>UPI</th>
+                    <th>Bank</th>
+                    <th>Other</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {billsRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="report-muted">
+                        No bills in this period.
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedBills.map((row) => (
+                      <tr key={`${row.billType}-${row.billId}`}>
+                        <td>{formatShortDate(row.billDate)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="report-bill-link"
+                            onClick={() => handleBillPdf(row)}
+                            title="Download bill PDF"
+                          >
+                            {row.billNumber}
+                          </button>
+                        </td>
+                        <td>
+                          <span className="bill-type-pill">{row.billType}</span>
+                        </td>
+                        <td>{money(row.totalAmount)}</td>
+                        <td>{money(row.paidAmount)}</td>
+                        <td>{money(row.dueAmount)}</td>
+                        <td>{money(row.cashAmount)}</td>
+                        <td>{money(row.upiAmount)}</td>
+                        <td>{money(row.bankTransferAmount)}</td>
+                        <td>{money(row.otherAmount)}</td>
+                        <td>
+                          <span className="report-status-cell">
+                            <span className={`status-pill status-${(row.status || '').toLowerCase()}`}>{row.status}</span>
+                            {(row.overpaidAmount || 0) > 0.005 && (
+                              <span className="report-overpaid-tag" title="Payments exceed bill total">
+                                +{money(row.overpaidAmount)}
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <TablePagination
+              page={billsPageSafe}
+              pageCount={billsPageCount}
+              total={billsRows.length}
+              label="Bills pages"
+              onPrev={() => setBillsPage((p) => Math.max(1, p - 1))}
+              onNext={() => setBillsPage((p) => Math.min(billsPageCount, p + 1))}
+            />
+          </div>
+
+          <div className="daily-bottom-grid">
+            <div className="daily-expenses-panel">
+              <h4 className="daily-subheading">{expensesHeading}</h4>
+              <p className="report-table-scroll-hint">Scroll sideways to see all columns.</p>
+              <div
+                className={`report-table-wrap report-table-scroll-region daily-expenses-body-wrap${expenseLines.length > 0 ? ' daily-expenses-body-wrap--fill' : ''}`}
+                role="region"
+                aria-label="Expenses in period. Scroll horizontally if columns are cut off."
+                tabIndex={0}
+              >
+                <table className="report-data-table daily-expenses-table">
+                  <colgroup>
+                    <col className="col-exp-id" />
+                    <col className="col-exp-cat" />
+                    <col className="col-exp-amt" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Type / category</th>
+                      <th>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {expenseLines.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="report-muted">
+                          No expenses in this period.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedExpenses.map((ex) => (
+                        <tr key={ex.id}>
+                          <td>{ex.id}</td>
+                          <td>{[ex.expenseType, ex.category].filter(Boolean).join(' · ')}</td>
+                          <td>{money(ex.amount)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <TablePagination
+                page={expensePageSafe}
+                pageCount={expensePageCount}
+                total={expenseLines.length}
+                label="Expense pages"
+                onPrev={() => setExpensesPage((p) => Math.max(1, p - 1))}
+                onNext={() => setExpensesPage((p) => Math.min(expensePageCount, p + 1))}
+              />
+              <div className="report-table-wrap daily-expenses-tfoot-wrap">
+                <table className="report-data-table daily-expenses-table">
+                  <colgroup>
+                    <col className="col-exp-id" />
+                    <col className="col-exp-cat" />
+                    <col className="col-exp-amt" />
+                  </colgroup>
+                  <tfoot>
+                    <tr className="report-row-strong">
+                      <td colSpan={2}>Total expenses</td>
+                      <td>{money(closingData.totalExpenses)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+            <div className="cash-summary-card">
+              <h4>Cash summary</h4>
+              <div className="report-row">
+                <span>Cash collected {isRange ? 'in period' : '(today)'}</span>
+                <span className="report-value positive">{money(paySummary.CASH)}</span>
+              </div>
+              <div className="report-row">
+                <span>Total expenses {isRange ? 'in period' : '(today)'}</span>
+                <span className="report-value negative">{money(closingData.totalExpenses)}</span>
+              </div>
+              <div
+                className={`report-row report-row-strong cash-final ${(closingData.cashInHand || 0) < 0 ? 'negative' : 'positive'}`}
+              >
+                <span>Final cash in hand {isRange ? '(period)' : ''}</span>
+                <span className="report-value">{money(closingData.cashInHand)}</span>
+              </div>
+              <p className="report-muted daily-microcopy">
+                <strong>Cash collected</strong> in the selected {isRange ? 'range' : 'day'} minus{' '}
+                <strong>expenses posted</strong> in the same {isRange ? 'range' : 'day'}. UPI/bank are not in this number.
+              </p>
+            </div>
+          </div>
+
+          <Explainer title="How to read this report">
+            <li>
+              <strong>Search</strong>: Changing dates does not reload automatically — click <strong>Search</strong> to fetch
+              the report for the selected range.
+            </li>
+            <li>
+              <strong>From / To</strong>: Set both to the same date for one day, or choose a range. Defaults to today for
+              both.
+            </li>
+            <li>
+              <strong>Total bills / Total sales</strong>: Invoices whose <strong>bill date</strong> falls in the selected
+              period.
+            </li>
+            <li>
+              <strong>Total paid / Total due</strong>: On those invoices — allocated vs outstanding (split &amp; partial
+              payments).
+            </li>
+            <li>
+              <strong>Collections</strong>: Sums from stored payment lines whose <strong>payment date</strong> is in the
+              period (can differ from bill dates if you collect old dues later). <strong>Total collected</strong> is the sum
+              of all payment modes.
+            </li>
+            <li>
+              <strong>Bill table</strong>: Each invoice&apos;s bill date and paid split (Cash / UPI / Bank / Other).
+            </li>
+            <li>
+              <strong>Final cash in hand</strong>: Cash collected in the period minus expenses in the period; reconcile with
+              your cashbox.
+            </li>
+          </Explainer>
+        </>
+      ) : !closingError ? (
+        <p className="report-muted">No data.</p>
+      ) : null}
     </div>
   );
 };
 
-export default Reports;
+function Explainer({ title, children }) {
+  return (
+    <details className="report-explainer">
+      <summary>{title}</summary>
+      <ul className="report-explainer-list">{children}</ul>
+    </details>
+  );
+}
 
+export default Reports;

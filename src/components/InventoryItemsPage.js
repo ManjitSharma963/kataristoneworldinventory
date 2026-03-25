@@ -1,8 +1,17 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { getInventory } from '../utils/storage';
 import { API_BASE_URL } from '../config/api';
-import { handleApiResponse, getInventoryEndpoint } from '../utils/api';
+import {
+  handleApiResponse,
+  getInventoryEndpoint,
+  fetchInventoryHistory,
+  fetchProductById,
+  fetchProductChangeHistory,
+  updateInventoryProduct,
+  isAdmin
+} from '../utils/api';
 import './Dashboard.css';
+import InventoryUpdateModal from './InventoryUpdateModal';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -33,6 +42,8 @@ const initialFormData = {
   product_type: '',
   price_per_sqft: '',
   total_sqft_stock: '',
+  /** Update-inventory only: added to current on-hand stock (not sent as raw total). */
+  stock_quantity_to_add: '0',
   unit: '',
   hsn_number: '',
   primary_image_url: '',
@@ -54,6 +65,153 @@ const generateSlug = (text) => {
     .replace(/^-+|-+$/g, '');
 };
 
+function formatHistoryDate(v) {
+  if (v == null) return '—';
+  if (typeof v === 'string') {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? v : d.toLocaleString('en-IN');
+  }
+  if (Array.isArray(v) && v.length >= 3) {
+    const y = v[0];
+    const mo = v[1];
+    const d = v[2];
+    const h = v[3] ?? 0;
+    const mi = v[4] ?? 0;
+    const s = v[5] ?? 0;
+    return new Date(y, mo - 1, d, h, mi, s).toLocaleString('en-IN');
+  }
+  return String(v);
+}
+
+function formatActionLabel(action) {
+  if (!action) return '—';
+  const u = String(action).toUpperCase();
+  if (u === 'SALE') return 'Sale';
+  if (u === 'ADD') return 'Add';
+  if (u === 'UPDATE') return 'Update';
+  if (u === 'ADJUST') return 'Adjust';
+  return action;
+}
+
+function productToFormData(p) {
+  if (!p) return { ...initialFormData };
+  const n = (v) => (v == null || v === '' ? '' : String(v));
+  return {
+    name: p.name || '',
+    slug: p.slug || '',
+    product_type: p.productType || p.product_type || '',
+    price_per_sqft: n(p.pricePerUnit ?? p.price_per_sqft),
+    total_sqft_stock: n(p.quantity ?? p.totalSqftStock ?? p.total_sqft_stock),
+    unit: p.unit || '',
+    hsn_number: p.hsnNumber || p.hsn_number || '',
+    primary_image_url: p.primaryImageUrl || p.primary_image_url || '',
+    color: p.color || '',
+    labour_charges: n(p.labourCharges ?? p.labour_charges),
+    rto_fees: n(p.rtoFees ?? p.rto_fees),
+    damage_expenses: n(p.damageExpenses ?? p.damage_expenses),
+    others_expenses: n(p.othersExpenses ?? p.others_expenses),
+    transportation_charge: n(p.transportationCharge ?? p.transportation_charge),
+    gst_charges: n(p.gstCharges ?? p.gst_charges)
+  };
+}
+
+function historyTimeMs(v) {
+  if (v == null) return null;
+  if (typeof v === 'string') {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d.getTime();
+  }
+  if (Array.isArray(v) && v.length >= 3) {
+    const y = v[0];
+    const mo = v[1];
+    const d = v[2];
+    const h = v[3] ?? 0;
+    const mi = v[4] ?? 0;
+    const s = v[5] ?? 0;
+    return new Date(y, mo - 1, d, h, mi, s).getTime();
+  }
+  return null;
+}
+
+function snapshotQuantity(snap) {
+  if (!snap || typeof snap !== 'object') return null;
+  const q = snap.quantity;
+  return q != null && q !== '' ? Number(q) : null;
+}
+
+/** Pick inventory_history row written for the same product update (qty delta + close time). */
+function findBestMatchingInventory(pc, historyRows) {
+  const t = historyTimeMs(pc.createdAt);
+  if (t == null) return null;
+  const prevQ = snapshotQuantity(pc.previousSnapshot);
+  const nextQ = snapshotQuantity(pc.newSnapshot);
+  if (prevQ == null || nextQ == null) return null;
+  const delta = nextQ - prevQ;
+  if (Math.abs(delta) < 0.0001) return null;
+  let best = null;
+  let bestDiff = Infinity;
+  for (const h of historyRows) {
+    const ht = historyTimeMs(h.createdAt);
+    if (ht == null) continue;
+    const timeDiff = Math.abs(ht - t);
+    if (timeDiff > 12000) continue;
+    const hDelta = h.quantityChanged != null ? Number(h.quantityChanged) : null;
+    if (hDelta == null) continue;
+    if (Math.abs(hDelta - delta) > 0.02) continue;
+    if (timeDiff < bestDiff) {
+      bestDiff = timeDiff;
+      best = h;
+    }
+  }
+  return best;
+}
+
+function snapNum(snap, key) {
+  if (!snap || typeof snap !== 'object') return null;
+  const v = snap[key];
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function cellMoney(n) {
+  if (n == null || Number.isNaN(n)) return '—';
+  return Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function cellText(snap, key) {
+  if (!snap || typeof snap !== 'object') return '—';
+  const v = snap[key];
+  if (v == null || v === '') return '—';
+  return String(v);
+}
+
+/**
+ * Merges product_change_history with inventory_history: each product edit is one row with full pricing;
+ * standalone stock rows (sales, manual add) stay without snapshot columns.
+ */
+function buildUnifiedInventoryHistory(productChangeRows, historyRows) {
+  const changes = Array.isArray(productChangeRows) ? productChangeRows : [];
+  const stock = Array.isArray(historyRows) ? historyRows : [];
+  const matchedHistoryIds = new Set();
+  const rowsFromChanges = changes.map((pc) => {
+    const inv = findBestMatchingInventory(
+      pc,
+      stock.filter((h) => !matchedHistoryIds.has(h.id))
+    );
+    if (inv) matchedHistoryIds.add(inv.id);
+    return { kind: 'change', pc, inv };
+  });
+  const rowsFromStock = stock
+    .filter((h) => !matchedHistoryIds.has(h.id))
+    .map((h) => ({ kind: 'stock', h }));
+  return [...rowsFromChanges, ...rowsFromStock].sort((a, b) => {
+    const ta = a.kind === 'change' ? historyTimeMs(a.pc.createdAt) : historyTimeMs(a.h.createdAt);
+    const tb = b.kind === 'change' ? historyTimeMs(b.pc.createdAt) : historyTimeMs(b.h.createdAt);
+    return (tb || 0) - (ta || 0);
+  });
+}
+
 const InventoryItemsPage = () => {
   const [inventory, setInventory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -63,6 +221,33 @@ const InventoryItemsPage = () => {
   const [showAddInventory, setShowAddInventory] = useState(false);
   const [formData, setFormData] = useState(initialFormData);
   const [categories, setCategories] = useState([]);
+  const [detailModalProduct, setDetailModalProduct] = useState(null);
+  const [historyRows, setHistoryRows] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [productChangeRows, setProductChangeRows] = useState([]);
+  const [productChangeLoading, setProductChangeLoading] = useState(false);
+  const [showUpdateInventoryModal, setShowUpdateInventoryModal] = useState(false);
+  const [updateFormData, setUpdateFormData] = useState(() => ({ ...initialFormData }));
+  const [updateAuditNotes, setUpdateAuditNotes] = useState('');
+  const [selectedUpdateProductId, setSelectedUpdateProductId] = useState('');
+  const [updateFormLoading, setUpdateFormLoading] = useState(false);
+  /** On-hand qty when update form loaded; saved total = baseline + stock_quantity_to_add */
+  const [updateStockBaseline, setUpdateStockBaseline] = useState(null);
+
+  const updatePricingFormData = useMemo(
+    () => ({
+      ...updateFormData,
+      total_sqft_stock: String(
+        (updateStockBaseline ?? 0) + (parseFloat(updateFormData.stock_quantity_to_add) || 0)
+      )
+    }),
+    [updateFormData, updateStockBaseline]
+  );
+
+  const unifiedHistoryRows = useMemo(
+    () => buildUnifiedInventoryHistory(productChangeRows, historyRows),
+    [productChangeRows, historyRows]
+  );
 
   const fetchInventory = useCallback(async () => {
     try {
@@ -120,6 +305,176 @@ const InventoryItemsPage = () => {
   useEffect(() => {
     fetchCategories();
   }, [fetchCategories]);
+
+  const loadDetailHistory = useCallback(async (productId) => {
+    if (productId == null) return;
+    setHistoryLoading(true);
+    setProductChangeLoading(true);
+    try {
+      const [stock, changes] = await Promise.all([
+        fetchInventoryHistory(productId),
+        fetchProductChangeHistory(productId)
+      ]);
+      setHistoryRows(Array.isArray(stock) ? stock : []);
+      setProductChangeRows(Array.isArray(changes) ? changes : []);
+    } catch (err) {
+      console.error(err);
+      setHistoryRows([]);
+      setProductChangeRows([]);
+      window.alert(err.message || 'Could not load history');
+    } finally {
+      setHistoryLoading(false);
+      setProductChangeLoading(false);
+    }
+  }, []);
+
+  const openProductDetail = (item) => {
+    setDetailModalProduct(item);
+    loadDetailHistory(item.id);
+  };
+
+  const closeProductDetail = () => {
+    setDetailModalProduct(null);
+    setHistoryRows([]);
+    setProductChangeRows([]);
+  };
+
+  useEffect(() => {
+    if (!showUpdateInventoryModal || !selectedUpdateProductId) return;
+    let cancelled = false;
+    (async () => {
+      setUpdateFormLoading(true);
+      try {
+        const p = await fetchProductById(selectedUpdateProductId);
+        if (!cancelled) {
+          const rawQ = parseFloat(p.quantity ?? p.totalSqftStock ?? p.total_sqft_stock);
+          const baseline = Number.isNaN(rawQ) ? 0 : rawQ;
+          setUpdateStockBaseline(baseline);
+          setUpdateFormData({
+            ...productToFormData(p),
+            stock_quantity_to_add: '0',
+            total_sqft_stock: ''
+          });
+        }
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) window.alert(err.message || 'Could not load product');
+      } finally {
+        if (!cancelled) setUpdateFormLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedUpdateProductId, showUpdateInventoryModal]);
+
+  const openUpdateInventoryModal = () => {
+    setShowUpdateInventoryModal(true);
+    setSelectedUpdateProductId('');
+    setUpdateStockBaseline(null);
+    setUpdateFormData({ ...initialFormData });
+    setUpdateAuditNotes('');
+  };
+
+  const closeUpdateInventoryModal = () => {
+    setShowUpdateInventoryModal(false);
+    setSelectedUpdateProductId('');
+    setUpdateStockBaseline(null);
+    setUpdateFormData({ ...initialFormData });
+    setUpdateAuditNotes('');
+  };
+
+  const handleUpdateInputChange = (e) => {
+    const { name, value } = e.target;
+    setUpdateFormData((prev) => {
+      const newData = { ...prev, [name]: value };
+      if (name === 'name') newData.slug = generateSlug(value);
+      return newData;
+    });
+  };
+
+  const handleUpdateInventorySubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedUpdateProductId) {
+      window.alert('Select a product to edit');
+      return;
+    }
+    if (!updateFormData.name || !updateFormData.product_type || !updateFormData.price_per_sqft || !updateFormData.primary_image_url) {
+      window.alert('Please fill all required fields');
+      return;
+    }
+    const pricePerSqft = parseFloat(updateFormData.price_per_sqft);
+    const baseline = updateStockBaseline ?? 0;
+    const addRaw = parseFloat(updateFormData.stock_quantity_to_add);
+    const addQty = Number.isNaN(addRaw) ? 0 : addRaw;
+    const totalSqftStock = baseline + addQty;
+    if (Number.isNaN(pricePerSqft) || pricePerSqft < 0) {
+      window.alert('Please enter a valid price per unit');
+      return;
+    }
+    if (totalSqftStock < 0) {
+      window.alert('Resulting stock cannot be negative — reduce the quantity to add (or use a negative amount to adjust).');
+      return;
+    }
+    const trimmedName = updateFormData.name.trim();
+    const trimmedSlug = (updateFormData.slug || generateSlug(updateFormData.name)).trim();
+    const trimmedProductType = updateFormData.product_type.trim();
+    const trimmedImageUrl = updateFormData.primary_image_url.trim();
+    const trimmedColor = (updateFormData.color || '').trim();
+    if (!trimmedName || !trimmedProductType || !trimmedImageUrl) {
+      window.alert('Please fill all required fields (name, product type, and image URL cannot be empty)');
+      return;
+    }
+    const trimmedUnit = (updateFormData.unit || '').trim();
+    const labourCharges = parseFloat(updateFormData.labour_charges) || 0;
+    const rtoFees = parseFloat(updateFormData.rto_fees) || 0;
+    const damageExpenses = parseFloat(updateFormData.damage_expenses) || 0;
+    const othersExpenses = parseFloat(updateFormData.others_expenses) || 0;
+    const transportationCharge = parseFloat(updateFormData.transportation_charge) || 0;
+    const gstCharges = parseFloat(updateFormData.gst_charges) || 0;
+    const totalExpenses = labourCharges + rtoFees + damageExpenses + othersExpenses + transportationCharge + gstCharges;
+    const pricePerSqftAfter = totalSqftStock > 0
+      ? (pricePerSqft * totalSqftStock + totalExpenses) / totalSqftStock
+      : pricePerSqft;
+    const itemData = {
+      name: trimmedName,
+      slug: trimmedSlug,
+      productTypeString: trimmedProductType,
+      pricePerSqft: pricePerSqft,
+      totalSqftStock: totalSqftStock,
+      unit: trimmedUnit || 'piece',
+      hsnNumber: (updateFormData.hsn_number || '').trim() || undefined,
+      primaryImageUrl: trimmedImageUrl,
+      color: trimmedColor,
+      labourCharges,
+      rtoFees,
+      damageExpenses,
+      othersExpenses,
+      transportationCharge,
+      gstCharges,
+      pricePerSqftAfter: parseFloat(pricePerSqftAfter.toFixed(2))
+    };
+    try {
+      const userData = JSON.parse(localStorage.getItem('user') || '{}');
+      const userRole = userData?.role || userData?.userRole || 'admin';
+      const requestBody = {
+        ...itemData,
+        role: userRole,
+        userRole: userRole,
+        updateNotes: (updateAuditNotes || '').trim() || undefined
+      };
+      await updateInventoryProduct(selectedUpdateProductId, requestBody);
+      await fetchInventory();
+      if (detailModalProduct?.id != null && String(detailModalProduct.id) === String(selectedUpdateProductId)) {
+        loadDetailHistory(detailModalProduct.id);
+      }
+      closeUpdateInventoryModal();
+      window.alert('Inventory updated');
+    } catch (err) {
+      console.error(err);
+      window.alert(err.message || 'Failed to update inventory');
+    }
+  };
 
   const handleDeleteInventory = useCallback(async (item) => {
     const id = item?.id ?? item?.inventoryId;
@@ -368,8 +723,18 @@ const InventoryItemsPage = () => {
               <button type="button" className="btn btn-export" onClick={handleExportCSV} title="Export to CSV">📥 Export CSV</button>
             </>
           )}
+          {isAdmin() && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={openUpdateInventoryModal}
+              title="Edit product prices, GST, stock, and expenses"
+            >
+              Update inventory
+            </button>
+          )}
           <button type="button" className="btn btn-primary" onClick={() => setShowAddInventory(true)}>
-            + Add Inventory
+            Add inventory
           </button>
         </div>
       </div>
@@ -397,8 +762,8 @@ const InventoryItemsPage = () => {
           <div className="empty-state-wrapper">
             <span className="empty-icon">📦</span>
             <p className="empty-state">No inventory items yet</p>
-            <p className="empty-subtitle">Click &quot;+ Add Inventory&quot; to add your first item.</p>
-            <button type="button" className="btn btn-primary" onClick={() => setShowAddInventory(true)}>+ Add Inventory</button>
+            <p className="empty-subtitle">Click &quot;Add inventory&quot; to add your first item.</p>
+            <button type="button" className="btn btn-primary" onClick={() => setShowAddInventory(true)}>Add inventory</button>
           </div>
         ) : filteredInventory.length === 0 ? (
           <div className="empty-state-wrapper">
@@ -430,15 +795,26 @@ const InventoryItemsPage = () => {
                     const totalValue = totalSqftStock * pricePerUnitAfter;
                     const isLowStock = totalSqftStock < 10;
                     return (
-                      <tr key={`inv-${item.id ?? index}`} className={isLowStock ? 'low-stock-row' : ''}>
+                      <tr
+                        key={`inv-${item.id ?? index}`}
+                        className={`inventory-row-clickable${isLowStock ? ' low-stock-row' : ''}`}
+                        onClick={() => openProductDetail(item)}
+                        title="View details and stock history"
+                      >
                         <td className="product-name-cell">
                           {primaryImageUrl ? (
                             <div className="product-with-image">
-                              <img src={primaryImageUrl} alt={item.name} className="product-thumbnail" onError={(e) => { e.target.style.display = 'none'; }} />
-                              <span className="product-name">{item.name}</span>
+                              <img
+                                src={primaryImageUrl}
+                                alt={item.name}
+                                title={item.name}
+                                className="product-thumbnail"
+                                onError={(e) => { e.target.style.display = 'none'; }}
+                              />
+                              <span className="product-name" title={item.name}>{item.name}</span>
                             </div>
                           ) : (
-                            <span className="product-name">{item.name}</span>
+                            <span className="product-name" title={item.name}>{item.name}</span>
                           )}
                         </td>
                         <td><span className="product-type-badge">{productType}</span></td>
@@ -449,7 +825,15 @@ const InventoryItemsPage = () => {
                         </td>
                         <td>{item.color ? <span className="color-badge">{item.color}</span> : '-'}</td>
                         <td className="total-cell total-col"><span className="total-amount">₹{totalValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></td>
-                        <td className="actions-cell">
+                        <td className="actions-cell" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            className="btn-icon btn-view"
+                            title="Details & history"
+                            onClick={() => openProductDetail(item)}
+                          >
+                            👁️
+                          </button>
                           <button type="button" className="btn-icon btn-delete" title="Delete" onClick={() => handleDeleteInventory(item)}>🗑️</button>
                         </td>
                       </tr>
@@ -482,7 +866,7 @@ const InventoryItemsPage = () => {
         <div className="modal-overlay" onClick={() => setShowAddInventory(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Add New Inventory Item</h3>
+              <h3>Add inventory</h3>
               <button className="modal-close" onClick={() => setShowAddInventory(false)}>×</button>
             </div>
             <div className="modal-body">
@@ -712,13 +1096,178 @@ const InventoryItemsPage = () => {
                   </div>
                 </div>
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary">Add Item</button>
+                  <button type="submit" className="btn btn-primary">Add inventory</button>
                   <button type="button" className="btn btn-secondary" onClick={() => setShowAddInventory(false)}>Cancel</button>
                 </div>
               </form>
             </div>
           </div>
         </div>
+      )}
+
+      {detailModalProduct && (
+        <div className="modal-overlay" onClick={closeProductDetail}>
+          <div
+            className="modal-content modal-inventory-detail modal-inventory-detail--full-history"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <h3>{detailModalProduct.name}</h3>
+                <p className="inventory-history-modal-subtitle">
+                  Stock movements with pricing, GST, labour, and other fields after each product update; sales and manual
+                  stock rows show quantity only.
+                </p>
+              </div>
+              <button type="button" className="modal-close" onClick={closeProductDetail} aria-label="Close">
+                ×
+              </button>
+            </div>
+            <div className="modal-body modal-body--history-only">
+              <h4 className="inventory-history-section-title">Inventory history</h4>
+              <p className="inventory-history-hint">
+                Product edits include full snapshot columns (after-save values). Duplicate quantity-only lines from the same
+                edit are merged into that row.
+              </p>
+              {historyLoading || productChangeLoading ? (
+                <p className="inventory-history-loading">Loading…</p>
+              ) : unifiedHistoryRows.length === 0 ? (
+                <p className="inventory-history-empty">No history recorded yet.</p>
+              ) : (
+                <div className="inventory-history-table-wrap inventory-history-table-wrap--unified">
+                  <table className="data-table inventory-history-table inventory-history-table--unified">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Event</th>
+                        <th>Stock Δ</th>
+                        <th>Previous</th>
+                        <th>New</th>
+                        <th>Price/unit</th>
+                        <th>GST</th>
+                        <th>Labour</th>
+                        <th>RTO</th>
+                        <th>Damage</th>
+                        <th>Other</th>
+                        <th>Transport</th>
+                        <th>Price after exp.</th>
+                        <th>HSN</th>
+                        <th>Color</th>
+                        <th>Unit</th>
+                        <th>Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {unifiedHistoryRows.map((row) => {
+                        if (row.kind === 'change') {
+                          const { pc, inv } = row;
+                          const after = pc.newSnapshot;
+                          const prevQ = snapshotQuantity(pc.previousSnapshot);
+                          const nextQ = snapshotQuantity(pc.newSnapshot);
+                          const delta =
+                            prevQ != null && nextQ != null ? nextQ - prevQ : inv?.quantityChanged != null ? Number(inv.quantityChanged) : null;
+                          const notes = pc.notes || inv?.notes || '—';
+                          return (
+                            <tr key={`pc-${pc.id}`}>
+                              <td>{formatHistoryDate(pc.createdAt)}</td>
+                              <td>Product update</td>
+                              <td className="amount-cell">
+                                {delta != null && !Number.isNaN(delta)
+                                  ? (delta > 0 ? '+' : '') +
+                                    Number(delta).toLocaleString('en-IN', {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2
+                                    })
+                                  : '—'}
+                              </td>
+                              <td>{prevQ != null ? cellMoney(prevQ) : inv?.previousQuantity != null ? cellMoney(Number(inv.previousQuantity)) : '—'}</td>
+                              <td>{nextQ != null ? cellMoney(nextQ) : inv?.newQuantity != null ? cellMoney(Number(inv.newQuantity)) : '—'}</td>
+                              <td>{cellMoney(snapNum(after, 'pricePerUnit'))}</td>
+                              <td>{cellMoney(snapNum(after, 'gstCharges'))}</td>
+                              <td>{cellMoney(snapNum(after, 'labourCharges'))}</td>
+                              <td>{cellMoney(snapNum(after, 'rtoFees'))}</td>
+                              <td>{cellMoney(snapNum(after, 'damageExpenses'))}</td>
+                              <td>{cellMoney(snapNum(after, 'othersExpenses'))}</td>
+                              <td>{cellMoney(snapNum(after, 'transportationCharge'))}</td>
+                              <td>{cellMoney(snapNum(after, 'pricePerSqftAfter'))}</td>
+                              <td>{cellText(after, 'hsnNumber')}</td>
+                              <td>{cellText(after, 'color')}</td>
+                              <td>{cellText(after, 'unit')}</td>
+                              <td className="inventory-notes-cell">{notes}</td>
+                            </tr>
+                          );
+                        }
+                        const h = row.h;
+                        return (
+                          <tr key={`st-${h.id}`}>
+                            <td>{formatHistoryDate(h.createdAt)}</td>
+                            <td>{formatActionLabel(h.actionType)}</td>
+                            <td className="amount-cell">
+                              {h.quantityChanged != null
+                                ? (h.quantityChanged > 0 ? '+' : '') +
+                                  Number(h.quantityChanged).toLocaleString('en-IN', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2
+                                  })
+                                : '—'}
+                            </td>
+                            <td>
+                              {h.previousQuantity != null
+                                ? Number(h.previousQuantity).toLocaleString('en-IN', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2
+                                  })
+                                : '—'}
+                            </td>
+                            <td>
+                              {h.newQuantity != null
+                                ? Number(h.newQuantity).toLocaleString('en-IN', {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2
+                                  })
+                                : '—'}
+                            </td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td className="inventory-notes-cell">{h.notes || '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showUpdateInventoryModal && isAdmin() && (
+        <InventoryUpdateModal
+          onClose={closeUpdateInventoryModal}
+          categories={categories}
+          inventory={inventory}
+          selectedUpdateProductId={selectedUpdateProductId}
+          setSelectedUpdateProductId={setSelectedUpdateProductId}
+          updateFormLoading={updateFormLoading}
+          updateFormData={updateFormData}
+          updateStockBaseline={updateStockBaseline}
+          updatePricingFormData={updatePricingFormData}
+          handleUpdateInputChange={handleUpdateInputChange}
+          updateAuditNotes={updateAuditNotes}
+          setUpdateAuditNotes={setUpdateAuditNotes}
+          onSubmit={handleUpdateInventorySubmit}
+          calculatePricePerSqft={calculatePricePerSqft}
+        />
       )}
     </div>
   );

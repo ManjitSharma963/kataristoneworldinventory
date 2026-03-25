@@ -50,19 +50,20 @@ body {
 }
 
 .sidebar-header {
-  padding: 30px 20px;
+  padding: 14px 14px 12px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
-  gap: 15px;
+  gap: 8px;
   border: none;
   position: relative;
+  flex-shrink: 0;
 }
 
 .profile-picture {
-  width: 60px;
-  height: 60px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   overflow: hidden;
   box-shadow: 
@@ -106,10 +107,10 @@ body {
 
 .logout-btn {
   position: absolute;
-  top: 20px;
-  right: 20px;
-  width: 36px;
-  height: 36px;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
   border: none;
   border-radius: 10px;
   background: #e0e5ec;
@@ -139,28 +140,32 @@ body {
 
 .sidebar-nav {
   flex: 1;
-  padding: 20px 0;
+  min-height: 0;
+  padding: 6px 0 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 15px;
-  padding: 12px 20px;
+  gap: 10px;
+  padding: 8px 12px;
   border: none;
   background: #e0e5ec;
   cursor: pointer;
   transition: all 0.3s ease;
   text-align: left;
   color: #666;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   position: relative;
-  margin: 0 10px;
-  border-radius: 12px;
+  margin: 0 8px;
+  border-radius: 10px;
   box-shadow: 
     5px 5px 10px rgba(163, 177, 198, 0.7),
     -5px -5px 10px rgba(255, 255, 255, 0.8),
@@ -190,8 +195,9 @@ body {
 }
 
 .nav-icon {
-  font-size: 20px;
-  width: 24px;
+  font-size: 17px;
+  width: 22px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -254,10 +260,10 @@ body {
 
 .sidebar-toggle {
   position: absolute;
-  top: 20px;
+  top: 12px;
   right: -15px;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   background: #e0e5ec;
   border: none;
   border-radius: 50%;
@@ -571,6 +577,8 @@ body {
     left: 0;
     top: 0;
     height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
     width: 280px;
     max-width: 85vw;
     transform: translateX(-100%);
@@ -587,10 +595,58 @@ body {
     transform: translateX(0);
   }
 
+  /* Tighter drawer so all nav items fit; nav scrolls if viewport is very short */
+  .sidebar.mobile .sidebar-header {
+    padding: 8px 40px 8px 10px;
+    gap: 6px;
+  }
+
+  .sidebar.mobile .profile-picture {
+    width: 44px;
+    height: 44px;
+  }
+
+  .sidebar.mobile .user-info {
+    padding: 5px 6px;
+  }
+
+  .sidebar.mobile .user-name {
+    font-size: 12px;
+  }
+
+  .sidebar.mobile .user-location {
+    font-size: 10px;
+  }
+
+  .sidebar.mobile .logout-btn {
+    top: 8px;
+    right: 40px;
+    width: 30px;
+    height: 30px;
+    font-size: 16px;
+  }
+
+  .sidebar.mobile .sidebar-nav {
+    padding: 4px 0 8px;
+    gap: 3px;
+  }
+
+  .sidebar.mobile .nav-item {
+    padding: 7px 10px;
+    font-size: 12px;
+    margin: 0 6px;
+    border-radius: 9px;
+  }
+
+  .sidebar.mobile .nav-icon {
+    font-size: 16px;
+    width: 20px;
+  }
+
   .mobile-close-btn {
     position: absolute;
-    top: 20px;
-    right: 20px;
+    top: 8px;
+    right: 8px;
     width: 32px;
     height: 32px;
     background: #e0e5ec;

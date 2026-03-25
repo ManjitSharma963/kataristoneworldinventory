@@ -1899,8 +1899,9 @@
 
 .product-with-image {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
+  min-width: 0;
 }
 
 .product-thumbnail {
@@ -1909,6 +1910,7 @@
   object-fit: cover;
   border-radius: 8px;
   border: none;
+  flex-shrink: 0;
   box-shadow: 
     4px 4px 8px rgba(163, 177, 198, 0.6),
     -4px -4px 8px rgba(255, 255, 255, 0.8);
@@ -1924,19 +1926,22 @@
 
 .product-name-cell {
   font-weight: 500;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: min(100%, 26rem);
+  vertical-align: top;
+  overflow: visible;
+  word-break: break-word;
 }
 
 .product-name {
   color: #333;
   font-weight: 500;
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: block;
+  white-space: normal;
+  overflow: visible;
+  word-break: break-word;
+  line-height: 1.4;
+  min-width: 0;
+  flex: 1;
 }
 
 .product-type-badge {
@@ -3064,6 +3069,10 @@
     font-weight: 700;
     color: #333;
     word-wrap: break-word;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+    white-space: normal;
   }
 
   .inventory-card-body {
@@ -3328,11 +3337,11 @@
 
   .product-name {
     font-size: 12px;
-    max-width: 120px;
+    max-width: none;
   }
 
   .product-name-cell {
-    max-width: 120px;
+    max-width: none;
   }
 
   .product-with-image {
@@ -3704,4 +3713,176 @@
 .dark-mode .api-error-banner {
   background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
   box-shadow: 0 4px 12px rgba(220, 53, 69, 0.4);
+}
+
+/* Inventory: product detail + stock history */
+.inventory-row-clickable {
+  cursor: pointer;
+}
+
+.inventory-row-clickable:hover {
+  background: rgba(102, 126, 234, 0.06);
+}
+
+.modal-inventory-detail,
+.modal-inventory-quick-stock {
+  max-width: 840px;
+  width: 100%;
+}
+
+.modal-inventory-detail--full-history {
+  max-width: min(1280px, 96vw);
+  width: 100%;
+}
+
+.inventory-history-modal-subtitle {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.modal-body--history-only {
+  padding-top: 8px;
+}
+
+.modal-inventory-update-scroll {
+  max-width: 720px;
+  width: 100%;
+  max-height: 92vh;
+  overflow-y: auto;
+}
+
+.inventory-history-section-title {
+  margin: 16px 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.inventory-history-section-title:first-of-type {
+  margin-top: 0;
+}
+
+.inventory-history-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.inventory-change-summary-cell {
+  white-space: normal;
+  max-width: 420px;
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.inventory-history-table-wrap--product-changes {
+  max-height: 220px;
+}
+
+.inventory-history-table-wrap--unified {
+  max-height: min(420px, 55vh);
+}
+
+.inventory-history-table--unified th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f8fafc;
+  box-shadow: 0 1px 0 #e2e8f0;
+}
+
+.modal-inventory-detail .modal-header {
+  align-items: flex-start;
+}
+
+.inventory-detail-summary {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+}
+
+.inventory-detail-summary p {
+  margin: 6px 0;
+  font-size: 14px;
+}
+
+.inventory-unit-label {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.inventory-history-heading {
+  margin: 16px 0 10px;
+  font-size: 15px;
+}
+
+.inventory-history-loading,
+.inventory-history-empty {
+  color: #64748b;
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.inventory-history-table-wrap {
+  overflow-x: auto;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.inventory-history-table {
+  font-size: 12px;
+  margin: 0;
+}
+
+.inventory-history-table th,
+.inventory-history-table td {
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.inventory-notes-cell {
+  white-space: normal;
+  max-width: 220px;
+  word-break: break-word;
+}
+
+.inventory-stock-forms {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.inventory-stock-form-block {
+  margin-bottom: 16px;
+}
+
+.inventory-stock-form-block h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.inventory-inline-stock-form .form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 10px;
+}
+
+.inventory-inline-stock-form .form-group.flex-grow {
+  flex: 1;
+  min-width: 160px;
+}
+
+.dark-mode .inventory-detail-summary {
+  background: #1e293b;
+  border-color: #334155;
 }

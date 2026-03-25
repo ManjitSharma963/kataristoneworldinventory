@@ -16,11 +16,13 @@
 
 .website-items-table .product-name-cell .product-with-image {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   gap: 10px;
-  min-height: 45px;
-  vertical-align: middle;
+  min-height: auto;
+  vertical-align: top;
+  max-width: 100%;
+  text-align: left;
 }
 
 .website-items-table .product-thumbnail {
@@ -34,10 +36,13 @@
 }
 
 .website-items-table .product-name-cell .product-name {
-  line-height: 45px;
-  vertical-align: middle;
+  line-height: 1.4;
+  vertical-align: top;
   flex-shrink: 1;
   min-width: 0;
+  white-space: normal;
+  word-break: break-word;
+  text-align: left;
 }
 
 .website-items-table .actions-cell {

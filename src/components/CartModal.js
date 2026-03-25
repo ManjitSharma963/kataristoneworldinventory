@@ -10,7 +10,11 @@ import 'primereact/resources/primereact.min.css';
 import 'primeicons/primeicons.css';
 import './CartModal.css';
 
-const VALID_PAYMENT_MODES = ['UPI', 'CASH', 'BANK_TRANSFER', 'CHEQUE'];
+const parsePayInput = (v) => {
+  if (v === '' || v === null || v === undefined) return 0;
+  const n = Number(parseFloat(String(v).replace(/[^\d.]/g, '')));
+  return isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100;
+};
 
 export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [cart, setCart] = useState([]);
@@ -57,11 +61,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     const saved = localStorage.getItem('cartBillType');
     return saved || 'NON-GST';
   });
-  const [paymentMode, setPaymentMode] = useState(() => {
-    const saved = localStorage.getItem('cartPaymentMode');
-    if (saved && VALID_PAYMENT_MODES.includes(saved)) return saved;
-    return 'CASH';
-  });
+  const [payCash, setPayCash] = useState(() => localStorage.getItem('cartPayCash') || '');
+  const [payUpi, setPayUpi] = useState(() => localStorage.getItem('cartPayUpi') || '');
+  const [payBank, setPayBank] = useState(() => localStorage.getItem('cartPayBank') || '');
+  const [payCheque, setPayCheque] = useState(() => localStorage.getItem('cartPayCheque') || '');
   const [labourCharge, setLabourCharge] = useState(() => {
     const saved = localStorage.getItem('cartLabourCharge');
     return saved ? parseFloat(saved) : 0;
@@ -147,8 +150,17 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   }, [billType]);
 
   useEffect(() => {
-    localStorage.setItem('cartPaymentMode', paymentMode);
-  }, [paymentMode]);
+    localStorage.setItem('cartPayCash', payCash);
+  }, [payCash]);
+  useEffect(() => {
+    localStorage.setItem('cartPayUpi', payUpi);
+  }, [payUpi]);
+  useEffect(() => {
+    localStorage.setItem('cartPayBank', payBank);
+  }, [payBank]);
+  useEffect(() => {
+    localStorage.setItem('cartPayCheque', payCheque);
+  }, [payCheque]);
 
   useEffect(() => {
     localStorage.setItem('cartGstVehicleNo', gstVehicleNo);
@@ -280,6 +292,13 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const transportationChargeNum = typeof transportationCharge === 'number' ? transportationCharge : (parseFloat(transportationCharge) || 0);
   const otherExpenseNum = typeof otherExpense === 'number' ? otherExpense : (parseFloat(otherExpense) || 0);
   const grandTotal = total + labourChargeNum + transportationChargeNum + otherExpenseNum;
+
+  const totalPaidNow =
+    parsePayInput(payCash) +
+    parsePayInput(payUpi) +
+    parsePayInput(payBank) +
+    parsePayInput(payCheque);
+  const paymentRemaining = Math.round(Math.max(0, grandTotal - totalPaidNow) * 100) / 100;
 
   // Strip leading zeros so "00001" -> "1", "000333" -> "333", keep "0" or "0.5"
   const stripLeadingZeros = (str) => {
@@ -416,41 +435,62 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
     setSubmitError('');
 
-    // Format address
-    const address = `${addressLine1}, ${city}, ${state} - ${pincode}`;
+    const taxRateNum = taxRate === '' ? 0 : (typeof taxRate === 'number' ? taxRate : parseFloat(taxRate) || 0);
+    const subtotalCheckout = cart.reduce((sum, item) => {
+      const price = item.pricePerSqftAfter || item.price || 0;
+      return sum + (price * (item.quantity || 0));
+    }, 0);
+    const taxAmtCheckout = (subtotalCheckout * taxRateNum) / 100;
+    const totalCheckout = Math.max(0, subtotalCheckout + taxAmtCheckout - (discountAmount || 0));
+    const labourChargeNum = typeof labourCharge === 'number' ? labourCharge : (parseFloat(labourCharge) || 0);
+    const transportationChargeNum =
+      typeof transportationCharge === 'number' ? transportationCharge : (parseFloat(transportationCharge) || 0);
+    const otherExpenseNum =
+      typeof otherExpense === 'number' ? otherExpense : (parseFloat(otherExpense) || 0);
+    const grandTotalCheckout = totalCheckout + labourChargeNum + transportationChargeNum + otherExpenseNum;
 
-    // Determine if GST bill based on GSTIN presence
+    const cashAmt = parsePayInput(payCash);
+    const upiAmt = parsePayInput(payUpi);
+    const bankAmt = parsePayInput(payBank);
+    const chequeAmt = parsePayInput(payCheque);
+    const paidSum = cashAmt + upiAmt + bankAmt + chequeAmt;
+    if (paidSum - grandTotalCheckout > 0.015) {
+      setSubmitError(
+        `Total paid (₹${paidSum.toFixed(2)}) cannot exceed grand total (₹${grandTotalCheckout.toFixed(2)})`
+      );
+      return;
+    }
+
+    const payments = [];
+    if (cashAmt > 0) payments.push({ amount: cashAmt, paymentMode: 'CASH' });
+    if (upiAmt > 0) payments.push({ amount: upiAmt, paymentMode: 'UPI' });
+    if (bankAmt > 0) payments.push({ amount: bankAmt, paymentMode: 'BANK_TRANSFER' });
+    if (chequeAmt > 0) payments.push({ amount: chequeAmt, paymentMode: 'CHEQUE' });
+
+    const address = `${addressLine1}, ${city}, ${state} - ${pincode}`;
     const isGST = billType === 'GST' || (gstin && gstin.trim() !== '');
     const finalBillType = isGST ? 'GST' : 'NON-GST';
-    const gstRate = isGST ? (taxRateNum > 0 ? taxRateNum : 18) : 0;
-
-    // Prepare bill data - matching backend API structure
-    // Many APIs persist payment under `paymentMethod` only; send both + snake_case so one maps.
-    const paymentModeValue = String(paymentMode || 'CASH').trim() || 'CASH';
 
     const billData = {
       billType: finalBillType,
       customerMobileNumber: mobileNumber,
       customerName: customerName.trim(),
-      address: address, // Backend expects 'address', not 'customerAddress'
+      address,
       gstin: gstin.trim() || null,
       customerEmail: email.trim() || null,
       items: formatCartItemsForBilling(cart),
       taxPercentage: taxRateNum,
       discountAmount: discountAmount || 0,
-      totalAmount: total,
+      totalAmount: totalCheckout,
       labourCharge: labourChargeNum || 0,
       transportationCharge: transportationChargeNum || 0,
       otherExpenses: otherExpenseNum || 0,
-      grandTotal: grandTotal,
-      paymentMode: paymentModeValue,
-      payment_method: paymentModeValue,
-      paymentMethod: paymentModeValue,
+      grandTotal: grandTotalCheckout,
+      payments,
       ...(billType === 'GST' && {
         vehicleNo: gstVehicleNo.trim() || null,
         deliveryAddress: gstDeliveryAddress.trim() || null
       })
-      // Note: subtotal, taxAmount, billType, gstRate are calculated on backend if needed
     };
 
     setIsSubmitting(true);
@@ -490,6 +530,8 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               .join('\n');
             if (validationErrors) {
               errorMessage = `Validation errors:\n${validationErrors}`;
+            } else if (errorJson.error) {
+              errorMessage = errorJson.error;
             } else if (errorJson.message) {
               errorMessage = errorJson.message;
             }
@@ -520,7 +562,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       setTaxRate(0);
       setDiscountAmount(0);
       setBillType('NON-GST');
-      setPaymentMode('CASH');
+      setPayCash('');
+      setPayUpi('');
+      setPayBank('');
+      setPayCheque('');
       setGstVehicleNo('');
       setGstDeliveryAddress('');
       setLabourCharge(0);
@@ -947,19 +992,42 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               </select>
             </div>
 
-            <div className="summary-row editable-field">
-              <span className="summary-label">Payment Mode:</span>
-              <select
-                value={paymentMode}
-                onChange={(e) => setPaymentMode(e.target.value)}
-                className="bill-type-select"
-                title="How the customer will pay"
-              >
-                <option value="UPI">UPI</option>
-                <option value="CASH">CASH</option>
-                <option value="BANK_TRANSFER">BANK TRANSFER</option>
-                <option value="CHEQUE">CHEQUE</option>
-              </select>
+            <div className="cart-payment-split" role="group" aria-label="Split payment amounts">
+              <div className="summary-row cart-payment-split-title">
+                <span className="summary-label">Payments (₹)</span>
+              </div>
+              {[
+                ['Cash', payCash, setPayCash],
+                ['UPI', payUpi, setPayUpi],
+                ['Bank transfer', payBank, setPayBank],
+                ['Cheque', payCheque, setPayCheque]
+              ].map(([label, val, setVal]) => (
+                <div key={label} className="summary-row editable-field cart-payment-row">
+                  <span className="summary-label">{label}</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    className="bill-type-select cart-payment-input"
+                    placeholder="0"
+                    value={val}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/[^\d.]/g, '');
+                      setVal(raw);
+                    }}
+                  />
+                </div>
+              ))}
+              <div className="summary-row cart-payment-totals">
+                <span className="summary-label">Total paid</span>
+                <span className="summary-value">₹ {totalPaidNow.toFixed(2)}</span>
+              </div>
+              <div className="summary-row cart-payment-totals">
+                <span className="summary-label">Remaining</span>
+                <span className={`summary-value${paymentRemaining > 0.009 ? ' cart-payment-due' : ''}`}>
+                  ₹ {paymentRemaining.toFixed(2)}
+                </span>
+              </div>
+              <p className="cart-payment-hint">Leave fields empty or zero for credit (due). Overpay is not allowed.</p>
             </div>
           </div>
 

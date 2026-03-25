@@ -58,21 +58,54 @@ const apiCall = async (endpoint, options = {}) => {
 
     if (!response.ok) {
       const errorText = await response.text();
-      
+
+      let parsedBody = null;
+      try {
+        if (errorText) parsedBody = JSON.parse(errorText);
+      } catch {
+        /* not JSON */
+      }
+
+      const headerRequestId =
+        response.headers.get('X-Request-Id') || response.headers.get('X-Request-ID');
+      const requestId =
+        headerRequestId ||
+        (parsedBody && typeof parsedBody === 'object'
+          ? parsedBody.requestId || parsedBody.request_id
+          : null);
+
       // Handle session expiry - 401 Unauthorized
       // Session length is set by the backend (e.g. JWT exp claim). Frontend does not set any timeout;
       // we only logout when the backend returns 401. To increase session duration, update the backend.
       if (response.status === 401 && !isAuthEndpoint) {
-        // Session expired - logout automatically
         handleSessionExpiry();
-        throw new Error('Session expired. Please login again.');
+        const err = new Error('Session expired. Please login again.');
+        err.status = 401;
+        err.requestId = requestId;
+        err.responseBody = parsedBody;
+        throw err;
       }
-      
+
       // For auth endpoints, provide more helpful error messages
       if (isAuthEndpoint && response.status === 401) {
         throw new Error(`Authentication endpoint error: The backend may be incorrectly requiring authentication for public endpoints. ${errorText}`);
       }
-      throw new Error(`API Error: ${response.status} ${response.statusText} - ${errorText}`);
+
+      let friendly =
+        response.status >= 500
+          ? 'Something went wrong on the server. Please try again in a moment.'
+          : `Request failed (${response.status}).`;
+      if (parsedBody && typeof parsedBody === 'object') {
+        if (parsedBody.message) friendly = String(parsedBody.message);
+        else if (typeof parsedBody.error === 'string') friendly = parsedBody.error;
+      }
+
+      const err = new Error(friendly);
+      err.status = response.status;
+      err.requestId = requestId || undefined;
+      err.responseBody = parsedBody;
+      err.rawMessage = `API Error: ${response.status} ${response.statusText} - ${errorText}`;
+      throw err;
     }
 
     // Handle empty responses
@@ -374,6 +407,66 @@ export const getDailyBudgetHistory = async () => {
   if (res?.content) return res.content;
   if (res?.data) return Array.isArray(res.data) ? res.data : [];
   return [];
+};
+
+/**
+ * Daily closing report (location-scoped from JWT). Reads bills, bill_payments, expenses from the database.
+ * @param {{ date: string, dateTo?: string, backfillLegacy?: boolean }} params - date and optional inclusive end (YYYY-MM-DD)
+ * @returns {Promise<Object>} DailyClosingReportDTO
+ */
+export const fetchProductById = async (productId) => {
+  return await apiCall(`/inventory/${productId}`, { method: 'GET' });
+};
+
+export const updateInventoryProduct = async (productId, body) => {
+  return await apiCall(`/inventory/${productId}`, {
+    method: 'PUT',
+    body: JSON.stringify(body)
+  });
+};
+
+/** Full product edit snapshots (prices, GST, stock, etc.). Newest first. */
+export const fetchProductChangeHistory = async (productId) => {
+  return await apiCall(`/inventory/product-changes/${productId}`, { method: 'GET' });
+};
+
+/** Manual stock increase; admin only. */
+export const addInventoryStock = async ({ productId, quantity, notes }) => {
+  return await apiCall('/inventory/add-stock', {
+    method: 'POST',
+    body: JSON.stringify({
+      productId,
+      quantity,
+      ...(notes != null && String(notes).trim() !== '' ? { notes: String(notes).trim() } : {})
+    })
+  });
+};
+
+/** Manual stock set to absolute quantity; admin only. */
+export const updateInventoryStock = async ({ productId, newQuantity, notes }) => {
+  return await apiCall('/inventory/update-stock', {
+    method: 'POST',
+    body: JSON.stringify({
+      productId,
+      newQuantity,
+      ...(notes != null && String(notes).trim() !== '' ? { notes: String(notes).trim() } : {})
+    })
+  });
+};
+
+/** Stock audit trail for a product (newest first). */
+export const fetchInventoryHistory = async (productId) => {
+  return await apiCall(`/inventory/history/${productId}`, { method: 'GET' });
+};
+
+export const fetchDailyClosingReport = async ({ date, dateTo, backfillLegacy = false }) => {
+  const params = new URLSearchParams();
+  params.set('date', date);
+  if (dateTo != null && dateTo !== '') {
+    params.set('dateTo', dateTo);
+  }
+  params.set('backfillLegacy', String(!!backfillLegacy));
+  return await apiCall(`/reports/daily-closing?${params.toString()}`, { method: 'GET' });
 };
 
 // ==================== BILL PDF DOWNLOAD ====================

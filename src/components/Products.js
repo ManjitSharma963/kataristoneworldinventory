@@ -184,7 +184,7 @@ const Products = () => {
                 <div key={product.id || `product-${product.name}`} className="product-card">
                   <div className="product-image-wrapper">
                     {imageUrl ? (
-                      <img src={imageUrl} alt={productName} className="product-image" />
+                      <img src={imageUrl} alt={productName} title={productName} className="product-image" />
                     ) : (
                       <div className="product-image-placeholder">
                         <i className="pi pi-image" style={{ fontSize: '3rem', color: '#ccc' }}></i>
@@ -193,7 +193,7 @@ const Products = () => {
                     <div className="product-badge">{productType}</div>
                   </div>
                   <div className="product-content">
-                    <h4 className="product-name">{productName}</h4>
+                    <h4 className="product-name" title={productName}>{productName}</h4>
                     <div className="product-meta">
                       <span style={{ textTransform: 'capitalize' }}>{productType}</span>
                       {productColor && productColor !== 'multi' && (

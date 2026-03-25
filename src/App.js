@@ -303,6 +303,13 @@ function App() {
                   <span className="nav-icon">👥</span>
                   <span className="nav-label">Customers</span>
                 </button>
+                <button
+                  className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('reports')}
+                >
+                  <span className="nav-icon">📋</span>
+                  <span className="nav-label">Reports</span>
+                </button>
               </>
             )}
             <button 
@@ -312,17 +319,6 @@ function App() {
               <span className="nav-icon">🛒</span>
               <span className="nav-label">Products</span>
             </button>
-            {/* Reports button commented out - uncomment if needed
-            {userIsAdmin && (
-              <button 
-                className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
-                onClick={() => setActiveNav('reports')}
-              >
-                <span className="nav-icon">📊</span>
-                <span className="nav-label">Reports</span>
-              </button>
-            )}
-            */}
           </nav>
           <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? '←' : '→'}
@@ -442,7 +438,7 @@ function App() {
                         setMobileMenuOpen(false);
                       }}
                     >
-                      <span className="nav-icon">📊</span>
+                      <span className="nav-icon">📋</span>
                       <span className="nav-label">Reports</span>
                     </button>
                   )}
@@ -509,6 +505,13 @@ function App() {
               >
                 <span className="bottom-nav-icon">👥</span>
                 <span className="bottom-nav-label">Customers</span>
+              </button>
+              <button 
+                className={`bottom-nav-item ${activeNav === 'reports' ? 'active' : ''}`}
+                onClick={() => setActiveNav('reports')}
+              >
+                <span className="bottom-nav-icon">📋</span>
+                <span className="bottom-nav-label">Reports</span>
               </button>
             </>
           )}

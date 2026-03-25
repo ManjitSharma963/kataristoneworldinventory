@@ -343,5 +343,1208 @@
     align-items: flex-start;
     gap: 5px;
   }
+
+  .daily-summary-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .daily-bottom-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .daily-bills-table {
+    font-size: 12px;
+  }
+}
+
+/* —— Layout matching reference mockups —— */
+.reports-layout {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.reports-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.reports-title {
+  margin: 0 0 8px 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1e1b4b;
+}
+
+.reports-sub {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #64748b;
+  max-width: 52ch;
+  line-height: 1.45;
+}
+
+.reports-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.reports-btn-print,
+.reports-btn-export {
+  flex-shrink: 0;
+  padding: 10px 20px;
+  border-radius: 12px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reports-btn-print {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  box-shadow: 4px 4px 12px rgba(102, 126, 234, 0.35);
+}
+
+.reports-btn-export {
+  background: #fff;
+  color: #4338ca;
+  border: 1px solid #c7d2fe;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.reports-btn-export:hover:not(:disabled) {
+  background: #eef2ff;
+  border-color: #a5b4fc;
+}
+
+.reports-btn-print:disabled,
+.reports-btn-export:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.report-warnings-banner {
+  background: #fffbeb;
+  color: #92400e;
+  padding: 10px 14px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  border: 1px solid #fde68a;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.report-warnings-list {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.daily-recon-warn {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.report-bill-link {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: #4f46e5;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.report-bill-link:hover {
+  color: #3730a3;
+}
+
+.report-status-cell {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.report-overpaid-tag {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #0f766e;
+  background: #ccfbf1;
+  border-radius: 4px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+
+.report-error-banner--with-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.report-error-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.report-error-message {
+  margin: 0;
+}
+
+.report-error-ref {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: #475569;
+}
+
+.report-error-ref code {
+  font-size: 0.85em;
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.report-error-retry {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+}
+
+.report-error-retry:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.report-error-retry:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.report-stale-dates-banner {
+  background: #f0f9ff;
+  color: #1e3a5f;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  border: 1px solid #bae6fd;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.report-table-scroll-hint {
+  display: none;
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+@media (max-width: 900px) {
+  .report-table-scroll-hint {
+    display: block;
+  }
+}
+
+.report-table-scroll-region {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.report-table-scroll-region:focus {
+  outline: none;
+}
+
+.report-table-scroll-region:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.report-filters-bar {
+  margin-bottom: 20px;
+}
+
+.report-filters-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+  justify-content: flex-end;
+}
+
+.daily-closing-date-row {
+  justify-content: flex-start;
+  align-items: flex-end;
+}
+
+.btn-clear-filter,
+.btn-primary-soft {
+  height: 44px;
+  padding: 0 20px;
+  border-radius: 12px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  background: #e8ecf3;
+  color: #475569;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.btn-primary-soft {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+}
+
+.btn-primary-soft:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.report-card-surface {
+  background: #fff !important;
+  border-radius: 16px;
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.report-row-sep {
+  border: none;
+  min-height: 1px;
+  padding: 0;
+  margin: 4px 0 8px;
+  background: linear-gradient(90deg, transparent, #cbd5e1, transparent);
+}
+
+.report-row-strong .report-label,
+.report-row-strong .report-value {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.report-section-head {
+  margin-bottom: 12px;
+}
+
+.report-muted {
+  color: #64748b;
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+.report-kpi-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin-top: 16px;
+  font-size: 0.95rem;
+  color: #334155;
+}
+
+.report-chart-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.report-table-wrap {
+  margin-top: 20px;
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.report-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.report-data-table th,
+.report-data-table td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.report-data-table th {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #475569;
+}
+
+.report-table-title {
+  margin: 0 0 12px 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* Daily closing */
+.daily-closing-section {
+  padding-bottom: 48px;
+}
+
+.daily-closing-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.daily-closing-header h3 {
+  margin: 0;
+  font-size: 1.35rem;
+  color: #1e1b4b;
+}
+
+.daily-closing-date-badge {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #64748b;
+  padding: 8px 14px;
+  background: #fff;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+}
+
+.daily-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.daily-summary-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.07);
+  border: 1px solid #e8ecf1;
+}
+
+.daily-summary-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.daily-summary-value {
+  display: block;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 8px 0 4px;
+}
+
+.daily-summary-hint {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  line-height: 1.35;
+}
+
+.daily-subheading {
+  margin: 24px 0 8px;
+  font-size: 1.05rem;
+  color: #334155;
+}
+
+.daily-microcopy {
+  margin: 0 0 16px;
+}
+
+.daily-paymode-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.daily-paymode {
+  border-radius: 14px;
+  padding: 16px;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.daily-paymode strong {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.daily-paymode.cash {
+  background: linear-gradient(145deg, #059669, #047857);
+}
+.daily-paymode.upi {
+  background: linear-gradient(145deg, #2563eb, #1d4ed8);
+}
+.daily-paymode.bank {
+  background: linear-gradient(145deg, #ea580c, #c2410c);
+}
+.daily-paymode.other {
+  background: linear-gradient(145deg, #64748b, #475569);
+}
+
+.daily-bottom-grid {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 24px;
+  align-items: start;
+  margin-top: 8px;
+}
+
+.cash-summary-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.08);
+  border: 1px solid #e2e8f0;
+}
+
+.cash-summary-card h4 {
+  margin: 0 0 12px;
+  font-size: 1.05rem;
+}
+
+.cash-final {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 2px dashed #e2e8f0;
+}
+
+.cash-final.positive .report-value {
+  color: #059669;
+}
+
+.cash-final.negative .report-value {
+  color: #dc2626;
+  font-size: 1.25rem;
+}
+
+.bill-type-pill {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.status-pill {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.status-pill.status-paid {
+  background: #dcfce7;
+  color: #166534;
+}
+.status-pill.status-partial {
+  background: #fef3c7;
+  color: #92400e;
+}
+.status-pill.status-due {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.report-error-banner {
+  background: #fef2f2;
+  color: #b91c1c;
+  padding: 12px 16px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  border: 1px solid #fecaca;
+}
+
+.report-explainer {
+  margin-top: 20px;
+  padding: 16px 18px;
+  background: #f8fafc;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+.report-explainer summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #475569;
+  list-style: none;
+}
+
+.report-explainer summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-explainer-list {
+  margin: 12px 0 0 1.1rem;
+  padding: 0;
+  color: #64748b;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.report-explainer-list code {
+  font-size: 0.8rem;
+  background: #e2e8f0;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+@media (max-width: 900px) {
+  .daily-paymode-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* —— Compact Daily Closing (smaller cards, type, spacing) —— */
+.reports-daily-only.reports-container {
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.reports-daily-only .reports-top {
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.reports-daily-only .reports-title {
+  font-size: 1rem;
+  margin-bottom: 0;
+}
+
+.reports-daily-only .reports-header-actions {
+  gap: 6px;
+}
+
+.reports-daily-only .reports-btn-print,
+.reports-daily-only .reports-btn-export {
+  padding: 5px 12px;
+  font-size: 0.72rem;
+  border-radius: 8px;
+}
+
+.reports-daily-only .report-warnings-banner {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 0.72rem;
+  border-radius: 8px;
+}
+
+.reports-daily-only .report-warnings-list {
+  padding-left: 1rem;
+}
+
+.reports-daily-only .daily-total-collected-line {
+  margin-top: 2px;
+}
+
+.reports-daily-only .report-bill-link {
+  font-size: inherit;
+}
+
+.reports-daily-only .report-overpaid-tag {
+  font-size: 0.58rem;
+}
+
+.reports-daily-only .report-filters {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+}
+
+.reports-daily-only .report-filters-bar {
+  margin-bottom: 8px;
+}
+
+.reports-daily-only .report-filters-inner {
+  gap: 10px;
+}
+
+.reports-daily-only .report-filters .form-group {
+  gap: 4px;
+}
+
+.reports-daily-only .report-filters .form-group label {
+  font-size: 0.68rem;
+}
+
+.reports-daily-only .report-filters .form-group input[type="date"] {
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  height: 30px;
+  min-width: 132px;
+  border-radius: 6px;
+}
+
+.reports-daily-only .report-filters .form-group.daily-filter-actions > label.daily-filter-actions-label {
+  visibility: visible;
+  height: auto;
+  min-height: 18px;
+  line-height: 1.2;
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.reports-daily-only .daily-filter-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.reports-daily-only .btn-clear-dates {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.reports-daily-only .btn-clear-dates:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  color: #334155;
+}
+
+.reports-daily-only .btn-primary-soft,
+.reports-daily-only .report-filters .form-group:last-child .daily-filter-buttons button {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 0.72rem;
+  border-radius: 6px;
+}
+
+.reports-daily-only .daily-closing-daterange-row {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.reports-daily-only .daily-closing-header.daily-closing-header-inline {
+  justify-content: flex-start;
+  margin-bottom: 6px;
+  gap: 6px;
+}
+
+.reports-daily-only .daily-range-pill {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.reports-daily-only .reports-location-chip {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reports-daily-only .report-info-banner {
+  background: #eff6ff;
+  color: #1e40af;
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  border: 1px solid #bfdbfe;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.reports-daily-only .daily-closing-date-badge {
+  font-size: 0.72rem;
+  padding: 3px 8px;
+}
+
+.reports-daily-only .daily-summary-grid {
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.reports-daily-only .daily-summary-card {
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
+.reports-daily-only .daily-summary-label {
+  font-size: 0.6rem;
+}
+
+.reports-daily-only .daily-summary-value {
+  font-size: 0.92rem;
+  margin: 2px 0 2px;
+}
+
+.reports-daily-only .daily-summary-hint {
+  font-size: 0.58rem;
+  line-height: 1.2;
+}
+
+.reports-daily-only .daily-subheading {
+  margin: 8px 0 3px;
+  font-size: 0.78rem;
+}
+
+.reports-daily-only .daily-microcopy,
+.reports-daily-only .report-muted.daily-microcopy {
+  margin: 0 0 6px;
+  font-size: 0.7rem;
+}
+
+.reports-daily-only .daily-paymode-grid {
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.reports-daily-only .daily-paymode-grid--tight-top {
+  margin-top: 0;
+}
+
+.reports-daily-only .daily-paymode {
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 0.65rem;
+  gap: 3px;
+}
+
+.reports-daily-only .daily-paymode strong {
+  font-size: 0.88rem;
+}
+
+.reports-daily-only .report-table-wrap {
+  margin-top: 4px;
+  border-radius: 6px;
+  -webkit-overflow-scrolling: touch;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+/* Dense report tables: sticky header, zebra rows, aligned amounts */
+.reports-daily-only .report-data-table {
+  font-size: 0.66rem;
+  line-height: 1.25;
+}
+
+.reports-daily-only .report-data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 4px 6px;
+  font-size: 0.56rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.035em;
+  color: #64748b;
+  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border-bottom: 1px solid #e2e8f0;
+  box-shadow: 0 1px 0 rgba(226, 232, 240, 0.9);
+}
+
+.reports-daily-only .report-data-table tbody td {
+  padding: 3px 6px;
+  vertical-align: middle;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.reports-daily-only .report-data-table tbody tr:nth-child(even) {
+  background: #fafbfc;
+}
+
+.reports-daily-only .report-data-table tbody tr:hover {
+  background: #f0f4f8;
+}
+
+.reports-daily-only .report-data-table tfoot td {
+  padding: 6px 8px;
+  font-size: 0.72rem;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+
+/* Bills table: right-align money columns (4–10), centre type & status */
+.reports-daily-only .daily-bills-table th:nth-child(n + 4):nth-child(-n + 10),
+.reports-daily-only .daily-bills-table td:nth-child(n + 4):nth-child(-n + 10) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.reports-daily-only .daily-bills-table th:nth-child(3),
+.reports-daily-only .daily-bills-table td:nth-child(3) {
+  text-align: center;
+}
+
+.reports-daily-only .daily-bills-table th:nth-child(11),
+.reports-daily-only .daily-bills-table td:nth-child(11) {
+  text-align: center;
+}
+
+.reports-daily-only .daily-bills-table th:nth-child(1),
+.reports-daily-only .daily-bills-table td:nth-child(1) {
+  white-space: nowrap;
+}
+
+.reports-daily-only .daily-bills-table th:nth-child(2),
+.reports-daily-only .daily-bills-table td:nth-child(2) {
+  max-width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Expenses: amount column */
+.reports-daily-only .daily-expenses-table th:nth-child(3),
+.reports-daily-only .daily-expenses-table td:nth-child(3) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  white-space: nowrap;
+}
+
+.reports-daily-only .daily-expenses-table td:nth-child(1) {
+  color: #94a3b8;
+  width: 2.75rem;
+}
+
+.reports-daily-only .daily-expenses-table tfoot tr td {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.reports-daily-only .daily-bottom-grid {
+  gap: 10px;
+  margin-top: 0;
+  align-items: stretch;
+}
+
+/* Expenses column: stretch to match cash card; scrollable body + footer total */
+.reports-daily-only .daily-expenses-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+}
+
+.reports-daily-only .daily-expenses-panel .daily-subheading {
+  flex-shrink: 0;
+}
+
+.reports-daily-only .daily-expenses-body-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px 8px 0 0;
+  border-bottom: none;
+}
+
+.reports-daily-only .daily-expenses-body-wrap.daily-expenses-body-wrap--fill {
+  min-height: 220px;
+}
+
+.reports-daily-only .daily-expenses-body-wrap .daily-expenses-table {
+  width: 100%;
+}
+
+.reports-daily-only .daily-expenses-body-wrap + .report-pagination {
+  border-top: 1px solid #e2e8f0;
+}
+
+.reports-daily-only .daily-expenses-tfoot-wrap {
+  flex-shrink: 0;
+  margin-top: 0;
+  border-radius: 0 0 8px 8px;
+}
+
+.reports-daily-only .daily-expenses-table col.col-exp-id {
+  width: 14%;
+}
+
+.reports-daily-only .daily-expenses-table col.col-exp-cat {
+  width: 52%;
+}
+
+.reports-daily-only .daily-expenses-table col.col-exp-amt {
+  width: 34%;
+}
+
+.reports-daily-only .report-pagination {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
+  padding: 6px 8px;
+  font-size: 0.65rem;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-top: 1px solid #e2e8f0;
+  margin-top: -1px;
+}
+
+.reports-daily-only .daily-bills-table-block .report-pagination {
+  border-radius: 0 0 8px 8px;
+  border-top: 1px solid #e2e8f0;
+  margin-top: -1px;
+}
+
+.reports-daily-only .report-pagination-btn {
+  padding: 3px 10px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+}
+
+.reports-daily-only .report-pagination-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.reports-daily-only .report-pagination-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.reports-daily-only .report-pagination-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+.reports-daily-only .cash-summary-card {
+  padding: 8px 10px;
+  border-radius: 10px;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.reports-daily-only .cash-summary-card .daily-microcopy {
+  margin-top: auto;
+  font-size: 0.65rem;
+}
+
+.reports-daily-only .cash-summary-card h4 {
+  margin: 0 0 6px;
+  font-size: 0.78rem;
+}
+
+.reports-daily-only .report-row {
+  padding: 5px 0;
+}
+
+.reports-daily-only .report-label {
+  font-size: 0.7rem;
+}
+
+.reports-daily-only .report-value {
+  font-size: 0.74rem;
+}
+
+.reports-daily-only .cash-final {
+  padding-top: 6px;
+}
+
+.reports-daily-only .cash-final .report-value,
+.reports-daily-only .cash-final.negative .report-value {
+  font-size: 0.92rem;
+}
+
+.reports-daily-only .cash-summary-card .report-row {
+  gap: 8px;
+}
+
+.reports-daily-only .cash-summary-card .report-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  min-width: 4.75rem;
+}
+
+.reports-daily-only .bill-type-pill {
+  font-size: 0.58rem;
+  padding: 1px 5px;
+}
+
+.reports-daily-only .status-pill {
+  font-size: 0.62rem;
+  padding: 1px 6px;
+}
+
+.reports-daily-only .report-error-banner {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 0.72rem;
+}
+
+.reports-daily-only .report-error-banner--with-actions {
+  align-items: center;
+}
+
+.reports-daily-only .report-error-ref {
+  font-size: 0.68rem;
+  margin-top: 4px;
+}
+
+.reports-daily-only .report-error-retry {
+  padding: 5px 12px;
+  font-size: 0.72rem;
+  border-radius: 8px;
+}
+
+.reports-daily-only .report-stale-dates-banner {
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 0.72rem;
+}
+
+.reports-daily-only .report-table-scroll-hint {
+  font-size: 0.65rem;
+  margin-bottom: 4px;
+}
+
+.reports-daily-only .report-explainer {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.reports-daily-only .report-explainer-list {
+  font-size: 0.72rem;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+@media (max-width: 768px) {
+  .reports-daily-only .daily-bills-table,
+  .reports-daily-only .daily-expenses-table {
+    font-size: 0.68rem;
+  }
+
+  .reports-daily-only .report-data-table thead th {
+    font-size: 0.58rem;
+    padding: 4px 6px;
+  }
+
+  .reports-daily-only .report-data-table tbody td {
+    padding: 4px 6px;
+  }
+
+  .reports-daily-only .daily-filter-buttons {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .reports-daily-only .daily-filter-buttons .btn-clear-dates,
+  .reports-daily-only .daily-filter-buttons .btn-primary-soft {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media print {
+  body .reports-header-actions,
+  body .report-filters-bar,
+  body .report-pagination,
+  body .report-info-banner,
+  body .report-error-banner,
+  body .report-stale-dates-banner,
+  body .report-table-scroll-hint,
+  body .report-explainer {
+    display: none !important;
+  }
+
+  body .reports-daily-only.reports-container {
+    background: #fff;
+    box-shadow: none;
+    padding: 0;
+    max-width: none;
+  }
+
+  body .report-table-wrap,
+  body .report-table-scroll-region {
+    overflow: visible !important;
+  }
+
+  body .report-data-table {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  body .report-data-table thead {
+    display: table-header-group;
+  }
+
+  body .report-data-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  body .daily-summary-grid,
+  body .daily-paymode-grid,
+  body .daily-closing-header,
+  body .report-warnings-banner {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  body .daily-bottom-grid {
+    break-inside: avoid;
+  }
+
+  body .daily-bills-table-block,
+  body .daily-expenses-panel {
+    break-inside: auto;
+  }
 }
 

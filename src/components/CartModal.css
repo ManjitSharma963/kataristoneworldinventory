@@ -834,3 +834,36 @@
   }
 }
 
+/* Split payments (checkout) */
+.cart-payment-split {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(163, 177, 198, 0.35);
+}
+
+.cart-payment-split-title .summary-label {
+  font-weight: 600;
+}
+
+.cart-payment-row .cart-payment-input {
+  max-width: 140px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cart-payment-totals {
+  margin-top: 0.35rem;
+}
+
+.cart-payment-due {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.cart-payment-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: #64748b;
+  line-height: 1.35;
+}
+
