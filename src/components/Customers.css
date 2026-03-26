@@ -40,6 +40,14 @@
   font-weight: 500;
 }
 
+.customers-field-hint {
+  display: block;
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 6px;
+  line-height: 1.35;
+}
+
 .form-group {
   position: relative;
 }
@@ -133,5 +141,67 @@
     order: -1;
     text-align: center;
   }
+}
+
+.advance-token-modal.modal-content {
+  max-width: 720px;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.advance-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.advance-summary-card {
+  background: #f0f4f8;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.advance-summary-label {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.advance-summary-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.advance-section-title {
+  margin: 16px 0 10px;
+  font-size: 15px;
+  color: #334155;
+}
+
+.advance-add-form {
+  margin-bottom: 8px;
+}
+
+.advance-history-wrap {
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.advance-history-table {
+  margin: 0;
+  font-size: 13px;
+}
+
+.action-btn-advance {
+  font-size: 1rem;
 }
 

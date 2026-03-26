@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { getCart, saveCart, removeFromCart, updateCartItemQuantity, clearCart, getCartCount, getCartTotal } from '../utils/cart';
 import { API_BASE_URL } from '../config/api';
-import { handleApiResponse, isAdmin } from '../utils/api';
+import { handleApiResponse, isAdmin, fetchCustomerByPhone, fetchCustomerAdvanceSummary } from '../utils/api';
 import { Button } from 'primereact/button';
 import { InputText } from 'primereact/inputtext';
 import { Toast } from 'primereact/toast';
@@ -86,7 +86,32 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [editingQtyItemId, setEditingQtyItemId] = useState(null);
   const [editingQtyValue, setEditingQtyValue] = useState('');
   const [customerSectionCollapsed, setCustomerSectionCollapsed] = useState(false);
+  /** Remaining advance for current mobile (null = unknown / not loaded). */
+  const [advanceRemaining, setAdvanceRemaining] = useState(null);
   const toast = React.useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const digits = String(mobileNumber || '').replace(/\D/g, '');
+      if (digits.length !== 10) {
+        setAdvanceRemaining(null);
+        return;
+      }
+      try {
+        const cust = await fetchCustomerByPhone(digits);
+        if (cancelled) return;
+        const sum = await fetchCustomerAdvanceSummary(cust.id);
+        if (cancelled) return;
+        setAdvanceRemaining(Number(sum.remaining) || 0);
+      } catch {
+        if (!cancelled) setAdvanceRemaining(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mobileNumber]);
 
   useEffect(() => {
     if (isOpen) {
@@ -293,12 +318,19 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const otherExpenseNum = typeof otherExpense === 'number' ? otherExpense : (parseFloat(otherExpense) || 0);
   const grandTotal = total + labourChargeNum + transportationChargeNum + otherExpenseNum;
 
+  const advanceWillApply =
+    advanceRemaining != null && advanceRemaining > 0
+      ? Math.round(Math.min(advanceRemaining, grandTotal) * 100) / 100
+      : 0;
+  const netDueAfterAdvance =
+    Math.round(Math.max(0, grandTotal - advanceWillApply) * 100) / 100;
+
   const totalPaidNow =
     parsePayInput(payCash) +
     parsePayInput(payUpi) +
     parsePayInput(payBank) +
     parsePayInput(payCheque);
-  const paymentRemaining = Math.round(Math.max(0, grandTotal - totalPaidNow) * 100) / 100;
+  const paymentRemaining = Math.round(Math.max(0, netDueAfterAdvance - totalPaidNow) * 100) / 100;
 
   // Strip leading zeros so "00001" -> "1", "000333" -> "333", keep "0" or "0.5"
   const stripLeadingZeros = (str) => {
@@ -454,9 +486,14 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     const bankAmt = parsePayInput(payBank);
     const chequeAmt = parsePayInput(payCheque);
     const paidSum = cashAmt + upiAmt + bankAmt + chequeAmt;
-    if (paidSum - grandTotalCheckout > 0.015) {
+    const advanceCap =
+      advanceRemaining != null && advanceRemaining > 0
+        ? Math.min(advanceRemaining, grandTotalCheckout)
+        : 0;
+    const netDueCheckout = Math.max(0, grandTotalCheckout - advanceCap);
+    if (paidSum - netDueCheckout > 0.015) {
       setSubmitError(
-        `Total paid (₹${paidSum.toFixed(2)}) cannot exceed grand total (₹${grandTotalCheckout.toFixed(2)})`
+        `Total paid (₹${paidSum.toFixed(2)}) cannot exceed amount due after advance (₹${netDueCheckout.toFixed(2)}; grand total ₹${grandTotalCheckout.toFixed(2)})`
       );
       return;
     }
@@ -575,10 +612,14 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       loadCart();
 
       if (toast.current) {
+        const adv = createdBill && (Number(createdBill.advanceUsed) || 0);
         toast.current.show({
           severity: 'success',
           summary: 'Success',
-          detail: 'Bill created successfully!',
+          detail:
+            adv > 0
+              ? `Bill created. Advance applied: ₹${adv.toFixed(2)}`
+              : 'Bill created successfully!',
           life: 3000
         });
       }
@@ -1027,7 +1068,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   ₹ {paymentRemaining.toFixed(2)}
                 </span>
               </div>
-              <p className="cart-payment-hint">Leave fields empty or zero for credit (due). Overpay is not allowed.</p>
+              <p className="cart-payment-hint">
+                Leave fields empty or zero for credit (due). Customer advance applies before cash/UPI. Overpay is not
+                allowed.
+              </p>
             </div>
           </div>
 
@@ -1079,13 +1123,20 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
           </div>
 
           <div className="summary-total">
-            <span className="total-label">Total (After Tax & Discount)</span>
-            <span className="total-value">₹ {total.toFixed(2)}</span>
+            <span className="total-label">Subtotal (Incl. Labour/Transport/Other)</span>
+            <span className="total-value">₹ {grandTotal.toFixed(2)}</span>
           </div>
 
+          {advanceWillApply > 0 && (
+            <div className="summary-total" style={{ marginTop: '8px' }}>
+              <span className="total-label" style={{ color: '#0d9488' }}>Advance (auto)</span>
+              <span className="total-value" style={{ color: '#0d9488' }}>− ₹ {advanceWillApply.toFixed(2)}</span>
+            </div>
+          )}
+
           <div className="summary-total" style={{ marginTop: '8px', borderTop: '2px solid #e5e7eb', paddingTop: '8px' }}>
-            <span className="total-label">Grand Total</span>
-            <span className="total-value" style={{ fontSize: '1.3rem', fontWeight: 'bold', color: '#2563eb' }}>₹ {grandTotal.toFixed(2)}</span>
+            <span className="total-label">Grand Total (After Advance)</span>
+            <span className="total-value" style={{ fontSize: '1.3rem', fontWeight: 'bold', color: '#2563eb' }}>₹ {netDueAfterAdvance.toFixed(2)}</span>
           </div>
 
           {/* Checkout Button */}

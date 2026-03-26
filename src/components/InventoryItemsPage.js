@@ -8,7 +8,11 @@ import {
   fetchProductById,
   fetchProductChangeHistory,
   updateInventoryProduct,
-  isAdmin
+  isAdmin,
+  fetchSuppliers,
+  fetchDealers,
+  createSupplier,
+  createDealer
 } from '../utils/api';
 import './Dashboard.css';
 import InventoryUpdateModal from './InventoryUpdateModal';
@@ -53,7 +57,9 @@ const initialFormData = {
   damage_expenses: '',
   others_expenses: '',
   transportation_charge: '',
-  gst_charges: ''
+  gst_charges: '',
+  supplier_id: '',
+  dealer_id: ''
 };
 
 const generateSlug = (text) => {
@@ -111,7 +117,19 @@ function productToFormData(p) {
     damage_expenses: n(p.damageExpenses ?? p.damage_expenses),
     others_expenses: n(p.othersExpenses ?? p.others_expenses),
     transportation_charge: n(p.transportationCharge ?? p.transportation_charge),
-    gst_charges: n(p.gstCharges ?? p.gst_charges)
+    gst_charges: n(p.gstCharges ?? p.gst_charges),
+    supplier_id:
+      p.supplierId != null && p.supplierId !== ''
+        ? String(p.supplierId)
+        : p.supplier_id != null && p.supplier_id !== ''
+          ? String(p.supplier_id)
+          : '',
+    dealer_id:
+      p.dealerId != null && p.dealerId !== ''
+        ? String(p.dealerId)
+        : p.dealer_id != null && p.dealer_id !== ''
+          ? String(p.dealer_id)
+          : ''
   };
 }
 
@@ -174,6 +192,24 @@ function snapNum(snap, key) {
   return Number.isFinite(n) ? n : null;
 }
 
+function isLikelyInitialAddDuplicate(pc, h) {
+  if (!pc || !h) return false;
+  const action = String(h.actionType || '').toUpperCase();
+  if (action !== 'ADD') return false;
+  const tPc = historyTimeMs(pc.createdAt);
+  const tH = historyTimeMs(h.createdAt);
+  if (tPc == null || tH == null) return false;
+  if (Math.abs(tPc - tH) > 20000) return false;
+  const prev = h.previousQuantity != null ? Number(h.previousQuantity) : null;
+  const next = h.newQuantity != null ? Number(h.newQuantity) : null;
+  if (prev == null || next == null) return false;
+  if (Math.abs(prev) > 0.02) return false;
+  const snapNext = snapshotQuantity(pc.newSnapshot);
+  if (snapNext == null) return false;
+  if (Math.abs(next - snapNext) > 0.02) return false;
+  return true;
+}
+
 function cellMoney(n) {
   if (n == null || Number.isNaN(n)) return '—';
   return Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -203,7 +239,11 @@ function buildUnifiedInventoryHistory(productChangeRows, historyRows) {
     return { kind: 'change', pc, inv };
   });
   const rowsFromStock = stock
-    .filter((h) => !matchedHistoryIds.has(h.id))
+    .filter((h) => {
+      if (matchedHistoryIds.has(h.id)) return false;
+      // If this is the initial ADD for create, hide it when a creation snapshot row exists.
+      return !changes.some((pc) => isLikelyInitialAddDuplicate(pc, h));
+    })
     .map((h) => ({ kind: 'stock', h }));
   return [...rowsFromChanges, ...rowsFromStock].sort((a, b) => {
     const ta = a.kind === 'change' ? historyTimeMs(a.pc.createdAt) : historyTimeMs(a.h.createdAt);
@@ -221,6 +261,12 @@ const InventoryItemsPage = () => {
   const [showAddInventory, setShowAddInventory] = useState(false);
   const [formData, setFormData] = useState(initialFormData);
   const [categories, setCategories] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [dealers, setDealers] = useState([]);
+  /** { type: 'supplier'|'dealer', target: 'add'|'update' } */
+  const [quickAddEntity, setQuickAddEntity] = useState(null);
+  const [quickAddForm, setQuickAddForm] = useState({ name: '', contact_number: '', address: '' });
+  const [quickAddSubmitting, setQuickAddSubmitting] = useState(false);
   const [detailModalProduct, setDetailModalProduct] = useState(null);
   const [historyRows, setHistoryRows] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -264,20 +310,13 @@ const InventoryItemsPage = () => {
         const data = await response.json();
         setInventory(Array.isArray(data) ? data : []);
       } else {
-        try {
-          const localInventory = getInventory();
-          setInventory(localInventory || []);
-        } catch {
-          setInventory([]);
-        }
+        // Do not fall back to local cache for authenticated inventory list;
+        // stale local rows can belong to a different location and cause 404 on actions.
+        setInventory([]);
       }
     } catch (err) {
       console.error('Error fetching inventory:', err);
-      try {
-        setInventory(getInventory() || []);
-      } catch {
-        setInventory([]);
-      }
+      setInventory([]);
     } finally {
       setLoading(false);
     }
@@ -305,6 +344,82 @@ const InventoryItemsPage = () => {
   useEffect(() => {
     fetchCategories();
   }, [fetchCategories]);
+
+  const loadSuppliersDealers = useCallback(async () => {
+    try {
+      const [s, d] = await Promise.all([fetchSuppliers(), fetchDealers()]);
+      setSuppliers(Array.isArray(s) ? s : []);
+      setDealers(Array.isArray(d) ? d : []);
+    } catch (err) {
+      console.error(err);
+      setSuppliers([]);
+      setDealers([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSuppliersDealers();
+  }, [loadSuppliersDealers]);
+
+  const openQuickAdd = (type, target) => {
+    setQuickAddForm({ name: '', contact_number: '', address: '' });
+    setQuickAddEntity({ type, target });
+  };
+
+  const closeQuickAdd = () => {
+    setQuickAddEntity(null);
+    setQuickAddForm({ name: '', contact_number: '', address: '' });
+  };
+
+  const handleQuickAddSubmit = async (e) => {
+    e.preventDefault();
+    if (!quickAddEntity) return;
+    const nm = (quickAddForm.name || '').trim();
+    if (!nm) {
+      window.alert('Name is required');
+      return;
+    }
+    setQuickAddSubmitting(true);
+    try {
+      let created;
+      if (quickAddEntity.type === 'supplier') {
+        created = await createSupplier({
+          name: nm,
+          contact_number: quickAddForm.contact_number,
+          address: quickAddForm.address
+        });
+      } else {
+        created = await createDealer({
+          name: nm,
+          contact_number: quickAddForm.contact_number,
+          address: quickAddForm.address
+        });
+      }
+      await loadSuppliersDealers();
+      const newId = created?.id != null ? String(created.id) : '';
+      if (newId) {
+        if (quickAddEntity.target === 'add') {
+          setFormData((prev) =>
+            quickAddEntity.type === 'supplier'
+              ? { ...prev, supplier_id: newId }
+              : { ...prev, dealer_id: newId }
+          );
+        } else {
+          setUpdateFormData((prev) =>
+            quickAddEntity.type === 'supplier'
+              ? { ...prev, supplier_id: newId }
+              : { ...prev, dealer_id: newId }
+          );
+        }
+      }
+      closeQuickAdd();
+    } catch (err) {
+      console.error(err);
+      window.alert(err.message || 'Could not save');
+    } finally {
+      setQuickAddSubmitting(false);
+    }
+  };
 
   const loadDetailHistory = useCallback(async (productId) => {
     if (productId == null) return;
@@ -454,6 +569,10 @@ const InventoryItemsPage = () => {
       gstCharges,
       pricePerSqftAfter: parseFloat(pricePerSqftAfter.toFixed(2))
     };
+    const sidU = parseInt(updateFormData.supplier_id, 10);
+    const didU = parseInt(updateFormData.dealer_id, 10);
+    itemData.supplierId = Number.isFinite(sidU) && sidU > 0 ? sidU : 0;
+    itemData.dealerId = Number.isFinite(didU) && didU > 0 ? didU : 0;
     try {
       const userData = JSON.parse(localStorage.getItem('user') || '{}');
       const userRole = userData?.role || userData?.userRole || 'admin';
@@ -497,6 +616,9 @@ const InventoryItemsPage = () => {
       }
       if (!response.ok) {
         const text = await response.text();
+        if (response.status === 404) {
+          throw new Error('Item not found for your current location (or already deleted). Please refresh and try again.');
+        }
         throw new Error(text || `Delete failed (${response.status})`);
       }
       await fetchInventory();
@@ -589,6 +711,14 @@ const InventoryItemsPage = () => {
       gstCharges,
       pricePerSqftAfter: parseFloat(pricePerSqftAfter.toFixed(2))
     };
+    const sidA = parseInt(formData.supplier_id, 10);
+    const didA = parseInt(formData.dealer_id, 10);
+    if (Number.isFinite(sidA) && sidA > 0) {
+      itemData.supplierId = sidA;
+    }
+    if (Number.isFinite(didA) && didA > 0) {
+      itemData.dealerId = didA;
+    }
     try {
       const token = localStorage.getItem('authToken');
       const userData = JSON.parse(localStorage.getItem('user') || '{}');
@@ -642,7 +772,18 @@ const InventoryItemsPage = () => {
       const priceStr = (item.pricePerSqft ?? item.price_per_sqft ?? item.pricePerUnit ?? item.unitPrice ?? 0).toString();
       const stockStr = (item.totalSqftStock ?? item.total_sqft_stock ?? item.quantity ?? 0).toString();
       const slug = (item.slug || '').toLowerCase();
-      return name.includes(q) || productType.includes(q) || color.includes(q) || priceStr.includes(q) || stockStr.includes(q) || slug.includes(q);
+      const supplier = (item.supplierName || item.supplier_name || '').toLowerCase();
+      const dealer = (item.dealerName || item.dealer_name || '').toLowerCase();
+      return (
+        name.includes(q) ||
+        productType.includes(q) ||
+        color.includes(q) ||
+        priceStr.includes(q) ||
+        stockStr.includes(q) ||
+        slug.includes(q) ||
+        supplier.includes(q) ||
+        dealer.includes(q)
+      );
     });
     if (sortConfig.key) {
       list = [...list].sort((a, b) => {
@@ -747,7 +888,7 @@ const InventoryItemsPage = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-              placeholder="Search by product name, type, color, price, stock, or slug..."
+              placeholder="Search by name, type, color, price, stock, slug, supplier, or dealer..."
               className="search-input"
             />
             {searchQuery && (
@@ -989,6 +1130,62 @@ const InventoryItemsPage = () => {
                     placeholder="e.g., white, black, beige, multi"
                   />
                 </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Supplier (firm)</label>
+                    <div className="form-inline-with-action">
+                      <select
+                        name="supplier_id"
+                        value={formData.supplier_id}
+                        onChange={handleInputChange}
+                        className="form-select-grow"
+                      >
+                        <option value="">— None —</option>
+                        {suppliers.map((s) => (
+                          <option key={s.id} value={String(s.id)}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                      {isAdmin() && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-compact"
+                          onClick={() => openQuickAdd('supplier', 'add')}
+                        >
+                          Add new
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label>Dealer (middleman)</label>
+                    <div className="form-inline-with-action">
+                      <select
+                        name="dealer_id"
+                        value={formData.dealer_id}
+                        onChange={handleInputChange}
+                        className="form-select-grow"
+                      >
+                        <option value="">— None —</option>
+                        {dealers.map((d) => (
+                          <option key={d.id} value={String(d.id)}>
+                            {d.name}
+                          </option>
+                        ))}
+                      </select>
+                      {isAdmin() && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-compact"
+                          onClick={() => openQuickAdd('dealer', 'add')}
+                        >
+                          Add new
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
                 <div className="form-section-divider">
                   <h4>Extra Expenses</h4>
                 </div>
@@ -1154,6 +1351,8 @@ const InventoryItemsPage = () => {
                         <th>HSN</th>
                         <th>Color</th>
                         <th>Unit</th>
+                        <th>Supplier</th>
+                        <th>Dealer</th>
                         <th>Notes</th>
                       </tr>
                     </thead>
@@ -1193,6 +1392,8 @@ const InventoryItemsPage = () => {
                               <td>{cellText(after, 'hsnNumber')}</td>
                               <td>{cellText(after, 'color')}</td>
                               <td>{cellText(after, 'unit')}</td>
+                              <td>{cellText(after, 'supplierName')}</td>
+                              <td>{cellText(after, 'dealerName')}</td>
                               <td className="inventory-notes-cell">{notes}</td>
                             </tr>
                           );
@@ -1238,6 +1439,8 @@ const InventoryItemsPage = () => {
                             <td title="Not recorded for this movement">—</td>
                             <td title="Not recorded for this movement">—</td>
                             <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
+                            <td title="Not recorded for this movement">—</td>
                             <td className="inventory-notes-cell">{h.notes || '—'}</td>
                           </tr>
                         );
@@ -1256,6 +1459,11 @@ const InventoryItemsPage = () => {
           onClose={closeUpdateInventoryModal}
           categories={categories}
           inventory={inventory}
+          suppliers={suppliers}
+          dealers={dealers}
+          isAdminUser={isAdmin()}
+          onOpenAddSupplier={() => openQuickAdd('supplier', 'update')}
+          onOpenAddDealer={() => openQuickAdd('dealer', 'update')}
           selectedUpdateProductId={selectedUpdateProductId}
           setSelectedUpdateProductId={setSelectedUpdateProductId}
           updateFormLoading={updateFormLoading}
@@ -1268,6 +1476,56 @@ const InventoryItemsPage = () => {
           onSubmit={handleUpdateInventorySubmit}
           calculatePricePerSqft={calculatePricePerSqft}
         />
+      )}
+
+      {quickAddEntity && (
+        <div className="modal-overlay" onClick={closeQuickAdd}>
+          <div className="modal-content modal-quick-entity" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{quickAddEntity.type === 'supplier' ? 'New supplier' : 'New dealer'}</h3>
+              <button type="button" className="modal-close" onClick={closeQuickAdd} aria-label="Close">
+                ×
+              </button>
+            </div>
+            <form className="modal-body" onSubmit={handleQuickAddSubmit}>
+              <div className="form-group">
+                <label>Name *</label>
+                <input
+                  value={quickAddForm.name}
+                  onChange={(e) => setQuickAddForm((p) => ({ ...p, name: e.target.value }))}
+                  maxLength={200}
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="form-group">
+                <label>Contact number</label>
+                <input
+                  value={quickAddForm.contact_number}
+                  onChange={(e) => setQuickAddForm((p) => ({ ...p, contact_number: e.target.value }))}
+                  maxLength={50}
+                />
+              </div>
+              <div className="form-group">
+                <label>Address</label>
+                <textarea
+                  value={quickAddForm.address}
+                  onChange={(e) => setQuickAddForm((p) => ({ ...p, address: e.target.value }))}
+                  rows={2}
+                  maxLength={500}
+                />
+              </div>
+              <div className="form-actions">
+                <button type="submit" className="btn btn-primary" disabled={quickAddSubmitting}>
+                  {quickAddSubmitting ? 'Saving…' : 'Save'}
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={closeQuickAdd}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

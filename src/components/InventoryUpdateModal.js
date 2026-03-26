@@ -7,6 +7,11 @@ export default function InventoryUpdateModal({
   onClose,
   categories,
   inventory,
+  suppliers = [],
+  dealers = [],
+  isAdminUser = false,
+  onOpenAddSupplier,
+  onOpenAddDealer,
   selectedUpdateProductId,
   setSelectedUpdateProductId,
   updateFormLoading,
@@ -206,6 +211,54 @@ export default function InventoryUpdateModal({
                   maxLength="50"
                   placeholder="e.g., white, black, beige, multi"
                 />
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Supplier (firm)</label>
+                  <div className="form-inline-with-action">
+                    <select
+                      name="supplier_id"
+                      value={updateFormData.supplier_id ?? ''}
+                      onChange={handleUpdateInputChange}
+                      className="form-select-grow"
+                    >
+                      <option value="">— None —</option>
+                      {suppliers.map((s) => (
+                        <option key={s.id} value={String(s.id)}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    {isAdminUser && onOpenAddSupplier && (
+                      <button type="button" className="btn btn-secondary btn-compact" onClick={onOpenAddSupplier}>
+                        Add new
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Dealer (middleman)</label>
+                  <div className="form-inline-with-action">
+                    <select
+                      name="dealer_id"
+                      value={updateFormData.dealer_id ?? ''}
+                      onChange={handleUpdateInputChange}
+                      className="form-select-grow"
+                    >
+                      <option value="">— None —</option>
+                      {dealers.map((d) => (
+                        <option key={d.id} value={String(d.id)}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                    {isAdminUser && onOpenAddDealer && (
+                      <button type="button" className="btn btn-secondary btn-compact" onClick={onOpenAddDealer}>
+                        Add new
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
               <div className="form-section-divider">
                 <h4>Extra Expenses</h4>

@@ -3886,3 +3886,49 @@
   background: #1e293b;
   border-color: #334155;
 }
+
+/* Supplier / dealer on inventory forms */
+.form-inline-with-action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.form-select-grow {
+  flex: 1;
+  min-width: 140px;
+}
+
+.btn-compact {
+  padding: 8px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.inventory-product-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: #f8fafc;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  font-size: 14px;
+}
+
+.inventory-product-source-row p {
+  margin: 0;
+}
+
+.inventory-product-source-row .meta-label {
+  font-weight: 600;
+  color: #475569;
+  margin-right: 6px;
+}
+
+.modal-quick-entity {
+  max-width: 440px;
+  width: 92vw;
+}

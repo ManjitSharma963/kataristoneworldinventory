@@ -9,7 +9,6 @@ import { Dropdown } from 'primereact/dropdown';
 import { Calendar } from 'primereact/calendar';
 import { Button } from 'primereact/button';
 import { Tag } from 'primereact/tag';
-import { FilterMatchMode, FilterOperator } from 'primereact/api';
 import { Dialog } from 'primereact/dialog';
 import './Sales.css';
 
@@ -26,6 +25,24 @@ const formatPaymentModeLabel = (mode) => {
   if (!mode) return '—';
   const key = String(mode).toUpperCase().replace(/\s+/g, '_');
   return PAYMENT_MODE_LABELS[key] || mode;
+};
+
+const splitPaymentSummaryLines = (raw) => {
+  const s = String(raw || '').trim();
+  if (!s || s === '-' || s === '—') return [];
+  // Common legacy formats:
+  // - "CASH_₹5000.00, UPI_₹2000.00 | DUE: ₹1500.00"
+  // - "CASH,UPI" (simple)
+  const normalized = s.replace(/_/g, ' ').replace(/\s*\|\s*/g, ' | ');
+  const parts = normalized
+    .split('|')
+    .flatMap((p) => String(p).split(','))
+    .map((p) => p.trim())
+    .filter(Boolean);
+  // Keep "DUE:" or "DUE" at the bottom if present.
+  const due = parts.filter((p) => /^DUE\b/i.test(p));
+  const rest = parts.filter((p) => !/^DUE\b/i.test(p));
+  return [...rest, ...due];
 };
 
 /** Normalize stored/API values for banding (legacy NETBANKING → bank transfer) */
@@ -49,38 +66,18 @@ const Sales = () => {
   const [sales, setSales] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [loading, setLoading] = useState(true);
-  
-  // PrimeReact DataTable filters
-  const [filters, setFilters] = useState({
-    billNumber: { value: null, matchMode: FilterMatchMode.CONTAINS },
-    customerNumber: { value: null, matchMode: FilterMatchMode.CONTAINS },
-    billType: { value: null, matchMode: FilterMatchMode.EQUALS },
-    billDate: { operator: FilterOperator.AND, constraints: [{ value: null, matchMode: FilterMatchMode.DATE_IS }] }
-  });
-  
-  // Bill Type options for filter
-  const billTypeOptions = [
-    { label: 'All', value: null },
-    { label: 'GST', value: 'GST' },
-    { label: 'NON-GST', value: 'NON-GST' }
-  ];
+  const [dateFrom, setDateFrom] = useState(null);
+  const [dateTo, setDateTo] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [billTypeFilter, setBillTypeFilter] = useState('ALL');
+  const [paymentModeFilter, setPaymentModeFilter] = useState('ALL');
 
   const [isBillPopupVisible, setBillPopupVisible] = useState(false);
   const [selectedBill, setSelectedBill] = useState(null);
 
   useEffect(() => {
     loadData();
-    initFilters();
   }, []);
-
-  const initFilters = () => {
-    setFilters({
-      billNumber: { value: null, matchMode: FilterMatchMode.CONTAINS },
-      customerNumber: { value: null, matchMode: FilterMatchMode.CONTAINS },
-      billType: { value: null, matchMode: FilterMatchMode.EQUALS },
-      billDate: { operator: FilterOperator.AND, constraints: [{ value: null, matchMode: FilterMatchMode.DATE_IS }] }
-    });
-  };
 
   const loadData = async () => {
     try {
@@ -183,11 +180,46 @@ const Sales = () => {
         subtotal: Number(subtotal) || 0,
         gstAmount: Number(gstAmount) || 0,
         totalAmount: Number(totalAmount) || 0,
+        advanceUsed: Number(sale.advanceUsed) || 0,
         paymentMode: paymentMode,
         originalSale: sale
       };
     });
   }, [sales]);
+
+  const dateRangeFilteredSales = useMemo(() => {
+    const from = dateFrom instanceof Date ? dateFrom : (dateFrom ? new Date(dateFrom) : null);
+    const to = dateTo instanceof Date ? dateTo : (dateTo ? new Date(dateTo) : null);
+    if (!from && !to) return prepareSalesData;
+    const fromStart = from ? new Date(from.getFullYear(), from.getMonth(), from.getDate(), 0, 0, 0, 0) : null;
+    const toEnd = to ? new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59, 999) : null;
+    return prepareSalesData.filter((row) => {
+      const d = row.billDate instanceof Date ? row.billDate : (row.billDate ? new Date(row.billDate) : null);
+      if (!d || Number.isNaN(d.getTime())) return false;
+      if (fromStart && d < fromStart) return false;
+      if (toEnd && d > toEnd) return false;
+      return true;
+    });
+  }, [prepareSalesData, dateFrom, dateTo]);
+
+  const commonFilteredSales = useMemo(() => {
+    const q = String(searchQuery || '').trim().toLowerCase();
+    return dateRangeFilteredSales.filter((row) => {
+      if (billTypeFilter && billTypeFilter !== 'ALL') {
+        if (String(row.billType || '').toUpperCase() !== billTypeFilter) return false;
+      }
+      if (paymentModeFilter && paymentModeFilter !== 'ALL') {
+        const band = getPaymentBand(row.paymentMode);
+        if (band !== paymentModeFilter) return false;
+      }
+      if (!q) return true;
+      const billNo = String(row.billNumber || '').toLowerCase();
+      const cust = String(row.customerNumber || '').toLowerCase();
+      const pm = String(formatPaymentModeLabel(row.paymentMode) || '').toLowerCase();
+      const type = String(row.billType || '').toLowerCase();
+      return billNo.includes(q) || cust.includes(q) || pm.includes(q) || type.includes(q);
+    });
+  }, [dateRangeFilteredSales, searchQuery, billTypeFilter, paymentModeFilter]);
 
   const paymentBandTotals = useMemo(() => {
     let upi = 0;
@@ -195,7 +227,7 @@ const Sales = () => {
     let bankTransfer = 0;
     let cheque = 0;
     let other = 0;
-    prepareSalesData.forEach((row) => {
+    commonFilteredSales.forEach((row) => {
       const amt = Number(row.totalAmount) || 0;
       const band = getPaymentBand(row.paymentMode);
       if (band === 'UPI') upi += amt;
@@ -205,7 +237,7 @@ const Sales = () => {
       else other += amt;
     });
     return { upi, cash, bankTransfer, cheque, other };
-  }, [prepareSalesData]);
+  }, [commonFilteredSales]);
 
   const formatCurrency = (n) =>
     `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -292,35 +324,20 @@ const Sales = () => {
   };
 
   // Filter templates for row-based filtering
-  const billTypeRowFilterTemplate = (options) => {
-    return (
-      <Dropdown
-        value={options.value}
-        options={billTypeOptions}
-        onChange={(e) => options.filterApplyCallback(e.value === null ? null : e.value)}
-        placeholder="Select Bill Type"
-        className="p-column-filter"
-        showClear
-        style={{ minWidth: '12rem' }}
-      />
-    );
-  };
+  const billTypeFilterOptions = [
+    { label: 'All', value: 'ALL' },
+    { label: 'GST', value: 'GST' },
+    { label: 'NON-GST', value: 'NON-GST' }
+  ];
 
-  const dateRowFilterTemplate = (options) => {
-    return (
-      <Calendar
-        value={options.value}
-        onChange={(e) => {
-          const dateValue = e.value instanceof Date ? e.value : (e.value ? new Date(e.value) : null);
-          options.filterApplyCallback(dateValue);
-        }}
-        dateFormat="dd/mm/yy"
-        placeholder="dd/mm/yyyy"
-        showIcon
-        style={{ minWidth: '12rem' }}
-      />
-    );
-  };
+  const paymentModeFilterOptions = [
+    { label: 'All', value: 'ALL' },
+    { label: 'Cash', value: 'CASH' },
+    { label: 'UPI', value: 'UPI' },
+    { label: 'Bank transfer', value: 'BANK_TRANSFER' },
+    { label: 'Cheque', value: 'CHEQUE' },
+    { label: 'Other/Unknown', value: 'OTHER' }
+  ];
 
 
   return (
@@ -353,96 +370,187 @@ const Sales = () => {
 
       <div className="sales-list">
         <h3>Sales History</h3>
+        <div className="sales-common-search" role="region" aria-label="Sales search and filters">
+          <div className="sales-common-search-left">
+            <span className="sales-search-icon">🔍</span>
+            <InputText
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by bill #, customer, payment mode, or bill type…"
+              className="sales-common-search-input"
+            />
+          </div>
+          <div className="sales-common-search-right">
+            <Dropdown
+              value={billTypeFilter}
+              options={billTypeFilterOptions}
+              onChange={(e) => setBillTypeFilter(e.value)}
+              placeholder="Bill type"
+              className="sales-common-search-dropdown"
+            />
+            <Dropdown
+              value={paymentModeFilter}
+              options={paymentModeFilterOptions}
+              onChange={(e) => setPaymentModeFilter(e.value)}
+              placeholder="Payment mode"
+              className="sales-common-search-dropdown"
+            />
+            <Button
+              type="button"
+              icon="pi pi-times"
+              label="Clear"
+              outlined
+              onClick={() => {
+                setSearchQuery('');
+                setBillTypeFilter('ALL');
+                setPaymentModeFilter('ALL');
+              }}
+            />
+          </div>
+        </div>
+        <div className="sales-filter-bar" role="region" aria-label="Sales filters">
+          <div className="sales-filter-item">
+            <span className="sales-filter-label">From</span>
+            <Calendar
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.value || null)}
+              dateFormat="dd/mm/yy"
+              placeholder="dd/mm/yyyy"
+              showIcon
+            />
+          </div>
+          <div className="sales-filter-item">
+            <span className="sales-filter-label">To</span>
+            <Calendar
+              value={dateTo}
+              onChange={(e) => setDateTo(e.value || null)}
+              dateFormat="dd/mm/yy"
+              placeholder="dd/mm/yyyy"
+              showIcon
+              minDate={dateFrom || undefined}
+            />
+          </div>
+          <div className="sales-filter-actions">
+            <Button
+              type="button"
+              icon="pi pi-times"
+              label="Clear"
+              outlined
+              onClick={() => {
+                setDateFrom(null);
+                setDateTo(null);
+              }}
+            />
+          </div>
+        </div>
         <div className="sales-table-container">
           <DataTable
-            value={prepareSalesData}
+            value={commonFilteredSales}
             paginator
             rows={10}
             rowsPerPageOptions={[10, 25, 50]}
             loading={loading}
             dataKey="id"
-            filters={filters}
             emptyMessage="No sales found."
-            filterDisplay="row"
             showGridlines
             stripedRows
-            tableStyle={{ minWidth: '50rem', width: '100%' }}
+            tableStyle={{ minWidth: '44rem', width: '100%' }}
             className="sales-datatable"
           >
             <Column
               field="billNumber"
               header="Bill Number"
-              filter
-              filterPlaceholder="Search by Bill Number"
-              style={{ minWidth: '12rem' }}
+              style={{ minWidth: '9rem' }}
               body={billNumberBodyTemplate}
             />
             <Column
               field="billDate"
               header="Date"
-              filterField="billDate"
-              dataType="date"
-              style={{ minWidth: '10rem' }}
+              style={{ minWidth: '8rem' }}
               body={dateBodyTemplate}
-              filter
-              filterElement={dateRowFilterTemplate}
             />
             <Column
               field="customerNumber"
               header="Customer Number"
-              filter
-              filterPlaceholder="Search by Customer Number"
-              style={{ minWidth: '12rem' }}
+              style={{ minWidth: '9rem' }}
             />
             <Column
               field="itemsCount"
               header="Items"
-              style={{ minWidth: '8rem' }}
+              style={{ minWidth: '6rem' }}
               body={(rowData) => `${rowData.itemsCount} item(s)`}
             />
             <Column
               field="billType"
               header="GST Status"
-              filterField="billType"
-              showFilterMenu={false}
-              filterMenuStyle={{ width: '14rem' }}
-              style={{ minWidth: '12rem' }}
+              style={{ minWidth: '8rem' }}
               body={billTypeBodyTemplate}
-              filter
-              filterElement={billTypeRowFilterTemplate}
             />
             <Column
               field="subtotal"
               header="Subtotal"
               dataType="numeric"
-              style={{ minWidth: '10rem' }}
+              style={{ minWidth: '8rem' }}
               body={(rowData) => amountBodyTemplate(rowData, 'subtotal')}
             />
             <Column
               field="gstAmount"
               header="GST"
               dataType="numeric"
-              style={{ minWidth: '9rem' }}
+              style={{ minWidth: '7rem' }}
               body={(rowData) => amountBodyTemplate(rowData, 'gstAmount')}
             />
             <Column
               field="totalAmount"
               header="Total"
               dataType="numeric"
-              style={{ minWidth: '10rem' }}
+              style={{ minWidth: '8rem' }}
               body={totalAmountBodyTemplate}
+            />
+            <Column
+              field="advanceUsed"
+              header="Advance"
+              dataType="numeric"
+              style={{ minWidth: '7rem' }}
+              body={(rowData) => formatCurrency(rowData.advanceUsed)}
             />
             <Column
               field="paymentMode"
               header="Payment Mode"
-              style={{ minWidth: '10rem' }}
+              style={{ minWidth: '8rem' }}
               body={(rowData) => (
-                <span className="payment-mode-cell">{formatPaymentModeLabel(rowData.paymentMode)}</span>
+                <div className="payment-mode-cell">
+                  {(() => {
+                    const raw =
+                      rowData.originalSale?.paymentMethod ??
+                      rowData.originalSale?.payment_method ??
+                      rowData.originalSale?.paymentMode ??
+                      rowData.originalSale?.payment_mode ??
+                      rowData.paymentMode ??
+                      rowData.payment_mode ??
+                      rowData.originalSale?.paymentStatus ??
+                      '';
+                    const lines = splitPaymentSummaryLines(raw);
+                    if (lines.length === 0) {
+                      return <span>—</span>;
+                    }
+                    if (lines.length === 1) {
+                      return <span>{formatPaymentModeLabel(lines[0])}</span>;
+                    }
+                    return (
+                      <ul className="payment-mode-lines">
+                        {lines.map((l, idx) => (
+                          <li key={`${idx}-${l}`}>{formatPaymentModeLabel(l)}</li>
+                        ))}
+                      </ul>
+                    );
+                  })()}
+                </div>
               )}
             />
             <Column
               header="Actions"
-              style={{ minWidth: '8rem' }}
+              style={{ minWidth: '7rem' }}
               body={actionsBodyTemplate}
             />
           </DataTable>
@@ -548,6 +656,16 @@ const Sales = () => {
               <p><strong>Other Expense:</strong> ₹ {(selectedBill.originalSale.otherExpenses ?? selectedBill.originalSale.otherExpense ?? 0).toLocaleString('en-IN')}</p>
               <p><strong>GST Value:</strong> ₹ {(selectedBill.isGST ? (selectedBill.gstAmount ?? selectedBill.originalSale?.taxAmount ?? 0) : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
               <p><strong>Total Amount:</strong> ₹ {selectedBill.totalAmount.toLocaleString('en-IN')}</p>
+              <p>
+                <strong>Advance (token) used:</strong>{' '}
+                ₹{' '}
+                {(
+                  Number(selectedBill.advanceUsed ?? selectedBill.originalSale?.advanceUsed) || 0
+                ).toLocaleString('en-IN', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </p>
             </div>
           </div>
         ) : (

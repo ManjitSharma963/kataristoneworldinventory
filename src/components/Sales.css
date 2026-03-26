@@ -37,7 +37,7 @@
   flex-wrap: wrap;
   gap: 12px;
   align-items: stretch;
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex: 1;
   min-width: 0;
 }
@@ -75,6 +75,21 @@
   font-weight: 600;
   color: #334155;
   font-size: 0.9rem;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.15;
+}
+
+.payment-mode-lines {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.payment-mode-lines li {
+  padding: 2px 0;
 }
 
 .sales-list {
@@ -89,12 +104,180 @@
   border: none;
 }
 
+.sales-list > .sales-common-search,
+.sales-list > .sales-filter-bar {
+  max-width: 980px;
+  margin-left: 0;
+  margin-right: 0;
+}
+
 .sales-list h3 {
   margin-top: 0;
   margin-bottom: 15px;
   color: #333;
   font-weight: 600;
   font-size: 1.3rem;
+}
+
+.sales-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  justify-content: flex-start;
+  padding: 14px 16px;
+  margin: 10px 0 16px;
+  background: #e0e5ec;
+  border-radius: 16px;
+  box-shadow:
+    6px 6px 12px rgba(163, 177, 198, 0.55),
+    -6px -6px 12px rgba(255, 255, 255, 0.85),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.55),
+    inset -1px -1px 2px rgba(163, 177, 198, 0.25);
+}
+
+.sales-filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+  flex: 0 1 260px;
+}
+
+.sales-filter-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.sales-filter-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.sales-common-search {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 14px 16px;
+  margin: 10px 0 12px;
+  background: #e0e5ec;
+  border-radius: 16px;
+  box-shadow:
+    6px 6px 12px rgba(163, 177, 198, 0.55),
+    -6px -6px 12px rgba(255, 255, 255, 0.85),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.55),
+    inset -1px -1px 2px rgba(163, 177, 198, 0.25);
+}
+
+.sales-common-search-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.sales-search-icon {
+  font-size: 16px;
+  opacity: 0.85;
+}
+
+.sales-common-search-input {
+  width: 100%;
+  max-width: 420px;
+}
+
+.sales-common-search-right {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.sales-common-search-dropdown {
+  min-width: 160px;
+}
+
+@media (max-width: 1100px) {
+  .sales-list > .sales-common-search,
+  .sales-list > .sales-filter-bar {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 900px) {
+  .sales-common-search {
+    flex-wrap: wrap;
+  }
+  .sales-common-search-input {
+    max-width: 100%;
+  }
+  .sales-common-search-dropdown {
+    min-width: 180px;
+  }
+}
+
+/* ===== Sales search/filter controls polish ===== */
+.sales-common-search,
+.sales-filter-bar {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.sales-common-search .p-inputtext,
+.sales-filter-bar .p-inputtext,
+.sales-common-search .p-dropdown,
+.sales-filter-bar .p-dropdown,
+.sales-common-search .p-calendar .p-inputtext,
+.sales-filter-bar .p-calendar .p-inputtext {
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid #d6dde8;
+  background: #f6f8fb;
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.7);
+  font-size: 0.95rem;
+}
+
+.sales-common-search .p-dropdown,
+.sales-common-search-dropdown {
+  min-width: 190px;
+}
+
+.sales-filter-bar .p-calendar {
+  width: 100%;
+}
+
+.sales-filter-bar .sales-filter-item {
+  max-width: 280px;
+}
+
+.sales-common-search .p-button,
+.sales-filter-bar .p-button {
+  height: 40px;
+  border-radius: 10px;
+  padding: 0 14px;
+  font-weight: 600;
+}
+
+.sales-common-search .p-button.p-button-outlined,
+.sales-filter-bar .p-button.p-button-outlined {
+  border-color: #8aa4c7;
+  color: #2f5e97;
+  background: #eef4fb;
+}
+
+.sales-common-search .p-button.p-button-outlined:hover,
+.sales-filter-bar .p-button.p-button-outlined:hover {
+  background: #e2edf9;
+  border-color: #6f93c1;
 }
 
 .sales-table-container {
@@ -133,11 +316,15 @@
   text-transform: uppercase;
   font-size: 11px;
   letter-spacing: 0.3px;
-  padding: 12px 10px;
+  padding: 6px 6px;
   white-space: nowrap;
   box-shadow: 
     0 2px 4px rgba(163, 177, 198, 0.3),
     inset 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.sales-datatable.p-datatable .p-datatable-tbody > tr > td {
+  padding: 8px 6px;
 }
 
 .sales-datatable.p-datatable .p-datatable-tbody > tr {

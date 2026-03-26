@@ -99,6 +99,8 @@ function buildDailyClosingCsv(data, from, to) {
   rows.push(['Total sales', data.totalSales ?? 0].map(csvEscapeCell).join(','));
   rows.push(['Total paid on bills', data.totalPaidOnBills ?? 0].map(csvEscapeCell).join(','));
   rows.push(['Total due on bills', data.totalDueOnBills ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Advance deposits (token recorded)', data.totalAdvanceDeposits ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Advance applied on bills', data.totalAdvanceAppliedOnBills ?? 0].map(csvEscapeCell).join(','));
   rows.push(['Total collected', data.totalCollected ?? 0].map(csvEscapeCell).join(','));
   rows.push(['Total expenses', data.totalExpenses ?? 0].map(csvEscapeCell).join(','));
   rows.push(['Cash in hand', data.cashInHand ?? 0].map(csvEscapeCell).join(','));
@@ -450,6 +452,19 @@ const Reports = () => {
               <span className="daily-summary-label">Total due</span>
               <span className="daily-summary-value">{money(closingData.totalDueOnBills)}</span>
               <span className="daily-summary-hint">Still unpaid on those bills</span>
+            </div>
+            <div className="daily-summary-card daily-summary-card--advance">
+              <span className="daily-summary-label">Advance</span>
+              <span className="daily-summary-value">{money(closingData.totalAdvanceDeposits)}</span>
+              <span className="daily-summary-hint">
+                Token / advance recorded in this {isRange ? 'period' : 'day'}
+                {(Number(closingData.totalAdvanceAppliedOnBills) || 0) > 0 && (
+                  <>
+                    {' '}
+                    · Applied to bills {money(closingData.totalAdvanceAppliedOnBills)}
+                  </>
+                )}
+              </span>
             </div>
           </div>
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import { customerSchema } from '../utils/validation';
@@ -6,10 +6,28 @@ import {
   fetchCustomers, 
   createCustomer, 
   updateCustomer, 
-  deleteCustomer 
+  deleteCustomer,
+  fetchCustomerAdvanceSummary,
+  fetchCustomerAdvanceHistory,
+  createCustomerAdvance,
 } from '../utils/api';
 import Loading from './Loading';
 import './Customers.css';
+
+const CUSTOMER_FORM_DEFAULTS = {
+  name: '',
+  phone: '',
+  email: '',
+  address: '',
+  city: '',
+  state: '',
+  pincode: '',
+  gstin: '',
+  location: 'Bhondsi',
+  notes: '',
+  tokenAmount: '',
+  tokenPaymentMode: 'CASH',
+};
 
 const Customers = () => {
   const [customers, setCustomers] = useState([]);
@@ -20,6 +38,14 @@ const Customers = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
+  const [advanceModalCustomer, setAdvanceModalCustomer] = useState(null);
+  const [advanceSummary, setAdvanceSummary] = useState(null);
+  const [advanceHistory, setAdvanceHistory] = useState([]);
+  const [advanceLoading, setAdvanceLoading] = useState(false);
+  const [advanceAmount, setAdvanceAmount] = useState('');
+  const [advanceDesc, setAdvanceDesc] = useState('');
+  const [advancePaymentMode, setAdvancePaymentMode] = useState('CASH');
+
   // React Hook Form
   const { 
     register, 
@@ -29,18 +55,7 @@ const Customers = () => {
     formState: { errors } 
   } = useForm({
     resolver: yupResolver(customerSchema),
-    defaultValues: {
-      name: '',
-      phone: '',
-      email: '',
-      address: '',
-      city: '',
-      state: '',
-      pincode: '',
-      gstin: '',
-      location: 'Bhondsi',
-      notes: ''
-    }
+    defaultValues: CUSTOMER_FORM_DEFAULTS,
   });
 
   const [formData, setFormData] = useState({
@@ -59,6 +74,64 @@ const Customers = () => {
   useEffect(() => {
     loadCustomers();
   }, []);
+
+  const loadAdvanceData = async (customerId) => {
+    setAdvanceLoading(true);
+    try {
+      const [sum, hist] = await Promise.all([
+        fetchCustomerAdvanceSummary(customerId),
+        fetchCustomerAdvanceHistory(customerId),
+      ]);
+      setAdvanceSummary(sum);
+      setAdvanceHistory(Array.isArray(hist) ? hist : []);
+    } catch (e) {
+      console.error('Advance load failed:', e);
+      setAdvanceSummary(null);
+      setAdvanceHistory([]);
+    } finally {
+      setAdvanceLoading(false);
+    }
+  };
+
+  const openAdvanceModal = (customer) => {
+    setAdvanceModalCustomer(customer);
+    setAdvanceAmount('');
+    setAdvanceDesc('');
+    setAdvancePaymentMode('CASH');
+    loadAdvanceData(customer.id);
+  };
+
+  const closeAdvanceModal = () => {
+    setAdvanceModalCustomer(null);
+    setAdvanceSummary(null);
+    setAdvanceHistory([]);
+  };
+
+  const handleAddAdvance = async (e) => {
+    e.preventDefault();
+    if (!advanceModalCustomer) return;
+    const amt = parseFloat(String(advanceAmount).replace(/[^\d.]/g, ''));
+    if (!amt || amt <= 0) {
+      alert('Enter a positive amount');
+      return;
+    }
+    try {
+      setAdvanceLoading(true);
+      await createCustomerAdvance({
+        customerId: advanceModalCustomer.id,
+        amount: amt,
+        paymentMode: advancePaymentMode || 'CASH',
+        description: advanceDesc || undefined,
+      });
+      setAdvanceAmount('');
+      setAdvanceDesc('');
+      await loadAdvanceData(advanceModalCustomer.id);
+    } catch (err) {
+      alert(err.message || 'Could not record advance');
+    } finally {
+      setAdvanceLoading(false);
+    }
+  };
 
   const loadCustomers = async () => {
     try {
@@ -104,7 +177,8 @@ const Customers = () => {
         email: data.email || '',
         address: data.address || '',
         gstin: data.gstin || '',
-        location: data.location || data.city || 'Bhondsi' // Use location field or fallback to city
+        location: data.location || data.city || 'Bhondsi', // Use location field or fallback to city
+        notes: data.notes || ''
       };
 
       if (editingCustomer) {
@@ -117,6 +191,26 @@ const Customers = () => {
         // Create new customer
         const newCustomer = await createCustomer(apiData);
         setCustomers([...customers, newCustomer]);
+
+        const tokenRaw =
+          data.tokenAmount != null && data.tokenAmount !== undefined ? String(data.tokenAmount).trim() : '';
+        const tokenAmt =
+          tokenRaw === '' ? 0 : parseFloat(tokenRaw.replace(/[^\d.]/g, ''));
+        if (tokenAmt > 0 && newCustomer?.id) {
+          try {
+            await createCustomerAdvance({
+              customerId: newCustomer.id,
+              amount: tokenAmt,
+              paymentMode: data.tokenPaymentMode || 'CASH',
+              description: 'Initial token at customer registration',
+            });
+          } catch (advErr) {
+            console.error(advErr);
+            alert(
+              `Customer was saved, but the token could not be recorded: ${advErr.message || 'Unknown error'}. Add it using the token (💰) action on the customer row.`
+            );
+          }
+        }
       }
       
       resetForm();
@@ -144,6 +238,7 @@ const Customers = () => {
       notes: customer.notes || ''
     };
     setFormData(editData);
+    setValue('tokenAmount', '');
     // Update react-hook-form values
     Object.keys(editData).forEach(key => {
       setValue(key, editData[key]);
@@ -166,51 +261,176 @@ const Customers = () => {
     }
   };
 
+  const openAddCustomer = () => {
+    setEditingCustomer(null);
+    setFormData({ ...CUSTOMER_FORM_DEFAULTS });
+    reset(CUSTOMER_FORM_DEFAULTS);
+    setShowForm(true);
+  };
+
   const resetForm = () => {
-    const defaultData = {
-      name: '',
-      phone: '',
-      email: '',
-      address: '',
-      city: '',
-      state: '',
-      pincode: '',
-      gstin: '',
-      location: 'Bhondsi',
-      notes: ''
-    };
-    setFormData(defaultData);
-    reset(defaultData);
+    setFormData({ ...CUSTOMER_FORM_DEFAULTS });
+    reset(CUSTOMER_FORM_DEFAULTS);
     setEditingCustomer(null);
     setShowForm(false);
   };
 
-  const filteredCustomers = customers.filter(customer => {
-    if (!searchQuery.trim()) return true;
-    const query = searchQuery.toLowerCase();
-    const customerName = customer.customerName || customer.name || '';
-    return (
-      customerName.toLowerCase().includes(query) ||
-      customer.phone?.includes(query) ||
-      customer.email?.toLowerCase().includes(query) ||
-      customer.location?.toLowerCase().includes(query) ||
-      customer.city?.toLowerCase().includes(query) ||
-      customer.gstin?.toLowerCase().includes(query)
-    );
-  });
+  const normalizeSearchText = (value) =>
+    String(value ?? '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const filteredCustomers = useMemo(() => {
+    const list = Array.isArray(customers) ? customers : [];
+    const query = normalizeSearchText(searchQuery);
+    if (!query) return list;
+    return list.filter((customer) => {
+      const customerName = customer.customerName || customer.name || '';
+      const directMatch =
+        normalizeSearchText(customerName).includes(query) ||
+        normalizeSearchText(customer.phone).includes(query) ||
+        normalizeSearchText(customer.email).includes(query) ||
+        normalizeSearchText(customer.location).includes(query) ||
+        normalizeSearchText(customer.city).includes(query) ||
+        normalizeSearchText(customer.gstin).includes(query) ||
+        normalizeSearchText(customer.notes).includes(query);
+      if (directMatch) return true;
+      // Fallback: include all plain values in one searchable blob for unexpected field names.
+      const fallbackBlob = normalizeSearchText(Object.values(customer || {}).join(' '));
+      return fallbackBlob.includes(query);
+    });
+  }, [customers, searchQuery]);
 
   const totalPages = Math.ceil(filteredCustomers.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const paginatedCustomers = filteredCustomers.slice(startIndex, startIndex + itemsPerPage);
 
+  const money = (n) =>
+    Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
   return (
     <div className="customers-container">
       <div className="customers-header">
         <h2>Customer Management</h2>
-        <button className="btn btn-primary" onClick={() => setShowForm(true)}>
+        <button type="button" className="btn btn-primary" onClick={openAddCustomer}>
           + Add Customer
         </button>
       </div>
+
+      {advanceModalCustomer && (
+        <div className="modal-overlay" onClick={closeAdvanceModal}>
+          <div className="modal-content advance-token-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Token / Advance — {advanceModalCustomer.customerName || advanceModalCustomer.name || 'Customer'}</h3>
+              <button type="button" className="modal-close" onClick={closeAdvanceModal}>
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
+              {advanceLoading && !advanceSummary ? (
+                <p>Loading…</p>
+              ) : (
+                <>
+                  <div className="advance-summary-cards">
+                    <div className="advance-summary-card">
+                      <span className="advance-summary-label">Total advance</span>
+                      <span className="advance-summary-value">₹ {money(advanceSummary?.totalAdvance)}</span>
+                    </div>
+                    <div className="advance-summary-card">
+                      <span className="advance-summary-label">Used on bills</span>
+                      <span className="advance-summary-value">₹ {money(advanceSummary?.totalUsed)}</span>
+                    </div>
+                    <div className="advance-summary-card">
+                      <span className="advance-summary-label">Remaining</span>
+                      <span className="advance-summary-value">₹ {money(advanceSummary?.remaining)}</span>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleAddAdvance} className="advance-add-form">
+                    <h4 className="advance-section-title">Add advance / token</h4>
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>Amount (₹) *</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={advanceAmount}
+                          onChange={(e) => setAdvanceAmount(e.target.value)}
+                          placeholder="e.g. 5000"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Payment mode *</label>
+                        <select
+                          value={advancePaymentMode}
+                          onChange={(e) => setAdvancePaymentMode(e.target.value)}
+                          className="form-select"
+                        >
+                          <option value="CASH">Cash</option>
+                          <option value="UPI">UPI</option>
+                          <option value="BANK_TRANSFER">Bank transfer</option>
+                          <option value="CHEQUE">Cheque</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>Description</label>
+                        <input
+                          type="text"
+                          value={advanceDesc}
+                          onChange={(e) => setAdvanceDesc(e.target.value)}
+                          placeholder="Optional note"
+                        />
+                      </div>
+                    </div>
+                    <button type="submit" className="btn btn-primary" disabled={advanceLoading}>
+                      Record advance
+                    </button>
+                  </form>
+
+                  <h4 className="advance-section-title">History</h4>
+                  <div className="advance-history-wrap">
+                    <table className="data-table advance-history-table">
+                      <thead>
+                        <tr>
+                          <th>Type</th>
+                          <th>Date</th>
+                          <th>Amount (₹)</th>
+                          <th>Details</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {advanceHistory.length === 0 ? (
+                          <tr>
+                            <td colSpan={4} style={{ textAlign: 'center' }}>
+                              No advance activity yet
+                            </td>
+                          </tr>
+                        ) : (
+                          advanceHistory.map((row, i) => (
+                            <tr key={`${row.type}-${row.createdAt}-${i}`}>
+                              <td>{row.type === 'DEPOSIT' ? 'Deposit' : 'Applied to bill'}</td>
+                              <td>{row.createdAt ? new Date(row.createdAt).toLocaleString() : '—'}</td>
+                              <td>{money(row.amount)}</td>
+                              <td>
+                                {row.type === 'USAGE' && row.billId
+                                  ? `${row.billKind || ''} bill #${row.billId}`
+                                  : [row.description || '—', row.paymentMode ? `(Mode: ${String(row.paymentMode).replace('_', ' ')})` : null]
+                                      .filter(Boolean)
+                                      .join(' ')}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Customer Form Modal */}
       {showForm && (
@@ -238,8 +458,18 @@ const Customers = () => {
                     <label>Phone Number *</label>
                     <input
                       type="tel"
-                      {...register('phone')}
+                      {...register('phone', {
+                        onChange: (e) => {
+                          const digits = String(e.target.value || '').replace(/\D/g, '').slice(0, 10);
+                          e.target.value = digits;
+                          setValue('phone', digits, { shouldValidate: true, shouldDirty: true });
+                        }
+                      })}
                       placeholder="Enter phone number (10 digits)"
+                      inputMode="numeric"
+                      maxLength={10}
+                      pattern="[0-9]{10}"
+                      autoComplete="off"
                     />
                     {errors.phone && (
                       <span className="error-message">{errors.phone.message}</span>
@@ -340,6 +570,35 @@ const Customers = () => {
                     <span className="error-message">{errors.notes.message}</span>
                   )}
                 </div>
+                {!editingCustomer && (
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Token amount</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        {...register('tokenAmount')}
+                        placeholder="Enter token amount (optional)"
+                        autoComplete="off"
+                      />
+                      {errors.tokenAmount && (
+                        <span className="error-message">{errors.tokenAmount.message}</span>
+                      )}
+                    </div>
+                    <div className="form-group">
+                      <label>Token payment mode</label>
+                      <select {...register('tokenPaymentMode')} className="form-select">
+                        <option value="CASH">Cash</option>
+                        <option value="UPI">UPI</option>
+                        <option value="BANK_TRANSFER">Bank transfer</option>
+                        <option value="CHEQUE">Cheque</option>
+                      </select>
+                    </div>
+                    <span className="customers-field-hint">
+                      If token amount is set, advance is recorded with selected payment mode (applied to future bills).
+                    </span>
+                  </div>
+                )}
                 <div className="form-actions">
                   <button type="submit" className="btn btn-primary">
                     {editingCustomer ? 'Update Customer' : 'Add Customer'}
@@ -393,9 +652,9 @@ const Customers = () => {
                   <tr>
                     <th>Name</th>
                     <th>Phone</th>
-                    <th>Email</th>
                     <th>Location</th>
                     <th>GSTIN</th>
+                    <th>Notes</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -404,11 +663,19 @@ const Customers = () => {
                     <tr key={customer.id}>
                       <td className="date-cell">{customer.customerName || customer.name || '-'}</td>
                       <td>{customer.phone || '-'}</td>
-                      <td>{customer.email || '-'}</td>
                       <td>{customer.location || customer.city || '-'}</td>
                       <td>{customer.gstin || '-'}</td>
+                      <td>{customer.notes || '-'}</td>
                       <td>
                         <div className="action-buttons">
+                          <button
+                            type="button"
+                            className="action-btn action-btn-advance"
+                            onClick={() => openAdvanceModal(customer)}
+                            title="Token / advance"
+                          >
+                            💰
+                          </button>
                           <button
                             className="action-btn"
                             onClick={() => handleEdit(customer)}

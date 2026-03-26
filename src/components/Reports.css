@@ -728,7 +728,7 @@
 
 .daily-summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
   margin-bottom: 28px;
 }
@@ -739,6 +739,11 @@
   padding: 18px;
   box-shadow: 0 4px 20px rgba(15, 23, 42, 0.07);
   border: 1px solid #e8ecf1;
+}
+
+.daily-summary-card--advance {
+  border-color: #99f6e4;
+  background: linear-gradient(180deg, #f0fdfa 0%, #fff 55%);
 }
 
 .daily-summary-label {

@@ -418,6 +418,48 @@ export const fetchProductById = async (productId) => {
   return await apiCall(`/inventory/${productId}`, { method: 'GET' });
 };
 
+/** Suppliers for current JWT location (firm). */
+export const fetchSuppliers = async () => {
+  return await apiCall('/suppliers', { method: 'GET' });
+};
+
+/** Create supplier — admin only. */
+export const createSupplier = async ({ name, contactNumber, contact_number, address }) => {
+  return await apiCall('/suppliers', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: String(name || '').trim(),
+      ...(contactNumber != null && String(contactNumber).trim() !== ''
+        ? { contactNumber: String(contactNumber).trim() }
+        : contact_number != null && String(contact_number).trim() !== ''
+          ? { contactNumber: String(contact_number).trim() }
+          : {}),
+      ...(address != null && String(address).trim() !== '' ? { address: String(address).trim() } : {})
+    })
+  });
+};
+
+/** Dealers for current JWT location (middleman). */
+export const fetchDealers = async () => {
+  return await apiCall('/dealers', { method: 'GET' });
+};
+
+/** Create dealer — admin only. */
+export const createDealer = async ({ name, contactNumber, contact_number, address }) => {
+  return await apiCall('/dealers', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: String(name || '').trim(),
+      ...(contactNumber != null && String(contactNumber).trim() !== ''
+        ? { contactNumber: String(contactNumber).trim() }
+        : contact_number != null && String(contact_number).trim() !== ''
+          ? { contactNumber: String(contact_number).trim() }
+          : {}),
+      ...(address != null && String(address).trim() !== '' ? { address: String(address).trim() } : {})
+    })
+  });
+};
+
 export const updateInventoryProduct = async (productId, body) => {
   return await apiCall(`/inventory/${productId}`, {
     method: 'PUT',
@@ -631,6 +673,39 @@ export const fetchCustomers = async () => {
  */
 export const fetchCustomerById = async (id) => {
   return await apiCall(`/customers/${id}`, { method: 'GET' });
+};
+
+/**
+ * Lookup customer by phone (same location as token).
+ */
+export const fetchCustomerByPhone = async (phone) => {
+  const encoded = encodeURIComponent(String(phone).trim());
+  return await apiCall(`/customers/phone/${encoded}`, { method: 'GET' });
+};
+
+/** Record token / advance for a customer (POST /api/customer/advance). */
+export const createCustomerAdvance = async ({ customerId, amount, description, paymentMode }) => {
+  return await apiCall('/customer/advance', {
+    method: 'POST',
+    body: JSON.stringify({
+      customerId,
+      amount: Number(amount),
+      paymentMode: paymentMode || 'CASH',
+      description: description || undefined,
+    }),
+  });
+};
+
+export const fetchCustomerAdvanceSummary = async (customerId) => {
+  return await apiCall(`/customer/advance/summary?customerId=${encodeURIComponent(customerId)}`, {
+    method: 'GET',
+  });
+};
+
+export const fetchCustomerAdvanceHistory = async (customerId) => {
+  return await apiCall(`/customer/advance/history?customerId=${encodeURIComponent(customerId)}`, {
+    method: 'GET',
+  });
 };
 
 /**

@@ -70,10 +70,26 @@ export const customerSchema = yup.object().shape({
     .matches(/^[0-9]{6}$/, 'Pincode must be 6 digits'),
   gstin: yup
     .string()
-    .matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, 'Invalid GSTIN format'),
+    .transform((v) => (v == null ? '' : String(v).trim().toUpperCase()))
+    .matches(
+      /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/,
+      { message: 'Invalid GSTIN format', excludeEmptyString: true }
+    ),
   notes: yup
     .string()
-    .max(1000, 'Notes must be less than 1000 characters')
+    .max(1000, 'Notes must be less than 1000 characters'),
+  tokenAmount: yup
+    .string()
+    .transform((v) => (v == null ? '' : String(v)))
+    .test('token-amount', 'Token amount must be zero or a positive number', (v) => {
+      const s = (v || '').trim();
+      if (s === '') return true;
+      const n = parseFloat(s.replace(/[^\d.]/g, ''));
+      return !isNaN(n) && n >= 0 && n <= 1e12;
+    }),
+  tokenPaymentMode: yup
+    .string()
+    .oneOf(['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE'])
 });
 
 // Salary Payment Schema
