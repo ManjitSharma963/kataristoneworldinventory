@@ -14,6 +14,8 @@ function localISODate(d = new Date()) {
 const money = (n) =>
   `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+const resolveInHand = (data) => Number(data?.inHandAmount ?? data?.cashInHand ?? 0);
+
 function formatDayLabel(iso) {
   if (!iso) return '';
   const d = new Date(iso + 'T12:00:00');
@@ -101,9 +103,10 @@ function buildDailyClosingCsv(data, from, to) {
   rows.push(['Total due on bills', data.totalDueOnBills ?? 0].map(csvEscapeCell).join(','));
   rows.push(['Advance deposits (token recorded)', data.totalAdvanceDeposits ?? 0].map(csvEscapeCell).join(','));
   rows.push(['Advance applied on bills', data.totalAdvanceAppliedOnBills ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Advance available (deposits - applied)', data.totalAdvanceAvailable ?? ((data.totalAdvanceDeposits ?? 0) - (data.totalAdvanceAppliedOnBills ?? 0))].map(csvEscapeCell).join(','));
   rows.push(['Total collected', data.totalCollected ?? 0].map(csvEscapeCell).join(','));
   rows.push(['Total expenses', data.totalExpenses ?? 0].map(csvEscapeCell).join(','));
-  rows.push(['Cash in hand', data.cashInHand ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Budget in hand (Cash + UPI)', resolveInHand(data)].map(csvEscapeCell).join(','));
   const ps = data.paymentSummary || {};
   rows.push(['Mode summary', 'Amount'].map(csvEscapeCell).join(','));
   Object.entries(ps).forEach(([k, v]) => {
@@ -154,6 +157,28 @@ function buildDailyClosingCsv(data, from, to) {
     rows.push([ex.id, ex.expenseType, ex.category, ex.amount].map(csvEscapeCell).join(','));
   });
   return `\uFEFF${rows.join('\n')}`;
+}
+
+function buildDailyClosingHtmlTable(data, from, to) {
+  const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const rows = (data?.bills || [])
+    .map(
+      (r) => `<tr>
+<td>${esc(toIsoDateString(r.billDate) || '')}</td>
+<td>${esc(r.billNumber)}</td>
+<td>${esc(r.billType)}</td>
+<td>${esc(r.totalAmount)}</td>
+<td>${esc(r.paidAmount)}</td>
+<td>${esc(r.dueAmount)}</td>
+</tr>`
+    )
+    .join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Daily Closing ${esc(from)}-${esc(to)}</title></head>
+<body><h3>Daily Closing Report (${esc(from)} to ${esc(to)})</h3>
+<table border="1" cellspacing="0" cellpadding="6">
+<tr><th>Date</th><th>Bill #</th><th>Type</th><th>Total</th><th>Paid</th><th>Due</th></tr>
+${rows}
+</table></body></html>`;
 }
 
 const PAGE_SIZE = 10;
@@ -304,6 +329,22 @@ const Reports = () => {
     URL.revokeObjectURL(url);
   }, [closingData, dateFrom, dateTo]);
 
+  const handleExportExcel = useCallback(() => {
+    if (!closingData) return;
+    const blob = new Blob([buildDailyClosingHtmlTable(closingData, dateFrom, dateTo)], {
+      type: 'application/vnd.ms-excel;charset=utf-8;'
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `daily-closing_${dateFrom}_${dateTo}.xls`;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [closingData, dateFrom, dateTo]);
+
   const handleBillPdf = async (row) => {
     try {
       await downloadBillPDF(row.billId, row.billType);
@@ -338,6 +379,14 @@ const Reports = () => {
           </button>
           <button type="button" className="reports-btn-print" onClick={() => window.print()} disabled={!closingData}>
             Print
+          </button>
+          <button
+            type="button"
+            className="reports-btn-export"
+            onClick={handleExportExcel}
+            disabled={!closingData || closingLoading}
+          >
+            Export Excel
           </button>
         </div>
       </header>
@@ -422,12 +471,6 @@ const Reports = () => {
             <span className="daily-closing-date-badge" role="status">
               {periodLabel}
             </span>
-            {isRange && <span className="daily-range-pill">Date range</span>}
-            {closingData.location != null && String(closingData.location).trim() !== '' && (
-              <span className="reports-location-chip" title="Data filtered by your account location">
-                {String(closingData.location).trim()}
-              </span>
-            )}
           </div>
 
           <div className="daily-summary-grid">
@@ -454,16 +497,17 @@ const Reports = () => {
               <span className="daily-summary-hint">Still unpaid on those bills</span>
             </div>
             <div className="daily-summary-card daily-summary-card--advance">
-              <span className="daily-summary-label">Advance</span>
-              <span className="daily-summary-value">{money(closingData.totalAdvanceDeposits)}</span>
-              <span className="daily-summary-hint">
-                Token / advance recorded in this {isRange ? 'period' : 'day'}
-                {(Number(closingData.totalAdvanceAppliedOnBills) || 0) > 0 && (
-                  <>
-                    {' '}
-                    · Applied to bills {money(closingData.totalAdvanceAppliedOnBills)}
-                  </>
+              <span className="daily-summary-label">Advance Available</span>
+              <span className="daily-summary-value" title="Prepaid amount from customer">
+                {money(
+                  Number(
+                    closingData.totalAdvanceAvailable ??
+                    (Number(closingData.totalAdvanceDeposits) || 0) - (Number(closingData.totalAdvanceAppliedOnBills) || 0)
+                  )
                 )}
+              </span>
+              <span className="daily-summary-hint">
+                Recorded {money(closingData.totalAdvanceDeposits)} · Applied to bills {money(closingData.totalAdvanceAppliedOnBills)}
               </span>
             </div>
           </div>
@@ -495,6 +539,9 @@ const Reports = () => {
               </span>
             )}
           </p>
+          {(Number(closingData.totalCollected) || 0) === 0 && (
+            <p className="report-muted">No payments recorded yet for selected date range.</p>
+          )}
 
           <h4 className="daily-subheading">{billsHeading}</h4>
           <p className="report-table-scroll-hint">Scroll sideways to see all columns.</p>
@@ -554,7 +601,12 @@ const Reports = () => {
                         <td>{money(row.otherAmount)}</td>
                         <td>
                           <span className="report-status-cell">
-                            <span className={`status-pill status-${(row.status || '').toLowerCase()}`}>{row.status}</span>
+                            <span
+                              className={`status-pill status-${(row.status || '').toLowerCase()}`}
+                              title={row.status === 'PARTIAL' ? 'Bill not fully paid yet' : undefined}
+                            >
+                              {row.status}
+                            </span>
                             {(row.overpaidAmount || 0) > 0.005 && (
                               <span className="report-overpaid-tag" title="Payments exceed bill total">
                                 +{money(row.overpaidAmount)}
@@ -645,24 +697,26 @@ const Reports = () => {
               </div>
             </div>
             <div className="cash-summary-card">
-              <h4>Cash summary</h4>
+              <h4 title="Cash + UPI available after expenses">Budget in hand summary</h4>
               <div className="report-row">
-                <span>Cash collected {isRange ? 'in period' : '(today)'}</span>
-                <span className="report-value positive">{money(paySummary.CASH)}</span>
+                <span>Cash + UPI collected {isRange ? 'in period' : '(today)'}</span>
+                <span className="report-value positive">
+                  {money((Number(paySummary.CASH) || 0) + (Number(paySummary.UPI) || 0))}
+                </span>
               </div>
               <div className="report-row">
                 <span>Total expenses {isRange ? 'in period' : '(today)'}</span>
                 <span className="report-value negative">{money(closingData.totalExpenses)}</span>
               </div>
               <div
-                className={`report-row report-row-strong cash-final ${(closingData.cashInHand || 0) < 0 ? 'negative' : 'positive'}`}
+                className={`report-row report-row-strong cash-final ${(resolveInHand(closingData) || 0) < 0 ? 'negative' : 'positive'}`}
               >
-                <span>Final cash in hand {isRange ? '(period)' : ''}</span>
-                <span className="report-value">{money(closingData.cashInHand)}</span>
+                <span>Final budget in hand {isRange ? '(period)' : ''}</span>
+                <span className="report-value">{money(resolveInHand(closingData))}</span>
               </div>
               <p className="report-muted daily-microcopy">
-                <strong>Cash collected</strong> in the selected {isRange ? 'range' : 'day'} minus{' '}
-                <strong>expenses posted</strong> in the same {isRange ? 'range' : 'day'}. UPI/bank are not in this number.
+                <strong>Cash + UPI collected</strong> in the selected {isRange ? 'range' : 'day'} minus{' '}
+                <strong>expenses posted</strong> in the same {isRange ? 'range' : 'day'}. Bank/Cheque are not in this number.
               </p>
             </div>
           </div>
@@ -693,8 +747,7 @@ const Reports = () => {
               <strong>Bill table</strong>: Each invoice&apos;s bill date and paid split (Cash / UPI / Bank / Other).
             </li>
             <li>
-              <strong>Final cash in hand</strong>: Cash collected in the period minus expenses in the period; reconcile with
-              your cashbox.
+              <strong>Final budget in hand</strong>: Cash + UPI collected in the period minus expenses in the period.
             </li>
           </Explainer>
         </>

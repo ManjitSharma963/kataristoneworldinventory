@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getInventory } from '../utils/storage';
 import { API_BASE_URL } from '../config/api';
-import { handleApiResponse, downloadBillPDF } from '../utils/api';
+import {
+  handleApiResponse,
+  downloadBillPDF,
+  fetchSalesPaymentModeSummary,
+  addBillPayment,
+  deleteBillPayment
+} from '../utils/api';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
@@ -10,6 +15,8 @@ import { Calendar } from 'primereact/calendar';
 import { Button } from 'primereact/button';
 import { Tag } from 'primereact/tag';
 import { Dialog } from 'primereact/dialog';
+import InlineToast from './InlineToast';
+import useDebouncedValue from '../utils/useDebouncedValue';
 import './Sales.css';
 
 const PAYMENT_MODE_LABELS = {
@@ -62,22 +69,74 @@ const getPaymentBand = (mode) => {
   return 'OTHER';
 };
 
+const normalizeSearchText = (value) =>
+  String(value ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
 const Sales = () => {
   const [sales, setSales] = useState([]);
-  const [inventory, setInventory] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [dateFrom, setDateFrom] = useState(null);
-  const [dateTo, setDateTo] = useState(null);
+  const today = new Date();
+  const [dateFrom, setDateFrom] = useState(today);
+  const [dateTo, setDateTo] = useState(today);
   const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
   const [billTypeFilter, setBillTypeFilter] = useState('ALL');
   const [paymentModeFilter, setPaymentModeFilter] = useState('ALL');
+  const [toast, setToast] = useState({ message: '', type: 'success' });
+  const [paymentBandTotals, setPaymentBandTotals] = useState({
+    upi: 0,
+    cash: 0,
+    bankTransfer: 0,
+    cheque: 0,
+    other: 0
+  });
 
   const [isBillPopupVisible, setBillPopupVisible] = useState(false);
   const [selectedBill, setSelectedBill] = useState(null);
+  const [paymentAddAmount, setPaymentAddAmount] = useState('');
+  const [paymentAddMode, setPaymentAddMode] = useState('CASH');
+  const [paymentAddDate, setPaymentAddDate] = useState(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  });
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
 
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    const toIso = (d) => {
+      const x = d instanceof Date ? d : (d ? new Date(d) : null);
+      if (!x || Number.isNaN(x.getTime())) return null;
+      const y = x.getFullYear();
+      const m = String(x.getMonth() + 1).padStart(2, '0');
+      const day = String(x.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+    const today = toIso(new Date());
+    const fromIso = toIso(dateFrom) || today;
+    const toIsoDate = toIso(dateTo) || fromIso;
+    fetchSalesPaymentModeSummary({ date: fromIso, dateTo: toIsoDate })
+      .then((res) => {
+        setPaymentBandTotals({
+          upi: Number(res?.upi) || 0,
+          cash: Number(res?.cash) || 0,
+          bankTransfer: Number(res?.bankTransfer) || 0,
+          cheque: Number(res?.cheque) || 0,
+          other: Number(res?.other) || 0
+        });
+      })
+      .catch((e) => {
+        console.error('Failed to load payment mode totals', e);
+      });
+  }, [dateFrom, dateTo]);
 
   const loadData = async () => {
     try {
@@ -110,7 +169,6 @@ const Sales = () => {
         setSales([]);
       }
       
-      setInventory(getInventory());
     } catch (error) {
       console.error('Error loading sales data:', error);
       setSales([]);
@@ -142,6 +200,13 @@ const Sales = () => {
       const subtotal = sale.subtotal || sale.subTotal || 0;
       const gstAmount = sale.taxAmount || sale.gstAmount || sale.gst || 0;
       const totalAmount = sale.totalAmount || sale.total || sale.amount || 0;
+      const paidAmount =
+        Number(sale.paidAmount ?? sale.paid_amount) ||
+        Math.max(
+          0,
+          (Number(sale.totalAmount || sale.total || sale.amount) || 0) -
+            (Number(sale.dueAmount ?? sale.due_amount) || 0)
+        );
       const paymentModeRaw =
         sale.paymentMode ??
         sale.payment_mode ??
@@ -180,8 +245,10 @@ const Sales = () => {
         subtotal: Number(subtotal) || 0,
         gstAmount: Number(gstAmount) || 0,
         totalAmount: Number(totalAmount) || 0,
+        paidAmount: Number(paidAmount) || 0,
         advanceUsed: Number(sale.advanceUsed) || 0,
         paymentMode: paymentMode,
+        paymentModeRaw: String(paymentModeRaw || ''),
         originalSale: sale
       };
     });
@@ -203,7 +270,7 @@ const Sales = () => {
   }, [prepareSalesData, dateFrom, dateTo]);
 
   const commonFilteredSales = useMemo(() => {
-    const q = String(searchQuery || '').trim().toLowerCase();
+      const q = normalizeSearchText(debouncedSearchQuery);
     return dateRangeFilteredSales.filter((row) => {
       if (billTypeFilter && billTypeFilter !== 'ALL') {
         if (String(row.billType || '').toUpperCase() !== billTypeFilter) return false;
@@ -213,31 +280,13 @@ const Sales = () => {
         if (band !== paymentModeFilter) return false;
       }
       if (!q) return true;
-      const billNo = String(row.billNumber || '').toLowerCase();
-      const cust = String(row.customerNumber || '').toLowerCase();
-      const pm = String(formatPaymentModeLabel(row.paymentMode) || '').toLowerCase();
-      const type = String(row.billType || '').toLowerCase();
+      const billNo = normalizeSearchText(row.billNumber);
+      const cust = normalizeSearchText(row.customerNumber);
+      const pm = normalizeSearchText(formatPaymentModeLabel(row.paymentMode));
+      const type = normalizeSearchText(row.billType);
       return billNo.includes(q) || cust.includes(q) || pm.includes(q) || type.includes(q);
     });
-  }, [dateRangeFilteredSales, searchQuery, billTypeFilter, paymentModeFilter]);
-
-  const paymentBandTotals = useMemo(() => {
-    let upi = 0;
-    let cash = 0;
-    let bankTransfer = 0;
-    let cheque = 0;
-    let other = 0;
-    commonFilteredSales.forEach((row) => {
-      const amt = Number(row.totalAmount) || 0;
-      const band = getPaymentBand(row.paymentMode);
-      if (band === 'UPI') upi += amt;
-      else if (band === 'CASH') cash += amt;
-      else if (band === 'BANK_TRANSFER') bankTransfer += amt;
-      else if (band === 'CHEQUE') cheque += amt;
-      else other += amt;
-    });
-    return { upi, cash, bankTransfer, cheque, other };
-  }, [commonFilteredSales]);
+  }, [dateRangeFilteredSales, debouncedSearchQuery, billTypeFilter, paymentModeFilter]);
 
   const formatCurrency = (n) =>
     `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -301,10 +350,11 @@ const Sales = () => {
                 billNumber: rowData.billNumber
               });
               await downloadBillPDF(rowData.id, rowData.billType);
+              setToast({ message: 'Bill PDF downloaded successfully.', type: 'success' });
             } catch (error) {
               console.error('[Sales] PDF download error:', error);
-              const errorMessage = error.message || 'Unknown error occurred';
-              alert(`Failed to download bill PDF:\n\n${errorMessage}\n\nPlease check:\n1. Backend server is running\n2. Bill data is complete\n3. Backend logs for details`);
+              const errorMessage = error.message || 'Unable to download bill PDF right now.';
+              setToast({ message: errorMessage, type: 'error' });
             }
           }}
           title="Download Bill PDF"
@@ -315,12 +365,55 @@ const Sales = () => {
 
   const handleViewBillDetails = (bill) => {
     setSelectedBill(bill);
+    setPaymentAddAmount('');
+    setPaymentAddMode('CASH');
     setBillPopupVisible(true);
   };
 
   const closeBillPopup = () => {
     setBillPopupVisible(false);
     setSelectedBill(null);
+  };
+
+  const handleAddPaymentToBill = async () => {
+    if (!selectedBill?.id || !selectedBill?.billType) return;
+    const amount = Number(paymentAddAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setToast({ message: 'Enter a valid payment amount.', type: 'error' });
+      return;
+    }
+    try {
+      setPaymentSubmitting(true);
+      await addBillPayment(selectedBill.id, selectedBill.billType, {
+        amount,
+        paymentMode: paymentAddMode,
+        paymentDate: paymentAddDate || undefined
+      });
+      await loadData();
+      setToast({ message: 'Payment added successfully.', type: 'success' });
+      closeBillPopup();
+    } catch (e) {
+      setToast({ message: e?.message || 'Payment could not be added.', type: 'error' });
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  };
+
+  const handleDeletePaymentFromBill = async (paymentId) => {
+    if (!selectedBill?.id || !selectedBill?.billType || !paymentId) return;
+    const ok = window.confirm('Delete this payment? This action can affect bill status and available balance.');
+    if (!ok) return;
+    try {
+      setPaymentSubmitting(true);
+      await deleteBillPayment(selectedBill.id, selectedBill.billType, paymentId);
+      await loadData();
+      setToast({ message: 'Payment deleted successfully.', type: 'success' });
+      closeBillPopup();
+    } catch (e) {
+      setToast({ message: e?.message || 'Payment could not be deleted.', type: 'error' });
+    } finally {
+      setPaymentSubmitting(false);
+    }
   };
 
   // Filter templates for row-based filtering
@@ -370,6 +463,11 @@ const Sales = () => {
 
       <div className="sales-list">
         <h3>Sales History</h3>
+        <InlineToast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ message: '', type: 'success' })}
+        />
         <div className="sales-common-search" role="region" aria-label="Sales search and filters">
           <div className="sales-common-search-left">
             <span className="sales-search-icon">🔍</span>
@@ -378,6 +476,7 @@ const Sales = () => {
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by bill #, customer, payment mode, or bill type…"
               className="sales-common-search-input"
+              title="Search bills by number, customer phone, paid via, or bill type"
             />
           </div>
           <div className="sales-common-search-right">
@@ -392,7 +491,7 @@ const Sales = () => {
               value={paymentModeFilter}
               options={paymentModeFilterOptions}
               onChange={(e) => setPaymentModeFilter(e.value)}
-              placeholder="Payment mode"
+              placeholder="Paid via"
               className="sales-common-search-dropdown"
             />
             <Button
@@ -451,7 +550,7 @@ const Sales = () => {
             rowsPerPageOptions={[10, 25, 50]}
             loading={loading}
             dataKey="id"
-            emptyMessage="No sales found."
+            emptyMessage="No bills found for today or selected filters."
             showGridlines
             stripedRows
             tableStyle={{ minWidth: '44rem', width: '100%' }}
@@ -488,7 +587,7 @@ const Sales = () => {
             />
             <Column
               field="subtotal"
-              header="Subtotal"
+              header="Item Total"
               dataType="numeric"
               style={{ minWidth: '8rem' }}
               body={(rowData) => amountBodyTemplate(rowData, 'subtotal')}
@@ -502,7 +601,7 @@ const Sales = () => {
             />
             <Column
               field="totalAmount"
-              header="Total"
+              header="Final Amount"
               dataType="numeric"
               style={{ minWidth: '8rem' }}
               body={totalAmountBodyTemplate}
@@ -512,11 +611,15 @@ const Sales = () => {
               header="Advance"
               dataType="numeric"
               style={{ minWidth: '7rem' }}
-              body={(rowData) => formatCurrency(rowData.advanceUsed)}
+              body={(rowData) => (
+                <span title="Prepaid amount from customer">
+                  {formatCurrency(rowData.advanceUsed)}
+                </span>
+              )}
             />
             <Column
               field="paymentMode"
-              header="Payment Mode"
+              header="Paid Via"
               style={{ minWidth: '8rem' }}
               body={(rowData) => (
                 <div className="payment-mode-cell">
@@ -588,12 +691,74 @@ const Sales = () => {
               </div>
               {(selectedBill.originalSale?.paymentMode || selectedBill.paymentMode) && (
                 <div className="detail-row">
-                  <span className="label">Payment Mode:</span>
+                  <span className="label">Paid Via:</span>
                   <span className="value">
                     {formatPaymentModeLabel(selectedBill.originalSale?.paymentMode || selectedBill.paymentMode)}
                   </span>
                 </div>
               )}
+            </div>
+
+            <div className="bill-summary" style={{ marginBottom: '12px' }}>
+              <p><strong>Add Payment to this Bill</strong></p>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={paymentAddAmount}
+                  onChange={(e) => setPaymentAddAmount(e.target.value)}
+                  placeholder="Amount"
+                  style={{ padding: '8px', minWidth: '140px' }}
+                />
+                <select
+                  value={paymentAddMode}
+                  onChange={(e) => setPaymentAddMode(e.target.value)}
+                  style={{ padding: '8px', minWidth: '140px' }}
+                >
+                  <option value="CASH">Cash</option>
+                  <option value="UPI">UPI</option>
+                  <option value="BANK_TRANSFER">Bank transfer</option>
+                  <option value="CHEQUE">Cheque</option>
+                  <option value="OTHER">Other</option>
+                </select>
+                <input
+                  type="date"
+                  value={paymentAddDate}
+                  onChange={(e) => setPaymentAddDate(e.target.value)}
+                  style={{ padding: '8px', minWidth: '160px' }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={paymentSubmitting}
+                  onClick={handleAddPaymentToBill}
+                >
+                  {paymentSubmitting ? 'Saving...' : 'Add Payment'}
+                </button>
+              </div>
+              <div style={{ marginTop: '10px' }}>
+                {(selectedBill?.originalSale?.payments || []).length === 0 ? (
+                  <span style={{ color: '#64748b' }}>No payments recorded yet.</span>
+                ) : (
+                  <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                    {(selectedBill.originalSale.payments || []).map((p) => (
+                      <li key={p.paymentId} style={{ marginBottom: '4px' }}>
+                        {p.paymentDate} - {p.paymentMode} - ₹{Number(p.amount || 0).toFixed(2)}{' '}
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          style={{ marginLeft: '8px', padding: '2px 8px' }}
+                          onClick={() => handleDeletePaymentFromBill(p.paymentId)}
+                          disabled={paymentSubmitting}
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
 
             <table className="bill-table">
@@ -655,7 +820,7 @@ const Sales = () => {
               <p><strong>Transportation Charge:</strong> ₹ {selectedBill.originalSale.transportationCharge.toLocaleString('en-IN')}</p>
               <p><strong>Other Expense:</strong> ₹ {(selectedBill.originalSale.otherExpenses ?? selectedBill.originalSale.otherExpense ?? 0).toLocaleString('en-IN')}</p>
               <p><strong>GST Value:</strong> ₹ {(selectedBill.isGST ? (selectedBill.gstAmount ?? selectedBill.originalSale?.taxAmount ?? 0) : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p><strong>Total Amount:</strong> ₹ {selectedBill.totalAmount.toLocaleString('en-IN')}</p>
+              <p><strong>Final Amount:</strong> ₹ {selectedBill.totalAmount.toLocaleString('en-IN')}</p>
               <p>
                 <strong>Advance (token) used:</strong>{' '}
                 ₹{' '}

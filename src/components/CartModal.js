@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { getCart, saveCart, removeFromCart, updateCartItemQuantity, clearCart, getCartCount, getCartTotal } from '../utils/cart';
 import { API_BASE_URL } from '../config/api';
 import { handleApiResponse, isAdmin, fetchCustomerByPhone, fetchCustomerAdvanceSummary } from '../utils/api';
@@ -15,6 +15,58 @@ const parsePayInput = (v) => {
   const n = Number(parseFloat(String(v).replace(/[^\d.]/g, '')));
   return isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100;
 };
+
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** Strip leading zeros from numeric string input (e.g. "00001" → "1"). */
+const stripLeadingZeros = (str) => {
+  if (str === '' || str === null || str === undefined) return str;
+  const s = String(str).trim();
+  let out = s.replace(/^0+(?=\d)|^0+(?=\.\d)/, '');
+  if (out.startsWith('.')) out = '0' + out;
+  return out === '' ? '0' : out;
+};
+
+/** Single source for cart totals (items + tax/discount + charges + advance cap). */
+function computeCartFinancials(
+  cart,
+  taxRate,
+  discountAmount,
+  labourCharge,
+  transportationCharge,
+  otherExpense,
+  advanceRemaining
+) {
+  const subtotal = cart.reduce((sum, item) => {
+    const price = item.pricePerSqftAfter || item.price || 0;
+    return sum + (price * (item.quantity || 0));
+  }, 0);
+  const taxRateNum = taxRate === '' ? 0 : typeof taxRate === 'number' ? taxRate : parseFloat(taxRate) || 0;
+  const tax = (subtotal * taxRateNum) / 100;
+  const total = Math.max(0, subtotal + tax - (discountAmount || 0));
+  const labourChargeNum = typeof labourCharge === 'number' ? labourCharge : parseFloat(labourCharge) || 0;
+  const transportationChargeNum =
+    typeof transportationCharge === 'number' ? transportationCharge : parseFloat(transportationCharge) || 0;
+  const otherExpenseNum = typeof otherExpense === 'number' ? otherExpense : parseFloat(otherExpense) || 0;
+  const grandTotal = total + labourChargeNum + transportationChargeNum + otherExpenseNum;
+  const advanceWillApply =
+    advanceRemaining != null && advanceRemaining > 0
+      ? Math.round(Math.min(advanceRemaining, grandTotal) * 100) / 100
+      : 0;
+  const netDueAfterAdvance = Math.round(Math.max(0, grandTotal - advanceWillApply) * 100) / 100;
+  return {
+    subtotal,
+    taxRateNum,
+    tax,
+    total,
+    labourChargeNum,
+    transportationChargeNum,
+    otherExpenseNum,
+    grandTotal,
+    advanceWillApply,
+    netDueAfterAdvance
+  };
+}
 
 export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [cart, setCart] = useState([]);
@@ -207,6 +259,92 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     localStorage.setItem('cartOtherExpense', otherExpense.toString());
   }, [otherExpense]);
 
+  const fin = useMemo(
+    () =>
+      computeCartFinancials(
+        cart,
+        taxRate,
+        discountAmount,
+        labourCharge,
+        transportationCharge,
+        otherExpense,
+        advanceRemaining
+      ),
+    [
+      cart,
+      taxRate,
+      discountAmount,
+      labourCharge,
+      transportationCharge,
+      otherExpense,
+      advanceRemaining
+    ]
+  );
+
+  const totalPaidNow = useMemo(
+    () =>
+      round2(
+        parsePayInput(payCash) +
+          parsePayInput(payUpi) +
+          parsePayInput(payBank) +
+          parsePayInput(payCheque)
+      ),
+    [payCash, payUpi, payBank, payCheque]
+  );
+
+  const paymentRemaining = useMemo(
+    () => round2(Math.max(0, fin.netDueAfterAdvance - totalPaidNow)),
+    [fin.netDueAfterAdvance, totalPaidNow]
+  );
+
+  const handlePaymentFieldChange = useCallback(
+    (field) => (e) => {
+      const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
+      const newAmount = parsePayInput(raw);
+      const cap = round2(Math.max(0, fin.netDueAfterAdvance));
+      const others = round2(
+        (field !== 'cash' ? parsePayInput(payCash) : 0) +
+          (field !== 'upi' ? parsePayInput(payUpi) : 0) +
+          (field !== 'bank' ? parsePayInput(payBank) : 0) +
+          (field !== 'cheque' ? parsePayInput(payCheque) : 0)
+      );
+      const maxForThis = round2(Math.max(0, cap - others));
+      const clamped = Math.min(newAmount, maxForThis);
+      const str = clamped === 0 ? '' : stripLeadingZeros(String(clamped));
+      if (field === 'cash') setPayCash(str);
+      else if (field === 'upi') setPayUpi(str);
+      else if (field === 'bank') setPayBank(str);
+      else setPayCheque(str);
+    },
+    [fin.netDueAfterAdvance, payCash, payUpi, payBank, payCheque]
+  );
+
+  /** If amount due drops (charges/discount/tax), scale payments down so total paid never exceeds due. */
+  useEffect(() => {
+    if (!isOpen || cart.length === 0) return;
+    const cap = round2(Math.max(0, fin.netDueAfterAdvance));
+    const c = parsePayInput(payCash);
+    const u = parsePayInput(payUpi);
+    const b = parsePayInput(payBank);
+    const ch = parsePayInput(payCheque);
+    const sum = round2(c + u + b + ch);
+    if (sum <= cap + 0.009) return;
+    if (cap <= 0) {
+      if (sum > 0) {
+        setPayCash('');
+        setPayUpi('');
+        setPayBank('');
+        setPayCheque('');
+      }
+      return;
+    }
+    const scale = cap / sum;
+    setPayCash(c * scale < 0.005 ? '' : String(round2(c * scale)));
+    setPayUpi(u * scale < 0.005 ? '' : String(round2(u * scale)));
+    setPayBank(b * scale < 0.005 ? '' : String(round2(b * scale)));
+    setPayCheque(ch * scale < 0.005 ? '' : String(round2(ch * scale)));
+  }, [isOpen, cart.length, fin.netDueAfterAdvance, payCash, payUpi, payBank, payCheque]);
+
   const loadCart = () => {
     let cartItems = getCart();
     // Normalize quantity to number so no leading zeros (e.g. "00001" -> 1)
@@ -303,43 +441,6 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       </div>
     );
   }
-
-  const subtotal = cart.reduce((sum, item) => {
-    // Use pricePerSqftAfter as the final price after all expenses
-    const price = item.pricePerSqftAfter || item.price || 0;
-    return sum + (price * (item.quantity || 0));
-  }, 0);
-
-  const taxRateNum = taxRate === '' ? 0 : (typeof taxRate === 'number' ? taxRate : parseFloat(taxRate) || 0);
-  const tax = (subtotal * taxRateNum) / 100;
-  const total = Math.max(0, subtotal + tax - (discountAmount || 0));
-  const labourChargeNum = typeof labourCharge === 'number' ? labourCharge : (parseFloat(labourCharge) || 0);
-  const transportationChargeNum = typeof transportationCharge === 'number' ? transportationCharge : (parseFloat(transportationCharge) || 0);
-  const otherExpenseNum = typeof otherExpense === 'number' ? otherExpense : (parseFloat(otherExpense) || 0);
-  const grandTotal = total + labourChargeNum + transportationChargeNum + otherExpenseNum;
-
-  const advanceWillApply =
-    advanceRemaining != null && advanceRemaining > 0
-      ? Math.round(Math.min(advanceRemaining, grandTotal) * 100) / 100
-      : 0;
-  const netDueAfterAdvance =
-    Math.round(Math.max(0, grandTotal - advanceWillApply) * 100) / 100;
-
-  const totalPaidNow =
-    parsePayInput(payCash) +
-    parsePayInput(payUpi) +
-    parsePayInput(payBank) +
-    parsePayInput(payCheque);
-  const paymentRemaining = Math.round(Math.max(0, netDueAfterAdvance - totalPaidNow) * 100) / 100;
-
-  // Strip leading zeros so "00001" -> "1", "000333" -> "333", keep "0" or "0.5"
-  const stripLeadingZeros = (str) => {
-    if (str === '' || str === null || str === undefined) return str;
-    const s = String(str).trim();
-    let out = s.replace(/^0+(?=\d)|^0+(?=\.\d)/, '');
-    if (out.startsWith('.')) out = '0' + out;
-    return out === '' ? '0' : out;
-  };
 
   // Display number as string with no leading zeros (so input never shows "00001")
   const toDisplayNumber = (num, fallback = '') => {
@@ -467,33 +568,31 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
     setSubmitError('');
 
-    const taxRateNum = taxRate === '' ? 0 : (typeof taxRate === 'number' ? taxRate : parseFloat(taxRate) || 0);
-    const subtotalCheckout = cart.reduce((sum, item) => {
-      const price = item.pricePerSqftAfter || item.price || 0;
-      return sum + (price * (item.quantity || 0));
-    }, 0);
-    const taxAmtCheckout = (subtotalCheckout * taxRateNum) / 100;
-    const totalCheckout = Math.max(0, subtotalCheckout + taxAmtCheckout - (discountAmount || 0));
-    const labourChargeNum = typeof labourCharge === 'number' ? labourCharge : (parseFloat(labourCharge) || 0);
-    const transportationChargeNum =
-      typeof transportationCharge === 'number' ? transportationCharge : (parseFloat(transportationCharge) || 0);
-    const otherExpenseNum =
-      typeof otherExpense === 'number' ? otherExpense : (parseFloat(otherExpense) || 0);
-    const grandTotalCheckout = totalCheckout + labourChargeNum + transportationChargeNum + otherExpenseNum;
+    const finCo = computeCartFinancials(
+      cart,
+      taxRate,
+      discountAmount,
+      labourCharge,
+      transportationCharge,
+      otherExpense,
+      advanceRemaining
+    );
+    const taxRateNum = finCo.taxRateNum;
+    const totalCheckout = finCo.total;
+    const labourChargeNum = finCo.labourChargeNum;
+    const transportationChargeNum = finCo.transportationChargeNum;
+    const otherExpenseNum = finCo.otherExpenseNum;
+    const grandTotalCheckout = finCo.grandTotal;
+    const netDueCheckout = finCo.netDueAfterAdvance;
 
     const cashAmt = parsePayInput(payCash);
     const upiAmt = parsePayInput(payUpi);
     const bankAmt = parsePayInput(payBank);
     const chequeAmt = parsePayInput(payCheque);
-    const paidSum = cashAmt + upiAmt + bankAmt + chequeAmt;
-    const advanceCap =
-      advanceRemaining != null && advanceRemaining > 0
-        ? Math.min(advanceRemaining, grandTotalCheckout)
-        : 0;
-    const netDueCheckout = Math.max(0, grandTotalCheckout - advanceCap);
+    const paidSum = round2(cashAmt + upiAmt + bankAmt + chequeAmt);
     if (paidSum - netDueCheckout > 0.015) {
       setSubmitError(
-        `Total paid (₹${paidSum.toFixed(2)}) cannot exceed amount due after advance (₹${netDueCheckout.toFixed(2)}; grand total ₹${grandTotalCheckout.toFixed(2)})`
+        `Total paid (₹${paidSum.toFixed(2)}) cannot exceed amount due after advance (₹${netDueCheckout.toFixed(2)}; final amount incl. charges ₹${grandTotalCheckout.toFixed(2)})`
       );
       return;
     }
@@ -824,7 +923,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   className="discount-input"
                   placeholder="0"
                 />
-                <span className="summary-value">₹ {(labourChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="summary-value">₹ {(fin.labourChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
             <div className="summary-row editable-discount">
@@ -842,7 +941,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   className="discount-input"
                   placeholder="0"
                 />
-                <span className="summary-value">₹ {(transportationChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="summary-value">₹ {(fin.transportationChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
             <div className="summary-row editable-discount">
@@ -860,12 +959,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   className="discount-input"
                   placeholder="0"
                 />
-                <span className="summary-value">₹ {(otherExpenseNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="summary-value">₹ {(fin.otherExpenseNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
             <div className="summary-row">
-              <span className="summary-label">Subtotal</span>
-              <span className="summary-value">₹ {subtotal.toLocaleString('en-IN')}</span>
+              <span className="summary-label">Item Total</span>
+              <span className="summary-value">₹ {fin.subtotal.toLocaleString('en-IN')}</span>
             </div>
           </div>
 
@@ -1017,7 +1116,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   className="tax-input"
                   placeholder="0"
                 />
-                <span className="summary-value tax-amount">₹ {tax.toFixed(2)}</span>
+                <span className="summary-value tax-amount">₹ {fin.tax.toFixed(2)}</span>
               </div>
             </div>
 
@@ -1038,11 +1137,11 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 <span className="summary-label">Payments (₹)</span>
               </div>
               {[
-                ['Cash', payCash, setPayCash],
-                ['UPI', payUpi, setPayUpi],
-                ['Bank transfer', payBank, setPayBank],
-                ['Cheque', payCheque, setPayCheque]
-              ].map(([label, val, setVal]) => (
+                ['Cash', payCash, 'cash'],
+                ['UPI', payUpi, 'upi'],
+                ['Bank transfer', payBank, 'bank'],
+                ['Cheque', payCheque, 'cheque']
+              ].map(([label, val, field]) => (
                 <div key={label} className="summary-row editable-field cart-payment-row">
                   <span className="summary-label">{label}</span>
                   <input
@@ -1051,10 +1150,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                     className="bill-type-select cart-payment-input"
                     placeholder="0"
                     value={val}
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(/[^\d.]/g, '');
-                      setVal(raw);
-                    }}
+                    onChange={handlePaymentFieldChange(field)}
                   />
                 </div>
               ))}
@@ -1069,8 +1165,9 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                 </span>
               </div>
               <p className="cart-payment-hint">
-                Leave fields empty or zero for credit (due). Customer advance applies before cash/UPI. Overpay is not
-                allowed.
+                Leave fields empty or zero for credit (due). Customer advance applies before split payments. Total paid
+                cannot exceed Grand Total (After Advance) (max ₹{fin.netDueAfterAdvance.toFixed(2)}).
+                {paymentRemaining > 0.009 ? ' Partial payment means bill is not fully paid yet.' : ''}
               </p>
             </div>
           </div>
@@ -1123,20 +1220,20 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
           </div>
 
           <div className="summary-total">
-            <span className="total-label">Subtotal (Incl. Labour/Transport/Other)</span>
-            <span className="total-value">₹ {grandTotal.toFixed(2)}</span>
+            <span className="total-label">Final Amount (Incl. Labour/Transport/Other)</span>
+            <span className="total-value">₹ {fin.grandTotal.toFixed(2)}</span>
           </div>
 
-          {advanceWillApply > 0 && (
+          {fin.advanceWillApply > 0 && (
             <div className="summary-total" style={{ marginTop: '8px' }}>
               <span className="total-label" style={{ color: '#0d9488' }}>Advance (auto)</span>
-              <span className="total-value" style={{ color: '#0d9488' }}>− ₹ {advanceWillApply.toFixed(2)}</span>
+              <span className="total-value" style={{ color: '#0d9488' }}>− ₹ {fin.advanceWillApply.toFixed(2)}</span>
             </div>
           )}
 
           <div className="summary-total" style={{ marginTop: '8px', borderTop: '2px solid #e5e7eb', paddingTop: '8px' }}>
             <span className="total-label">Grand Total (After Advance)</span>
-            <span className="total-value" style={{ fontSize: '1.3rem', fontWeight: 'bold', color: '#2563eb' }}>₹ {netDueAfterAdvance.toFixed(2)}</span>
+            <span className="total-value" style={{ fontSize: '1.3rem', fontWeight: 'bold', color: '#2563eb' }}>₹ {fin.netDueAfterAdvance.toFixed(2)}</span>
           </div>
 
           {/* Checkout Button */}

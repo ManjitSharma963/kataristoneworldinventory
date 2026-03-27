@@ -1154,6 +1154,78 @@
     -2px -2px 4px rgba(255, 255, 255, 0.5);
 }
 
+.payment-badge.status-over-advance {
+  background: #fff3cd;
+  color: #856404;
+  box-shadow:
+    2px 2px 4px rgba(133, 100, 4, 0.25),
+    -2px -2px 4px rgba(255, 255, 255, 0.5);
+}
+
+.employee-ledger-modal {
+  max-width: 1100px;
+  width: 95%;
+}
+
+.ledger-filter-actions {
+  display: flex;
+  align-items: flex-end;
+}
+
+.employee-ledger-stats {
+  margin-top: 12px;
+}
+
+.employee-ledger-table-wrap {
+  margin-top: 14px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.employee-ledger-kpis {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.employee-ledger-kpi-card {
+  background: #e0e5ec;
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow:
+    4px 4px 8px rgba(163, 177, 198, 0.6),
+    -4px -4px 8px rgba(255, 255, 255, 0.65);
+}
+
+.employee-ledger-kpi-card h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #4b5563;
+}
+
+.employee-ledger-kpi-card .kpi-value {
+  margin: 6px 0 0;
+  font-size: 20px;
+  font-weight: 800;
+  color: #111827;
+}
+
+.employee-ledger-kpi-card .kpi-hint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.employee-ledger-kpi-card .kpi-danger {
+  color: #dc3545;
+}
+
+.employee-ledger-kpi-card .kpi-warn {
+  color: #b45309;
+}
+
 @media (max-width: 768px) {
   .expenses-container {
     padding: 15px;
@@ -1198,6 +1270,10 @@
   /* Mobile Employees Cards - Expandable */
   .mobile-employees-cards {
     display: block;
+  }
+
+  .employee-ledger-kpis {
+    grid-template-columns: 1fr 1fr;
   }
 
   .employee-card {

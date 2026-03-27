@@ -12,6 +12,7 @@ import {
   createCustomerAdvance,
 } from '../utils/api';
 import Loading from './Loading';
+import useDebouncedValue from '../utils/useDebouncedValue';
 import './Customers.css';
 
 const CUSTOMER_FORM_DEFAULTS = {
@@ -35,6 +36,7 @@ const Customers = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
@@ -44,7 +46,9 @@ const Customers = () => {
   const [advanceLoading, setAdvanceLoading] = useState(false);
   const [advanceAmount, setAdvanceAmount] = useState('');
   const [advanceDesc, setAdvanceDesc] = useState('');
-  const [advancePaymentMode, setAdvancePaymentMode] = useState('CASH');
+  const [advancePaymentMode, setAdvancePaymentMode] = useState(
+    () => localStorage.getItem('lastAdvancePaymentMode') || 'CASH'
+  );
 
   // React Hook Form
   const { 
@@ -123,6 +127,7 @@ const Customers = () => {
         paymentMode: advancePaymentMode || 'CASH',
         description: advanceDesc || undefined,
       });
+      localStorage.setItem('lastAdvancePaymentMode', advancePaymentMode || 'CASH');
       setAdvanceAmount('');
       setAdvanceDesc('');
       await loadAdvanceData(advanceModalCustomer.id);
@@ -137,7 +142,9 @@ const Customers = () => {
     try {
       setLoading(true);
       const customersData = await fetchCustomers();
-      setCustomers(customersData || []);
+      const finalCustomers = customersData || [];
+      setCustomers(finalCustomers);
+      localStorage.setItem('customers', JSON.stringify(finalCustomers));
     } catch (error) {
       console.error('Error loading customers:', error);
       // Fallback to localStorage if API fails
@@ -283,7 +290,7 @@ const Customers = () => {
 
   const filteredCustomers = useMemo(() => {
     const list = Array.isArray(customers) ? customers : [];
-    const query = normalizeSearchText(searchQuery);
+    const query = normalizeSearchText(debouncedSearchQuery);
     if (!query) return list;
     return list.filter((customer) => {
       const customerName = customer.customerName || customer.name || '';
@@ -300,7 +307,7 @@ const Customers = () => {
       const fallbackBlob = normalizeSearchText(Object.values(customer || {}).join(' '));
       return fallbackBlob.includes(query);
     });
-  }, [customers, searchQuery]);
+  }, [customers, debouncedSearchQuery]);
 
   const totalPages = Math.ceil(filteredCustomers.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
@@ -361,7 +368,7 @@ const Customers = () => {
                         />
                       </div>
                       <div className="form-group">
-                        <label>Payment mode *</label>
+                        <label>Paid Via *</label>
                         <select
                           value={advancePaymentMode}
                           onChange={(e) => setAdvancePaymentMode(e.target.value)}
@@ -586,7 +593,7 @@ const Customers = () => {
                       )}
                     </div>
                     <div className="form-group">
-                      <label>Token payment mode</label>
+                      <label>Token Paid Via</label>
                       <select {...register('tokenPaymentMode')} className="form-select">
                         <option value="CASH">Cash</option>
                         <option value="UPI">UPI</option>

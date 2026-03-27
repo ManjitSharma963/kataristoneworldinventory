@@ -254,6 +254,53 @@ export const updateEmployee = async (id, updates) => {
   });
 };
 
+// ==================== PAYROLL (EMPLOYEE LEDGER) API ====================
+
+export const fetchEmployeePayrollSummary = async (month) => {
+  return await apiCall(`/payroll/employees/summary?month=${encodeURIComponent(month)}`, { method: 'GET' });
+};
+
+export const recordEmployeeAdvance = async (employeeId, payload) => {
+  return await apiCall(`/payroll/employees/${employeeId}/advance`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};
+
+export const settleEmployeeSalaryMonth = async (employeeId, payload) => {
+  return await apiCall(`/payroll/employees/${employeeId}/salary-settlement`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};
+
+export const fetchEmployeePayrollLedger = async (employeeId, { from, to } = {}) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  const qs = params.toString();
+  return await apiCall(
+    `/payroll/employees/${encodeURIComponent(employeeId)}/ledger${qs ? `?${qs}` : ''}`,
+    { method: 'GET' }
+  );
+};
+
+export const fetchClientTransactions = async ({ from, to, transactionType } = {}) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  if (transactionType) params.set('transactionType', transactionType);
+  const qs = params.toString();
+  return await apiCall(`/client-transactions${qs ? `?${qs}` : ''}`, { method: 'GET' });
+};
+
+export const createClientTransaction = async (payload) => {
+  return await apiCall('/client-transactions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};
+
 /**
  * Delete employee
  * @param {string|number} id - Employee ID
@@ -511,6 +558,15 @@ export const fetchDailyClosingReport = async ({ date, dateTo, backfillLegacy = f
   return await apiCall(`/reports/daily-closing?${params.toString()}`, { method: 'GET' });
 };
 
+export const fetchSalesPaymentModeSummary = async ({ date, dateTo }) => {
+  const params = new URLSearchParams();
+  params.set('date', date);
+  if (dateTo != null && dateTo !== '') {
+    params.set('dateTo', dateTo);
+  }
+  return await apiCall(`/reports/payment-mode-summary?${params.toString()}`, { method: 'GET' });
+};
+
 // ==================== BILL PDF DOWNLOAD ====================
 
 /**
@@ -534,6 +590,33 @@ export const downloadBillPDF = async (billId, billType) => {
     console.error('Error downloading bill PDF:', error);
     throw error;
   }
+};
+
+export const addBillPayment = async (billId, billType, paymentData) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/payments`, {
+    method: 'POST',
+    body: JSON.stringify(paymentData),
+  });
+};
+
+export const updateBillPayment = async (billId, billType, paymentId, paymentData) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(
+    `/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/payments/${encodeURIComponent(paymentId)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(paymentData),
+    }
+  );
+};
+
+export const deleteBillPayment = async (billId, billType, paymentId) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(
+    `/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/payments/${encodeURIComponent(paymentId)}`,
+    { method: 'DELETE' }
+  );
 };
 
 // Authentication API functions

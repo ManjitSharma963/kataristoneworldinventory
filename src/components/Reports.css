@@ -931,17 +931,17 @@
 
 /* —— Compact Daily Closing (smaller cards, type, spacing) —— */
 .reports-daily-only.reports-container {
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 18px 20px;
+  border-radius: 18px;
 }
 
 .reports-daily-only .reports-top {
-  margin-bottom: 8px;
+  margin-bottom: 14px;
   align-items: center;
 }
 
 .reports-daily-only .reports-title {
-  font-size: 1rem;
+  font-size: 1.22rem;
   margin-bottom: 0;
 }
 
@@ -951,9 +951,9 @@
 
 .reports-daily-only .reports-btn-print,
 .reports-daily-only .reports-btn-export {
-  padding: 5px 12px;
-  font-size: 0.72rem;
-  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 0.84rem;
+  border-radius: 10px;
 }
 
 .reports-daily-only .report-warnings-banner {
@@ -980,33 +980,33 @@
 }
 
 .reports-daily-only .report-filters {
-  padding: 8px 10px;
-  margin-bottom: 8px;
-  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border-radius: 14px;
 }
 
 .reports-daily-only .report-filters-bar {
-  margin-bottom: 8px;
+  margin-bottom: 14px;
 }
 
 .reports-daily-only .report-filters-inner {
-  gap: 10px;
+  gap: 14px;
 }
 
 .reports-daily-only .report-filters .form-group {
-  gap: 4px;
+  gap: 6px;
 }
 
 .reports-daily-only .report-filters .form-group label {
-  font-size: 0.68rem;
+  font-size: 0.78rem;
 }
 
 .reports-daily-only .report-filters .form-group input[type="date"] {
-  padding: 4px 8px;
-  font-size: 0.72rem;
-  height: 30px;
-  min-width: 132px;
-  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.84rem;
+  height: 38px;
+  min-width: 156px;
+  border-radius: 8px;
 }
 
 .reports-daily-only .report-filters .form-group.daily-filter-actions > label.daily-filter-actions-label {
@@ -1015,7 +1015,7 @@
   min-height: 18px;
   line-height: 1.2;
   color: #64748b;
-  font-size: 0.68rem;
+  font-size: 0.76rem;
   font-weight: 600;
 }
 
@@ -1027,9 +1027,9 @@
 }
 
 .reports-daily-only .btn-clear-dates {
-  height: 30px;
-  padding: 0 12px;
-  font-size: 0.72rem;
+  height: 38px;
+  padding: 0 14px;
+  font-size: 0.82rem;
   font-weight: 600;
   border-radius: 8px;
   border: 1px solid #cbd5e1;
@@ -1047,10 +1047,10 @@
 
 .reports-daily-only .btn-primary-soft,
 .reports-daily-only .report-filters .form-group:last-child .daily-filter-buttons button {
-  height: 30px;
-  padding: 0 12px;
-  font-size: 0.72rem;
-  border-radius: 6px;
+  height: 38px;
+  padding: 0 14px;
+  font-size: 0.82rem;
+  border-radius: 8px;
 }
 
 .reports-daily-only .daily-closing-daterange-row {
@@ -1061,7 +1061,7 @@
 
 .reports-daily-only .daily-closing-header.daily-closing-header-inline {
   justify-content: flex-start;
-  margin-bottom: 6px;
+  margin-bottom: 10px;
   gap: 6px;
 }
 
@@ -1107,43 +1107,43 @@
 }
 
 .reports-daily-only .daily-summary-grid {
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: 14px;
+  margin-bottom: 16px;
 }
 
 .reports-daily-only .daily-summary-card {
-  padding: 8px 10px;
-  border-radius: 10px;
+  padding: 14px 16px;
+  border-radius: 14px;
 }
 
 .reports-daily-only .daily-summary-label {
-  font-size: 0.6rem;
+  font-size: 0.72rem;
 }
 
 .reports-daily-only .daily-summary-value {
-  font-size: 0.92rem;
-  margin: 2px 0 2px;
+  font-size: 1.26rem;
+  margin: 6px 0 4px;
 }
 
 .reports-daily-only .daily-summary-hint {
-  font-size: 0.58rem;
-  line-height: 1.2;
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
 
 .reports-daily-only .daily-subheading {
-  margin: 8px 0 3px;
-  font-size: 0.78rem;
+  margin: 14px 0 8px;
+  font-size: 0.96rem;
 }
 
 .reports-daily-only .daily-microcopy,
 .reports-daily-only .report-muted.daily-microcopy {
-  margin: 0 0 6px;
-  font-size: 0.7rem;
+  margin: 0 0 10px;
+  font-size: 0.8rem;
 }
 
 .reports-daily-only .daily-paymode-grid {
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .reports-daily-only .daily-paymode-grid--tight-top {
@@ -1151,35 +1151,35 @@
 }
 
 .reports-daily-only .daily-paymode {
-  padding: 7px 9px;
-  border-radius: 8px;
-  font-size: 0.65rem;
-  gap: 3px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 0.82rem;
+  gap: 6px;
 }
 
 .reports-daily-only .daily-paymode strong {
-  font-size: 0.88rem;
+  font-size: 1.22rem;
 }
 
 .reports-daily-only .report-table-wrap {
-  margin-top: 4px;
-  border-radius: 6px;
+  margin-top: 8px;
+  border-radius: 12px;
   -webkit-overflow-scrolling: touch;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
 }
 
 /* Dense report tables: sticky header, zebra rows, aligned amounts */
 .reports-daily-only .report-data-table {
-  font-size: 0.66rem;
-  line-height: 1.25;
+  font-size: 0.86rem;
+  line-height: 1.4;
 }
 
 .reports-daily-only .report-data-table thead th {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 4px 6px;
-  font-size: 0.56rem;
+  padding: 10px 12px;
+  font-size: 0.72rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.035em;
@@ -1190,7 +1190,7 @@
 }
 
 .reports-daily-only .report-data-table tbody td {
-  padding: 3px 6px;
+  padding: 10px 12px;
   vertical-align: middle;
   border-bottom: 1px solid #f1f5f9;
 }
@@ -1204,8 +1204,8 @@
 }
 
 .reports-daily-only .report-data-table tfoot td {
-  padding: 6px 8px;
-  font-size: 0.72rem;
+  padding: 10px 12px;
+  font-size: 0.84rem;
   background: #f8fafc;
   border-top: 1px solid #e2e8f0;
 }
@@ -1260,7 +1260,7 @@
 }
 
 .reports-daily-only .daily-bottom-grid {
-  gap: 10px;
+  gap: 16px;
   margin-top: 0;
   align-items: stretch;
 }
@@ -1325,8 +1325,8 @@
   align-items: center;
   justify-content: center;
   gap: 8px 12px;
-  padding: 6px 8px;
-  font-size: 0.65rem;
+  padding: 10px 12px;
+  font-size: 0.8rem;
   color: #475569;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
@@ -1341,8 +1341,8 @@
 }
 
 .reports-daily-only .report-pagination-btn {
-  padding: 3px 10px;
-  font-size: 0.65rem;
+  padding: 6px 12px;
+  font-size: 0.78rem;
   font-weight: 600;
   border-radius: 8px;
   border: 1px solid #cbd5e1;
@@ -1366,8 +1366,8 @@
 }
 
 .reports-daily-only .cash-summary-card {
-  padding: 8px 10px;
-  border-radius: 10px;
+  padding: 14px 16px;
+  border-radius: 14px;
   height: 100%;
   box-sizing: border-box;
   display: flex;
@@ -1376,24 +1376,24 @@
 
 .reports-daily-only .cash-summary-card .daily-microcopy {
   margin-top: auto;
-  font-size: 0.65rem;
-}
-
-.reports-daily-only .cash-summary-card h4 {
-  margin: 0 0 6px;
   font-size: 0.78rem;
 }
 
+.reports-daily-only .cash-summary-card h4 {
+  margin: 0 0 10px;
+  font-size: 0.96rem;
+}
+
 .reports-daily-only .report-row {
-  padding: 5px 0;
+  padding: 9px 0;
 }
 
 .reports-daily-only .report-label {
-  font-size: 0.7rem;
+  font-size: 0.82rem;
 }
 
 .reports-daily-only .report-value {
-  font-size: 0.74rem;
+  font-size: 0.9rem;
 }
 
 .reports-daily-only .cash-final {
@@ -1402,7 +1402,7 @@
 
 .reports-daily-only .cash-final .report-value,
 .reports-daily-only .cash-final.negative .report-value {
-  font-size: 0.92rem;
+  font-size: 1.06rem;
 }
 
 .reports-daily-only .cash-summary-card .report-row {
@@ -1417,13 +1417,13 @@
 }
 
 .reports-daily-only .bill-type-pill {
-  font-size: 0.58rem;
-  padding: 1px 5px;
+  font-size: 0.68rem;
+  padding: 3px 8px;
 }
 
 .reports-daily-only .status-pill {
-  font-size: 0.62rem;
-  padding: 1px 6px;
+  font-size: 0.72rem;
+  padding: 3px 9px;
 }
 
 .reports-daily-only .report-error-banner {
@@ -1473,16 +1473,16 @@
 @media (max-width: 768px) {
   .reports-daily-only .daily-bills-table,
   .reports-daily-only .daily-expenses-table {
-    font-size: 0.68rem;
+    font-size: 0.76rem;
   }
 
   .reports-daily-only .report-data-table thead th {
-    font-size: 0.58rem;
-    padding: 4px 6px;
+    font-size: 0.66rem;
+    padding: 8px 10px;
   }
 
   .reports-daily-only .report-data-table tbody td {
-    padding: 4px 6px;
+    padding: 8px 10px;
   }
 
   .reports-daily-only .daily-filter-buttons {
@@ -1551,5 +1551,98 @@
   body .daily-expenses-panel {
     break-inside: auto;
   }
+}
+
+/* ===== Neumorphism polish for Reports page ===== */
+.reports-daily-only.reports-container {
+  --neu-surface: #e7ecf3;
+  --neu-shadow-dark: rgba(163, 177, 198, 0.62);
+  --neu-shadow-light: rgba(255, 255, 255, 0.92);
+  --neu-inset-dark: rgba(163, 177, 198, 0.35);
+  --neu-inset-light: rgba(255, 255, 255, 0.82);
+  background: linear-gradient(145deg, #edf2f8 0%, #dde5ef 100%);
+}
+
+.reports-daily-only .reports-top,
+.reports-daily-only .daily-summary-card,
+.reports-daily-only .daily-paymode,
+.reports-daily-only .cash-summary-card,
+.reports-daily-only .report-filters-bar,
+.reports-daily-only .report-table-wrap,
+.reports-daily-only .report-explainer {
+  background: var(--neu-surface);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 16px;
+  box-shadow: 10px 10px 22px var(--neu-shadow-dark), -10px -10px 22px var(--neu-shadow-light);
+}
+
+.reports-daily-only .daily-paymode,
+.reports-daily-only .daily-paymode span,
+.reports-daily-only .daily-paymode strong {
+  color: #0f172a !important;
+}
+
+.reports-daily-only .reports-btn-print,
+.reports-daily-only .reports-btn-export,
+.reports-daily-only .daily-filter-buttons button,
+.reports-daily-only .report-pagination-btn,
+.reports-daily-only .report-error-retry {
+  background: var(--neu-surface);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 7px 7px 15px var(--neu-shadow-dark), -7px -7px 15px var(--neu-shadow-light);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.reports-daily-only .reports-btn-print,
+.reports-daily-only .btn-primary-soft {
+  color: #0f172a !important;
+}
+
+.reports-daily-only .reports-btn-print:hover,
+.reports-daily-only .reports-btn-export:hover,
+.reports-daily-only .daily-filter-buttons button:hover,
+.reports-daily-only .report-pagination-btn:hover,
+.reports-daily-only .report-error-retry:hover {
+  transform: translateY(-1px);
+  box-shadow: 9px 9px 18px var(--neu-shadow-dark), -9px -9px 18px var(--neu-shadow-light);
+}
+
+.reports-daily-only .reports-btn-print:active,
+.reports-daily-only .reports-btn-export:active,
+.reports-daily-only .daily-filter-buttons button:active,
+.reports-daily-only .report-pagination-btn:active,
+.reports-daily-only .report-error-retry:active {
+  transform: translateY(0);
+  box-shadow: inset 4px 4px 10px var(--neu-inset-dark), inset -4px -4px 10px var(--neu-inset-light);
+}
+
+.reports-daily-only .report-filters .form-group input[type="date"] {
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  background: var(--neu-surface);
+  box-shadow: inset 4px 4px 9px var(--neu-inset-dark), inset -4px -4px 9px var(--neu-inset-light);
+}
+
+.reports-daily-only .report-data-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.reports-daily-only .report-data-table thead th {
+  background: linear-gradient(180deg, #f1f5fa 0%, #e6edf6 100%);
+  border-bottom: 1px solid rgba(159, 174, 196, 0.35);
+}
+
+.reports-daily-only .report-data-table tbody td {
+  background: rgba(236, 242, 249, 0.65);
+}
+
+.reports-daily-only .report-data-table tbody tr:hover td {
+  background: rgba(225, 235, 246, 0.92);
+}
+
+.reports-daily-only .status-pill {
+  box-shadow: 2px 2px 5px rgba(122, 139, 161, 0.35), -2px -2px 5px rgba(255, 255, 255, 0.72);
 }
 

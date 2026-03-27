@@ -8,6 +8,10 @@ import {
   updateExpense as apiUpdateExpense, 
   deleteExpense as apiDeleteExpense,
   fetchEmployees as apiFetchEmployees,
+  fetchEmployeePayrollSummary,
+  fetchEmployeePayrollLedger,
+  recordEmployeeAdvance,
+  settleEmployeeSalaryMonth,
   createEmployee as apiCreateEmployee,
   updateEmployee as apiUpdateEmployee,
   deleteEmployee as apiDeleteEmployee,
@@ -34,6 +38,7 @@ import './Expenses.css';
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
   const [expenses, setExpenses] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [payrollSummaryByEmpId, setPayrollSummaryByEmpId] = useState({});
   const [internalShowForm, setInternalShowForm] = useState(false);
   
   // Use external showForm if provided, otherwise use internal state
@@ -53,10 +58,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       category: '',
       description: '',
       amount: '',
-      paymentMethod: 'cash'
+      paymentMethod: 'cash',
+      employeeId: ''
     });
     // Sync react-hook-form so submitted date is today (form uses register, not formData)
     setExpenseValue('date', today);
+    setExpenseValue('employeeId', '');
     setEditingExpense(null);
   };
   
@@ -68,7 +75,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   }, [externalShowForm]);
   const [editingExpense, setEditingExpense] = useState(null);
   const [filterType, setFilterType] = useState('all'); // all, daily
-  const [activeTab, setActiveTab] = useState('all'); // all, employee, client
+  const [activeTab, setActiveTab] = useState('all'); // all(daily expenses), employee(payroll), client(transactions)
   const [showSalaryForm, setShowSalaryForm] = useState(false);
   const [showPaySalaryForm, setShowPaySalaryForm] = useState(false);
   const [showPayAdvanceForm, setShowPayAdvanceForm] = useState(false);
@@ -99,6 +106,18 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [loadingBudgetHistory, setLoadingBudgetHistory] = useState(false);
   const [editingBudgetEntryId, setEditingBudgetEntryId] = useState(null);
   const [editingBudgetAmount, setEditingBudgetAmount] = useState('');
+  const [showEmployeeLedgerModal, setShowEmployeeLedgerModal] = useState(false);
+  const [selectedLedgerEmployee, setSelectedLedgerEmployee] = useState(null);
+  const [employeeLedgerRows, setEmployeeLedgerRows] = useState([]);
+  const [employeeLedgerLoading, setEmployeeLedgerLoading] = useState(false);
+  const [employeeLedgerRange, setEmployeeLedgerRange] = useState(() => {
+    const to = new Date();
+    const from = new Date();
+    from.setMonth(from.getMonth() - 6);
+    const toStr = `${to.getFullYear()}-${String(to.getMonth() + 1).padStart(2, '0')}-${String(to.getDate()).padStart(2, '0')}`;
+    const fromStr = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-${String(from.getDate()).padStart(2, '0')}`;
+    return { from: fromStr, to: toStr };
+  });
   const itemsPerPage = 10;
 
   // Use local date (not UTC) so "today" is correct in all timezones (e.g. India)
@@ -110,6 +129,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   };
+  const currentMonth = getLocalMonthString();
   // Convert Date (from yup) or string to local YYYY-MM-DD so API always gets correct date (not UTC ISO)
   const toLocalDateString = (date) => {
     if (date == null) return getLocalDateString();
@@ -274,6 +294,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     handleSubmit: handleExpenseSubmit, 
     reset: resetExpense, 
     setValue: setExpenseValue,
+    watch: watchExpense,
     formState: { errors: expenseErrors } 
   } = useForm({
     resolver: yupResolver(expenseSchema),
@@ -282,7 +303,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       category: '',
       description: '',
       amount: '',
-      paymentMethod: 'cash'
+      paymentMethod: 'cash',
+      employeeId: ''
     }
   });
 
@@ -292,7 +314,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     category: '',
     description: '',
     amount: '',
-    paymentMethod: 'cash'
+    paymentMethod: 'cash',
+    employeeId: ''
   });
 
   const [salaryFormData, setSalaryFormData] = useState({
@@ -313,6 +336,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     amount: '',
     date: getLocalDateString()
   });
+  const selectedExpenseCategory = String(watchExpense('category') || '').toLowerCase();
 
   const [clientPurchaseFormData, setClientPurchaseFormData] = useState({
     clientName: '',
@@ -338,6 +362,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   useEffect(() => {
     loadExpenses();
     loadEmployees();
+    loadPayrollSummary();
     loadClientPayments();
     loadAllPayments();
   }, []);
@@ -496,57 +521,122 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     }
   };
 
-  // Calculate advance payments for an employee (using expenses from API only)
+  const loadPayrollSummary = async () => {
+    try {
+      const rows = await fetchEmployeePayrollSummary(currentMonth);
+      const map = {};
+      (Array.isArray(rows) ? rows : []).forEach((r) => {
+        if (r && r.employeeId != null) map[String(r.employeeId)] = r;
+      });
+      setPayrollSummaryByEmpId(map);
+    } catch (error) {
+      console.error('Error loading payroll summary:', error);
+      setPayrollSummaryByEmpId({});
+    }
+  };
+
+  // Payroll-ledger truth: advance balance carries to next month.
   const getAdvancePayments = (employeeId) => {
-    if (!employeeId || !expenses || !Array.isArray(expenses)) return 0;
-    const advances = expenses.filter(exp => 
-      exp?.type === 'advance' && 
-      (exp?.employeeId === employeeId || exp?.employeeId === String(employeeId)) &&
-      (exp?.settled === false || exp?.settled === undefined || !exp?.settled)
-    );
-    const total = advances.reduce((sum, adv) => {
-      const amount = Number(parseFloat(adv?.amount) || 0) || 0;
-      return (sum || 0) + (isNaN(amount) ? 0 : amount);
-    }, 0);
-    return isNaN(total) ? 0 : Number(total);
+    const r = payrollSummaryByEmpId[String(employeeId)];
+    return Number(r?.advanceBalanceEnd ?? 0) || 0;
   };
 
-  // Calculate pending payments (Total Salary - Advance Payment) (using expenses from API only)
+  // Net salary pending for the month (can be negative = over-advance vs this month's salary; next month adjusts via advance balance).
   const getPendingPayments = (employeeId, employeeSalary) => {
-    if (!employeeId) return 0;
-    const advancePayments = expenses.filter(exp => 
-      exp?.type === 'advance' && 
-      (exp?.employeeId === employeeId || exp?.employeeId === String(employeeId)) &&
-      (exp?.settled === false || exp?.settled === undefined || !exp?.settled)
-    );
-    const totalAdvances = advancePayments.reduce((sum, adv) => {
-      const amount = Number(parseFloat(adv?.amount) || 0) || 0;
-      return (sum || 0) + (isNaN(amount) ? 0 : amount);
-    }, 0);
+    const r = payrollSummaryByEmpId[String(employeeId)];
+    if (r && r.salaryRemaining != null && !Number.isNaN(Number(r.salaryRemaining))) {
+      return Number(r.salaryRemaining);
+    }
     const totalSalary = Number(parseFloat(employeeSalary) || 0) || 0;
-    const pendingPayment = Number((totalSalary - totalAdvances) || 0) || 0;
-    return (isNaN(pendingPayment) || pendingPayment < 0) ? 0 : pendingPayment; // Don't show negative values
+    return totalSalary;
   };
 
-  // Get current month salary status (using expenses from API only)
   const getCurrentMonthSalaryStatus = (employeeId) => {
-    const currentMonth = getLocalMonthString(); // YYYY-MM format
-    const salaryPayments = expenses.filter(exp => 
-      exp.type === 'salary' && 
-      exp.employeeId === employeeId &&
-      exp.month === currentMonth
-    );
-    return salaryPayments.length > 0 ? 'Paid' : 'Pending';
+    const r = payrollSummaryByEmpId[String(employeeId)];
+    if (!r) return 'Pending';
+    const s = String(r.status || '').toUpperCase();
+    if (s === 'PAID') return 'Paid';
+    if (s === 'OVER_ADVANCE') return 'Over advance';
+    return 'Pending';
+  };
+
+  const getSalaryStatusBadgeClass = (employeeId) => {
+    const r = payrollSummaryByEmpId[String(employeeId)];
+    if (!r) return 'status-pending';
+    const s = String(r.status || '').toUpperCase();
+    if (s === 'PAID') return 'status-paid';
+    if (s === 'OVER_ADVANCE') return 'status-over-advance';
+    return 'status-pending';
+  };
+
+  const getLedgerEventLabel = (eventType) => {
+    const t = String(eventType || '').toUpperCase();
+    if (t === 'ADVANCE_GIVEN') return 'Advance Given';
+    if (t === 'ADVANCE_APPLIED') return 'Advance Applied';
+    if (t === 'SALARY_CASH_PAID') return 'Salary Paid';
+    return t || '-';
+  };
+
+  const computeLedgerView = (rows) => {
+    let advanceGiven = 0;
+    let advanceApplied = 0;
+    let salaryPaid = 0;
+    let runningAdvanceBalance = 0;
+
+    const sorted = [...(Array.isArray(rows) ? rows : [])].sort((a, b) => {
+      const ad = String(a?.eventDate || '');
+      const bd = String(b?.eventDate || '');
+      if (ad !== bd) return ad.localeCompare(bd);
+      return Number(a?.id || 0) - Number(b?.id || 0);
+    });
+
+    const lines = sorted.map((row) => {
+      const type = String(row?.eventType || '').toUpperCase();
+      const amount = Number(row?.amount || 0) || 0;
+
+      if (type === 'ADVANCE_GIVEN') {
+        advanceGiven += amount;
+        runningAdvanceBalance += amount;
+      } else if (type === 'ADVANCE_APPLIED') {
+        advanceApplied += amount;
+        runningAdvanceBalance -= amount;
+      } else if (type === 'SALARY_CASH_PAID') {
+        salaryPaid += amount;
+      }
+
+      return {
+        ...row,
+        _amount: amount,
+        _runningAdvanceBalance: runningAdvanceBalance
+      };
+    });
+
+    return {
+      lines,
+      advanceGiven,
+      advanceApplied,
+      salaryPaid,
+      netAdvanceBalance: runningAdvanceBalance
+    };
+  };
+
+  const countMonthsInRangeInclusive = (from, to) => {
+    if (!from || !to) return 0;
+    const [fy, fm] = String(from).split('-').map(Number);
+    const [ty, tm] = String(to).split('-').map(Number);
+    if (!fy || !fm || !ty || !tm) return 0;
+    const start = fy * 12 + (fm - 1);
+    const end = ty * 12 + (tm - 1);
+    if (end < start) return 0;
+    return end - start + 1;
   };
 
   // Handle Pay Salary button click
   const handlePaySalaryClick = (employee) => {
     setSelectedEmployee(employee);
     
-    // Calculate pending amount (Total Salary - Advance Payments)
-    const advancePayments = getAdvancePayments(employee.id);
-    const totalSalary = parseFloat(employee.salaryAmount) || 0;
-    const pendingAmount = totalSalary - advancePayments;
+    // Same as table: use payroll summary (salary remaining after advance offset + ledger cash/advance applied).
+    const pendingAmount = Number(getPendingPayments(employee.id, employee.salaryAmount) || 0) || 0;
     const amountToPay = pendingAmount > 0 ? pendingAmount : 0;
     
     setPaySalaryFormData({
@@ -558,47 +648,47 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     setShowPaySalaryForm(true);
   };
 
+  const loadEmployeeLedger = async (employeeId, range = employeeLedgerRange) => {
+    if (!employeeId) return;
+    setEmployeeLedgerLoading(true);
+    try {
+      const rows = await fetchEmployeePayrollLedger(employeeId, {
+        from: range?.from,
+        to: range?.to
+      });
+      setEmployeeLedgerRows(Array.isArray(rows) ? rows : []);
+    } catch (error) {
+      console.error('Error loading employee ledger:', error);
+      setEmployeeLedgerRows([]);
+      showToast('Failed to load employee ledger history.', 'error');
+    } finally {
+      setEmployeeLedgerLoading(false);
+    }
+  };
+
+  const openEmployeeLedger = async (employee) => {
+    setSelectedLedgerEmployee(employee || null);
+    setShowEmployeeLedgerModal(true);
+    await loadEmployeeLedger(employee?.id, employeeLedgerRange);
+  };
+
   // Handle Pay Salary form submission
   const handlePaySalarySubmit = async (e) => {
     e.preventDefault();
     if (!selectedEmployee) return;
 
     const salaryAmount = parseFloat(paySalaryFormData.amount) || 0;
-    
-    // Mark advance payments as settled when salary is paid
-    try {
-      const allExpenses = await apiFetchExpenses({ employeeId: selectedEmployee.id, type: 'advance', settled: false });
-      const advancePayments = allExpenses || [];
-      
-      // Mark advances as settled
-      for (const advance of advancePayments) {
-        try {
-          await apiUpdateExpense(advance.id, { settled: true });
-        } catch (error) {
-          console.error('Error updating advance:', error);
-          // Don't use localStorage fallback
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching advances:', error);
-      // Don't use localStorage fallback - only use API data
-    }
-
-    const salaryPayment = {
-      type: 'salary',
-      category: 'salary',
-      employeeId: selectedEmployee.id,
-      employeeName: selectedEmployee.employeeName,
-      amount: salaryAmount,
-      month: paySalaryFormData.month,
-      date: paySalaryFormData.date,
-      paymentMethod: paySalaryFormData.paymentMethod,
-      description: `Salary payment for ${selectedEmployee.employeeName} - ${paySalaryFormData.month}`
-    };
 
     try {
-      await apiCreateExpense(salaryPayment);
+      await settleEmployeeSalaryMonth(selectedEmployee.id, {
+        month: paySalaryFormData.month,
+        date: paySalaryFormData.date,
+        paymentMode: paySalaryFormData.paymentMethod,
+        cashPaidAmount: salaryAmount,
+        notes: `Salary settlement for ${selectedEmployee.employeeName}`
+      });
       await loadExpenses();
+      await loadPayrollSummary();
       // Notify parent component (Dashboard) to refresh expenses for chart
       if (onExpenseUpdate) {
         onExpenseUpdate();
@@ -627,22 +717,15 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     const selectedEmp = employees.find(emp => emp.id == payAdvanceFormData.employeeId);
     if (!selectedEmp) return;
 
-    // Exact format matching the CURL request
-    const advancePayment = {
-      type: 'advance',
-      category: 'advance',
-      date: payAdvanceFormData.date,
-      amount: parseFloat(payAdvanceFormData.amount) || 0,
-      paymentMethod: 'cash',
-      employeeId: typeof selectedEmp.id === 'string' ? parseInt(selectedEmp.id) : selectedEmp.id,
-      employeeName: selectedEmp.employeeName,
-      description: `Advance payment for ${selectedEmp.employeeName}`,
-      settled: false
-    };
-
     try {
-      await apiCreateExpense(advancePayment);
+      await recordEmployeeAdvance(selectedEmp.id, {
+        amount: parseFloat(payAdvanceFormData.amount) || 0,
+        date: payAdvanceFormData.date,
+        paymentMode: 'cash',
+        notes: `Employee advance for ${selectedEmp.employeeName}`
+      });
       await loadExpenses();
+      await loadPayrollSummary();
       // Notify parent component (Dashboard) to refresh expenses for chart
       if (onExpenseUpdate) {
         onExpenseUpdate();
@@ -687,13 +770,25 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [submittingExpense, setSubmittingExpense] = useState(false);
 
   const onSubmitExpense = async (data) => {
+    const selectedEmp = employees.find(emp => String(emp.id) === String(data.employeeId || ''));
+    const isEmployeeCategory = String(data.category || '').trim().toLowerCase() === 'employee';
+    if (isEmployeeCategory && !selectedEmp) {
+      showToast('Please select employee for employee expense.', 'error');
+      return;
+    }
     const expenseData = {
-      type: 'daily',
+      type: isEmployeeCategory ? 'advance' : 'daily',
       date: toLocalDateString(data.date),
       category: data.category,
       description: data.description || '',
       amount: parseFloat(data.amount) || 0,
-      paymentMethod: data.paymentMethod
+      paymentMethod: data.paymentMethod,
+      ...(isEmployeeCategory ? {
+        employeeId: selectedEmp?.id,
+        employeeName: selectedEmp?.employeeName,
+        settled: false,
+        description: data.description || `Employee expense advance for ${selectedEmp?.employeeName || ''}`.trim()
+      } : {})
     };
 
     try {
@@ -701,11 +796,21 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       if (editingExpense) {
         await apiUpdateExpense(editingExpense.id, expenseData);
       } else {
-        await apiCreateExpense(expenseData);
+        if (isEmployeeCategory) {
+          await recordEmployeeAdvance(selectedEmp.id, {
+            amount: parseFloat(data.amount) || 0,
+            date: toLocalDateString(data.date),
+            paymentMode: data.paymentMethod,
+            notes: expenseData.description
+          });
+        } else {
+          await apiCreateExpense(expenseData);
+        }
       }
       resetForm();
       resetExpense();
       await loadExpenses();
+      await loadPayrollSummary();
       // Notify parent component (Dashboard) to refresh expenses for chart
       if (onExpenseUpdate) {
         onExpenseUpdate();
@@ -733,6 +838,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       description: expense.description || '',
       amount: expense.amount?.toString() || '',
       paymentMethod: expense.paymentMethod || 'cash',
+      employeeId: expense.employeeId ? String(expense.employeeId) : '',
     };
     setFormData(editData);
     // Update react-hook-form values
@@ -778,7 +884,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       category: '',
       description: '',
       amount: '',
-      paymentMethod: 'cash'
+      paymentMethod: 'cash',
+      employeeId: ''
     };
     setFormData(defaults);
     // Reset react-hook-form so date and other fields stay in sync (submitted value = today)
@@ -1023,7 +1130,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label>Budget per day (₹)</label>
+                <label>Available Balance per day (₹)</label>
                 <input
                   type="number"
                   min="0"
@@ -1037,13 +1144,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 />
               </div>
               <div className="form-actions" style={{ marginTop: '16px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                <button
+              <button
                   type="button"
                   className="btn btn-primary"
                   disabled={savingBudget}
                   onClick={async () => {
                     const val = parseFloat(dailyBudgetModalValue);
                     const num = Number.isFinite(val) ? Math.max(0, val) : 0;
+                  if (num === 0) {
+                    const confirmed = window.confirm('Reset available balance to ₹0 for today?');
+                    if (!confirmed) return;
+                  }
                     setSavingBudget(true);
                     try {
                       await saveDailyBudgetToApi(num);
@@ -1204,12 +1315,26 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 <option value="rent">Rent</option>
                 <option value="maintenance">Maintenance</option>
                 <option value="transport">Transport</option>
+                <option value="employee">Employee</option>
                 <option value="other">Other</option>
               </select>
               {expenseErrors.category && (
                 <span className="error-message">{expenseErrors.category.message}</span>
               )}
             </div>
+            {selectedExpenseCategory === 'employee' && (
+              <div className="form-group">
+                <label>Employee *</label>
+                <select {...registerExpense('employeeId')}>
+                  <option value="">Select Employee</option>
+                  {employees.map((employee) => (
+                    <option key={employee.id} value={employee.id}>
+                      {employee.employeeName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="form-group">
               <label>Description</label>
               <input
@@ -1265,7 +1390,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             setCurrentPage(1);
           }}
         >
-          All Expenses
+          Daily Expenses
         </button>
         <button
           className={`expense-tab ${activeTab === 'employee' ? 'active' : ''}`}
@@ -1274,7 +1399,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             setCurrentPage(1);
           }}
         >
-          Employee
+          Employee Payroll
         </button>
         <button
           className={`expense-tab ${activeTab === 'client' ? 'active' : ''}`}
@@ -1283,7 +1408,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             setCurrentPage(1);
           }}
         >
-          Client Payment
+          Client Transactions
         </button>
       </div>
 
@@ -1293,7 +1418,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           {/* Budget in hand card – daily / date-wise */}
           <div className="budget-in-hand-card">
             <div className="budget-in-hand-header">
-              <span className="budget-in-hand-title">💰 Daily budget in hand</span>
+              <span className="budget-in-hand-title" title="Cash + UPI available after expenses">
+                💰 Daily available balance
+              </span>
             </div>
             <div className="budget-in-hand-stats">
               <div className="budget-stat">
@@ -1312,7 +1439,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   if (left >= 0) {
                     return (
                       <>
-                        <span className="budget-stat-label">Left in hand</span>
+                        <span className="budget-stat-label">Available Balance</span>
                         <span className="budget-stat-value left">₹{left.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </>
                     );
@@ -1613,6 +1740,132 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         </div>
       )}
 
+      {/* Employee Ledger Modal */}
+      {showEmployeeLedgerModal && selectedLedgerEmployee && (
+        <div className="modal-overlay" onClick={() => setShowEmployeeLedgerModal(false)}>
+          <div className="modal-content employee-ledger-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Employee Ledger - {selectedLedgerEmployee.employeeName}</h3>
+              <button className="modal-close" onClick={() => setShowEmployeeLedgerModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-row">
+                <div className="form-group">
+                  <label>From</label>
+                  <input
+                    type="date"
+                    value={employeeLedgerRange.from}
+                    onChange={(e) => setEmployeeLedgerRange((prev) => ({ ...prev, from: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>To</label>
+                  <input
+                    type="date"
+                    value={employeeLedgerRange.to}
+                    onChange={(e) => setEmployeeLedgerRange((prev) => ({ ...prev, to: e.target.value }))}
+                  />
+                </div>
+                <div className="form-group ledger-filter-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => loadEmployeeLedger(selectedLedgerEmployee.id, employeeLedgerRange)}
+                    disabled={employeeLedgerLoading}
+                  >
+                    {employeeLedgerLoading ? 'Loading...' : 'Load Ledger'}
+                  </button>
+                </div>
+              </div>
+
+              {(() => {
+                const ledger = computeLedgerView(employeeLedgerRows);
+                const summary = payrollSummaryByEmpId[String(selectedLedgerEmployee.id)] || null;
+                const pending = Number(summary?.salaryRemaining ?? 0) || 0;
+                const currentMonthPending = Math.max(0, pending);
+                const currentMonthOverpaid = Math.max(0, -pending);
+                const monthlySalary = Number(parseFloat(selectedLedgerEmployee?.salaryAmount || 0) || 0) || 0;
+                const rangeMonths = countMonthsInRangeInclusive(employeeLedgerRange.from, employeeLedgerRange.to);
+                const salaryDeservedInRange = monthlySalary * rangeMonths;
+                const salaryCoveredInRange = (Number(ledger.advanceApplied) || 0) + (Number(ledger.salaryPaid) || 0);
+                return (
+                  <>
+                    <div className="employee-ledger-kpis">
+                      <div className="employee-ledger-kpi-card">
+                        <h3>Total Taken (Advance)</h3>
+                        <p className="kpi-value">₹{ledger.advanceGiven.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="employee-ledger-kpi-card">
+                        <h3>Salary Deserved (Range)</h3>
+                        <p className="kpi-value">₹{salaryDeservedInRange.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        <p className="kpi-hint">{rangeMonths} month(s) × ₹{monthlySalary.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="employee-ledger-kpi-card">
+                        <h3>Covered In Range</h3>
+                        <p className="kpi-value">₹{salaryCoveredInRange.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        <p className="kpi-hint">Advance applied + salary paid</p>
+                      </div>
+                      <div className="employee-ledger-kpi-card">
+                        <h3>Left (Current Month)</h3>
+                        <p className="kpi-value kpi-danger">₹{currentMonthPending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                      </div>
+                      <div className="employee-ledger-kpi-card">
+                        <h3>Overpaid / Extra Advance</h3>
+                        <p className="kpi-value kpi-warn">₹{currentMonthOverpaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        <p className="kpi-hint">Carries to next month</p>
+                      </div>
+                      <div className="employee-ledger-kpi-card">
+                        <h3>Advance Balance</h3>
+                        <p className="kpi-value">₹{ledger.netAdvanceBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                        <p className="kpi-hint">Given - applied</p>
+                      </div>
+                    </div>
+
+                    {employeeLedgerLoading ? (
+                      <Loading message="Loading employee ledger..." />
+                    ) : ledger.lines.length === 0 ? (
+                      <div className="empty-state-wrapper">
+                        <span className="empty-icon">📒</span>
+                        <p className="empty-state">No ledger entries found for selected range.</p>
+                      </div>
+                    ) : (
+                      <div className="sales-table-wrapper employee-ledger-table-wrap">
+                        <table className="data-table expenses-table">
+                          <thead>
+                            <tr>
+                              <th>Date</th>
+                              <th>Month</th>
+                              <th>Type</th>
+                              <th>Paid Via</th>
+                              <th>Amount</th>
+                              <th>Running Advance Balance</th>
+                              <th>Notes</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ledger.lines.map((row) => (
+                              <tr key={row.id}>
+                                <td>{row.eventDate ? new Date(row.eventDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-'}</td>
+                                <td>{row.month || '-'}</td>
+                                <td>{getLedgerEventLabel(row.eventType)}</td>
+                                <td>{row.paymentMode ? String(row.paymentMode).replace('_', ' ') : '-'}</td>
+                                <td>₹{(Number(row._amount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                <td>₹{(Number(row._runningAdvanceBalance) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                <td>{row.notes || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add Employee Form Modal */}
       {showSalaryForm && (
         <div className="modal-overlay" onClick={() => {
@@ -1751,8 +2004,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         <th>Name</th>
                         <th>Amount</th>
                         <th>Joining Date</th>
-                        <th>Advance Payment</th>
-                        <th>Pending Payment</th>
+                        <th title="Advance balance in ledger (given minus applied). Carries to the next month.">Advance balance</th>
+                        <th title="Net salary due this month. Negative if advance taken is more than this month’s salary; next month adjusts.">Pending</th>
                         <th>Salary Status</th>
                         <th>Actions</th>
                       </tr>
@@ -1777,13 +2030,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                               ₹{safeAdvance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           </td>
-                          <td className="amount-cell">
-                            <span className="expense-amount" style={{ color: '#dc3545' }}>
+                          <td className="amount-cell" title={safePending < 0 ? 'Over-advance: deducted from next month salary when you settle or as balance carries forward.' : undefined}>
+                            <span className="expense-amount" style={{ color: safePending < 0 ? '#b45309' : '#dc3545' }}>
                               ₹{safePending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           </td>
                           <td>
-                            <span className={`payment-badge ${salaryStatus === 'Paid' ? 'status-paid' : 'status-pending'}`}>
+                            <span className={`payment-badge ${getSalaryStatusBadgeClass(employee?.id)}`}>
                               {salaryStatus}
                             </span>
                           </td>
@@ -1794,6 +2047,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                               title="Pay Salary"
                             >
                               💰
+                            </button>
+                            <button
+                              className="btn-icon btn-edit"
+                              onClick={() => openEmployeeLedger(employee)}
+                              title="View Ledger"
+                            >
+                              📒
                             </button>
                             <button
                               className="btn-icon btn-edit"
@@ -1855,7 +2115,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           <div className="employee-card-title-section">
                             <div className="employee-card-main-info">
                               <span className="employee-card-name">{employee?.employeeName || '-'}</span>
-                              <span className={`payment-badge ${salaryStatus === 'Paid' ? 'status-paid' : 'status-pending'}`}>
+                              <span className={`payment-badge ${getSalaryStatusBadgeClass(employee?.id)}`}>
                                 {salaryStatus}
                               </span>
                             </div>
@@ -1871,14 +2131,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                               </span>
                             </div>
                             <div className="employee-card-row">
-                              <span className="employee-card-label">Advance Payment:</span>
+                              <span className="employee-card-label">Advance balance:</span>
                               <span className="employee-card-value" style={{ color: '#ffc107', fontWeight: '700' }}>
                                 ₹{safeAdvance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </span>
                             </div>
                             <div className="employee-card-row">
                               <span className="employee-card-label">Pending Payment:</span>
-                              <span className="employee-card-value" style={{ color: '#dc3545', fontWeight: '700' }}>
+                              <span className="employee-card-value" style={{ color: safePending < 0 ? '#b45309' : '#dc3545', fontWeight: '700' }}>
                                 ₹{safePending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </span>
                             </div>
@@ -1892,6 +2152,16 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                 title="Pay Salary"
                               >
                                 💰
+                              </button>
+                              <button
+                                className="btn-icon btn-edit"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openEmployeeLedger(employee);
+                                }}
+                                title="View Ledger"
+                              >
+                                📒
                               </button>
                               <button
                                 className="btn-icon btn-edit"
