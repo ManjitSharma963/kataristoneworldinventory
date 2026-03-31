@@ -3,7 +3,7 @@ import { getInventory, getExpenses, getSales } from '../utils/storage';
 import Expenses from './Expenses';
 import Invoice from './Invoice';
 import HomeScreenManagement from './HomeScreenManagement';
-import { downloadBillPDF, handleApiResponse, getInventoryEndpoint } from '../utils/api';
+import { downloadBillPDF, handleApiResponse, getInventoryEndpoint, fetchReportsLedgerSummary } from '../utils/api';
 import { fetchExpenses as apiFetchExpenses } from '../utils/api';
 import { API_BASE_URL } from '../config/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
@@ -62,6 +62,38 @@ function normalizePaymentModeCategory(raw) {
   }
   if (m === 'CHEQUE' || m === 'CHECK' || m === 'DD' || m === 'DEMAND_DRAFT') return 'CHEQUE';
   return 'OTHER';
+}
+
+/** Inclusive YYYY-MM-DD range for ledger summary to match Statistics Overview period. */
+function ledgerDateRangeForDashboard(statsPeriod, statsMonth, statsRangeStart, statsRangeEnd) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const today = new Date();
+  if (statsPeriod === 'monthly' && statsMonth) {
+    const [y, m] = statsMonth.split('-').map(Number);
+    if (!y || !m) {
+      const d = iso(today);
+      return { date: d, dateTo: d };
+    }
+    const from = new Date(y, m - 1, 1);
+    const to = new Date(y, m, 0);
+    return { date: iso(from), dateTo: iso(to) };
+  }
+  if (statsPeriod === 'range' && (statsRangeStart || statsRangeEnd)) {
+    let from = statsRangeStart || statsRangeEnd;
+    let to = statsRangeEnd || statsRangeStart;
+    if (from > to) {
+      const t = from;
+      from = to;
+      to = t;
+    }
+    return { date: from, dateTo: to };
+  }
+  if (statsPeriod === 'all') {
+    return { date: '2000-01-01', dateTo: iso(today) };
+  }
+  const d = iso(today);
+  return { date: d, dateTo: d };
 }
 
 const Dashboard = ({ activeNav, setActiveNav }) => {
@@ -131,6 +163,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   const [categories, setCategories] = useState([]);
   const [bills, setBills] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  /** @type {null | { totalCredit?: number, totalDebit?: number, netBalance?: number, expenseDebitTotal?: number }} */
+  const [ledgerSummary, setLedgerSummary] = useState(null);
   const [loadingBills, setLoadingBills] = useState(true);
   const [showAddInventory, setShowAddInventory] = useState(false);
   const [showEditInventory, setShowEditInventory] = useState(false);
@@ -313,6 +347,22 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     }
   }, []);
 
+  const refreshLedgerSummary = useCallback(async () => {
+    try {
+      const { date, dateTo } = ledgerDateRangeForDashboard(
+        statsPeriod,
+        statsMonth,
+        statsRangeStart,
+        statsRangeEnd
+      );
+      const s = await fetchReportsLedgerSummary({ date, dateTo });
+      setLedgerSummary(s && typeof s === 'object' ? s : null);
+    } catch (error) {
+      console.error('Error fetching ledger summary:', error);
+      setLedgerSummary(null);
+    }
+  }, [statsPeriod, statsMonth, statsRangeStart, statsRangeEnd]);
+
   const fetchCategories = useCallback(async () => {
     try {
       const token = localStorage.getItem('authToken');
@@ -425,6 +475,10 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     
     loadData();
   }, [fetchInventory, fetchBills, fetchExpenses, fetchCategories]);
+
+  useEffect(() => {
+    refreshLedgerSummary();
+  }, [refreshLedgerSummary]);
 
   // Chart data preparation - Must be before any early returns
   const [chartPeriod, setChartPeriod] = useState('monthly'); // daily, weekly, monthly
@@ -589,10 +643,6 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const d = bill.billDate || bill.date || bill.createdAt;
     return d ? new Date(d) : null;
   };
-  const getExpenseDate = (exp) => {
-    const d = exp.date || exp.createdAt;
-    return d ? new Date(d) : null;
-  };
   const getInventoryItemDate = (item) => {
     const d = item.createdAt || item.updatedAt || item.created_at || item.updated_at;
     return d ? new Date(d) : null;
@@ -622,30 +672,6 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     return bills;
   }, [bills, statsPeriod, statsMonth, statsRangeStart, statsRangeEnd]);
 
-  const filteredExpensesForStats = useMemo(() => {
-    if (!expenses || expenses.length === 0) return [];
-    if (statsPeriod === 'all') return expenses;
-    if (statsPeriod === 'monthly' && statsMonth) {
-      const [y, m] = statsMonth.split('-').map(Number);
-      return expenses.filter(exp => {
-        const d = getExpenseDate(exp);
-        if (!d || isNaN(d.getTime())) return false;
-        return d.getFullYear() === y && d.getMonth() + 1 === m;
-      });
-    }
-    if (statsPeriod === 'range' && (statsRangeStart || statsRangeEnd)) {
-      return expenses.filter(exp => {
-        const d = getExpenseDate(exp);
-        if (!d || isNaN(d.getTime())) return false;
-        const t = d.getTime();
-        if (statsRangeStart && t < new Date(statsRangeStart).setHours(0, 0, 0, 0)) return false;
-        if (statsRangeEnd && t > new Date(statsRangeEnd).setHours(23, 59, 59, 999)) return false;
-        return true;
-      });
-    }
-    return expenses;
-  }, [expenses, statsPeriod, statsMonth, statsRangeStart, statsRangeEnd]);
-
   const filteredInventoryForStats = useMemo(() => {
     if (!inventory || inventory.length === 0) return [];
     if (statsPeriod === 'all') return inventory;
@@ -671,9 +697,6 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   }, [inventory, statsPeriod, statsMonth, statsRangeStart, statsRangeEnd]);
 
   const statsFromFiltered = useMemo(() => calculateStats(filteredBillsForStats), [filteredBillsForStats]);
-  const totalExpensesFiltered = useMemo(() => {
-    return filteredExpensesForStats.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
-  }, [filteredExpensesForStats]);
 
   const totalInventoryValueFiltered = useMemo(() => {
     return filteredInventoryForStats.reduce((sum, item) => {
@@ -744,11 +767,6 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
     const price = getPricePerUnitAfter(item);
     return sum + (stock * price);
-  }, 0);
-
-  // Calculate total expenses
-  const totalExpenses = expenses.reduce((sum, exp) => {
-    return sum + (parseFloat(exp.amount) || 0);
   }, 0);
 
   const lowStockItems = inventory.filter(item => {
@@ -1716,11 +1734,32 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
           </div>
 
           <div className="stat-card expense">
-            <div className="stat-icon">💵</div>
+            <div className="stat-icon">📒</div>
             <div className="stat-content">
-              <h3>Total Expenses</h3>
-              <p className="stat-value">₹{totalExpensesFiltered.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p className="stat-label">{filteredExpensesForStats.length} expense(s)</p>
+              <h3>Ledger (same period)</h3>
+              <p className="stat-value">
+                ₹
+                {(Number(ledgerSummary?.netBalance) || 0).toLocaleString('en-IN', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })}
+              </p>
+              <p className="stat-label">
+                Net · Credit ₹{(Number(ledgerSummary?.totalCredit) || 0).toLocaleString('en-IN', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })}{' '}
+                · Debit ₹{(Number(ledgerSummary?.totalDebit) || 0).toLocaleString('en-IN', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })}
+              </p>
+              <p className="stat-label">
+                Manual expenses (ledger) ₹{(Number(ledgerSummary?.expenseDebitTotal) || 0).toLocaleString('en-IN', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })}
+              </p>
             </div>
           </div>
             </div>

@@ -1184,7 +1184,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       const amount = Number(entry.amount ?? entry.budgetAmount ?? 0);
                       const dateStr = entry.updatedAt ?? entry.createdAt ?? entry.date ?? entry.updated_at ?? entry.created_at ?? '';
                       const displayDate = dateStr ? (dateStr.length >= 10 ? dateStr.slice(0, 10) : dateStr) : '—';
-                      const remaining = Number(entry.remainingBudget ?? entry.remaining_budget ?? 0);
+                      const remaining = Number(
+                        entry.netLedgerBalance ?? entry.remainingBudget ?? entry.remaining_budget ?? 0
+                      );
                       const location = entry.location || '';
                       const isToday = displayDate === getLocalDateString();
                       const rowKey = entry.id != null ? entry.id : `idx-${idx}`;
@@ -1250,7 +1252,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                             <div style={{ marginTop: '2px', fontSize: '12px', color: '#888' }}>
                               {location && <span>{location}</span>}
                               {location && Number.isFinite(remaining) && ' · '}
-                              {Number.isFinite(remaining) && <span>Left: ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                              {Number.isFinite(remaining) && (
+                                <span>Net (ledger today): ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              )}
                             </div>
                           )}
                         </li>

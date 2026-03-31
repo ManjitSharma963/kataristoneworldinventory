@@ -205,3 +205,95 @@
   font-size: 1rem;
 }
 
+.customer-name-tab {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: #4c51bf;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.customer-name-tab:hover {
+  color: #3730a3;
+}
+
+.customer-detail-modal.modal-content {
+  max-width: 840px;
+}
+
+.customer-detail-phone {
+  font-weight: 500;
+  color: #64748b;
+  font-size: 0.95rem;
+}
+
+.customer-detail-tablist {
+  display: flex;
+  gap: 8px;
+  padding: 0 20px 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.customer-detail-tab {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px 10px 0 0;
+  background: #e8edf2;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.customer-detail-tab.active {
+  background: #f8fafc;
+  color: #0f172a;
+  box-shadow: 0 -1px 0 #f8fafc;
+}
+
+.customer-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(100px, 140px) 1fr;
+  gap: 10px 16px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.customer-detail-grid dt {
+  margin: 0;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.customer-detail-grid dd {
+  margin: 0;
+  color: #0f172a;
+}
+
+.customer-detail-error {
+  color: #b91c1c;
+  font-size: 14px;
+}
+
+.customer-detail-empty {
+  color: #64748b;
+  font-size: 14px;
+}
+
+.customer-bills-wrap {
+  max-height: 420px;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.customer-bills-table {
+  margin: 0;
+  font-size: 13px;
+}
+

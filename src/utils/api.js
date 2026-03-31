@@ -446,7 +446,7 @@ export const deleteDailyBudget = async () => {
 
 /**
  * Get all daily budget records from the table (GET /api/daily-budget/all)
- * @returns {Promise<Array>} e.g. [{ id, amount, created_at, updated_at, location, remaining_budget }, ...]
+ * @returns {Promise<Array>} e.g. [{ id, amount, location, netLedgerBalance, ... }]; legacy key remainingBudget may appear
  */
 export const getDailyBudgetHistory = async () => {
   const res = await apiCall('/daily-budget/all', { method: 'GET' });
@@ -556,6 +556,72 @@ export const fetchDailyClosingReport = async ({ date, dateTo, backfillLegacy = f
   }
   params.set('backfillLegacy', String(!!backfillLegacy));
   return await apiCall(`/reports/daily-closing?${params.toString()}`, { method: 'GET' });
+};
+
+/** Single-day ledger snapshot for PWA/mobile: totalSales (credits), totalExpense (debits), netBalance, paymentModes. */
+export const fetchMobileDashboard = async ({ date } = {}) => {
+  const params = new URLSearchParams();
+  if (date != null && date !== '') params.set('date', date);
+  const q = params.toString();
+  return await apiCall(`/mobile/dashboard${q ? `?${q}` : ''}`, { method: 'GET' });
+};
+
+/**
+ * Ledger totals for dashboard (location from JWT). Default: single day (today if dates omitted).
+ * @param {{ date?: string, dateTo?: string }} params - YYYY-MM-DD inclusive range
+ */
+export const fetchReportsLedgerSummary = async ({ date, dateTo } = {}) => {
+  const params = new URLSearchParams();
+  if (date != null && date !== '') params.set('date', date);
+  if (dateTo != null && dateTo !== '') params.set('dateTo', dateTo);
+  const q = params.toString();
+  return await apiCall(`/reports/summary${q ? `?${q}` : ''}`, { method: 'GET' });
+};
+
+/** Ledger P&L: revenue (credits), expense (debits), net — same basis as /summary. */
+export const fetchReportsProfitLoss = async ({ date, dateTo } = {}) => {
+  const params = new URLSearchParams();
+  if (date != null && date !== '') params.set('date', date);
+  if (dateTo != null && dateTo !== '') params.set('dateTo', dateTo);
+  const q = params.toString();
+  return await apiCall(`/reports/profit-loss${q ? `?${q}` : ''}`, { method: 'GET' });
+};
+
+/** DEBIT totals grouped by financial_ledger.reference_type. */
+export const fetchReportsExpensesByReferenceType = async ({ date, dateTo } = {}) => {
+  const params = new URLSearchParams();
+  if (date != null && date !== '') params.set('date', date);
+  if (dateTo != null && dateTo !== '') params.set('dateTo', dateTo);
+  const q = params.toString();
+  return await apiCall(`/reports/expenses-by-reference-type${q ? `?${q}` : ''}`, { method: 'GET' });
+};
+
+/** Per payment_mode: creditTotal, debitTotal, net from financial_ledger. */
+export const fetchReportsLedgerPaymentModes = async ({ date, dateTo } = {}) => {
+  const params = new URLSearchParams();
+  if (date != null && date !== '') params.set('date', date);
+  if (dateTo != null && dateTo !== '') params.set('dateTo', dateTo);
+  const q = params.toString();
+  return await apiCall(`/reports/ledger-payment-modes${q ? `?${q}` : ''}`, { method: 'GET' });
+};
+
+/** Admin: ledger audit trail (location from JWT). */
+export const fetchAuditLedger = async ({ date, source, userId, limit } = {}) => {
+  const params = new URLSearchParams();
+  if (date != null && date !== '') params.set('date', date);
+  if (source != null && source !== '') params.set('source', source);
+  if (userId != null && userId !== '') params.set('userId', String(userId));
+  if (limit != null && limit !== '') params.set('limit', String(limit));
+  const q = params.toString();
+  return await apiCall(`/audit/ledger${q ? `?${q}` : ''}`, { method: 'GET' });
+};
+
+/** Admin: ledger rows for a bill (reference BILL). billKind: GST | NON_GST */
+export const fetchAuditBillLedger = async (billId, { billKind } = {}) => {
+  const params = new URLSearchParams();
+  if (billKind != null && billKind !== '') params.set('billKind', billKind);
+  const q = params.toString();
+  return await apiCall(`/audit/bill/${encodeURIComponent(billId)}${q ? `?${q}` : ''}`, { method: 'GET' });
 };
 
 export const fetchSalesPaymentModeSummary = async ({ date, dateTo }) => {
@@ -764,6 +830,18 @@ export const fetchCustomerById = async (id) => {
 export const fetchCustomerByPhone = async (phone) => {
   const encoded = encodeURIComponent(String(phone).trim());
   return await apiCall(`/customers/phone/${encoded}`, { method: 'GET' });
+};
+
+/**
+ * Bills for a customer at the JWT user’s location (admin).
+ * @param {string} mobile - 10-digit mobile (non-digits stripped)
+ */
+export const fetchBillsByCustomerMobile = async (mobile) => {
+  const digits = String(mobile ?? '').replace(/\D/g, '');
+  if (digits.length !== 10) {
+    throw new Error('A valid 10-digit phone number is required to load bill history.');
+  }
+  return await apiCall(`/bills/customer/${digits}`, { method: 'GET' });
 };
 
 /** Record token / advance for a customer (POST /api/customer/advance). */

@@ -7,6 +7,8 @@ import {
   createCustomer, 
   updateCustomer, 
   deleteCustomer,
+  fetchCustomerById,
+  fetchBillsByCustomerMobile,
   fetchCustomerAdvanceSummary,
   fetchCustomerAdvanceHistory,
   createCustomerAdvance,
@@ -49,6 +51,14 @@ const Customers = () => {
   const [advancePaymentMode, setAdvancePaymentMode] = useState(
     () => localStorage.getItem('lastAdvancePaymentMode') || 'CASH'
   );
+
+  const [detailCustomer, setDetailCustomer] = useState(null);
+  const [detailTab, setDetailTab] = useState('details');
+  const [customerDetail, setCustomerDetail] = useState(null);
+  const [billsHistory, setBillsHistory] = useState([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+  const [billsError, setBillsError] = useState(null);
 
   // React Hook Form
   const { 
@@ -109,6 +119,70 @@ const Customers = () => {
     setAdvanceModalCustomer(null);
     setAdvanceSummary(null);
     setAdvanceHistory([]);
+  };
+
+  const closeCustomerDetailModal = () => {
+    setDetailCustomer(null);
+    setDetailTab('details');
+    setCustomerDetail(null);
+    setBillsHistory([]);
+    setDetailError(null);
+    setBillsError(null);
+  };
+
+  const loadCustomerDetailData = async (customer) => {
+    if (!customer?.id) return;
+    setDetailLoading(true);
+    setDetailError(null);
+    setBillsError(null);
+    setCustomerDetail(null);
+    setBillsHistory([]);
+
+    const phoneDigits = String(customer.phone ?? '').replace(/\D/g, '');
+
+    const detailPromise = fetchCustomerById(customer.id)
+      .then((full) => ({ ok: true, full }))
+      .catch((e) => ({ ok: false, error: e }));
+
+    const billsPromise =
+      phoneDigits.length === 10
+        ? fetchBillsByCustomerMobile(phoneDigits)
+            .then((bills) => ({ ok: true, bills }))
+            .catch((e) => ({ ok: false, error: e }))
+        : Promise.resolve({ skip: true });
+
+    const [detailResult, billsResult] = await Promise.all([detailPromise, billsPromise]);
+
+    if (detailResult.ok) {
+      setCustomerDetail(detailResult.full);
+    } else {
+      console.error('Customer detail load failed:', detailResult.error);
+      setDetailError(detailResult.error?.message || 'Could not load customer details');
+    }
+
+    if (billsResult.skip) {
+      setBillsError('Add a valid 10-digit phone number to see bill history.');
+    } else if (billsResult.ok) {
+      const list = Array.isArray(billsResult.bills) ? billsResult.bills : [];
+      list.sort((a, b) => {
+        const da = a.billDate ? new Date(a.billDate).getTime() : 0;
+        const db = b.billDate ? new Date(b.billDate).getTime() : 0;
+        if (db !== da) return db - da;
+        return (b.id || 0) - (a.id || 0);
+      });
+      setBillsHistory(list);
+    } else {
+      console.error('Bills history load failed:', billsResult.error);
+      setBillsError(billsResult.error?.message || 'Could not load bill history');
+    }
+
+    setDetailLoading(false);
+  };
+
+  const openCustomerDetail = (customer) => {
+    setDetailCustomer(customer);
+    setDetailTab('details');
+    loadCustomerDetailData(customer);
   };
 
   const handleAddAdvance = async (e) => {
@@ -324,6 +398,139 @@ const Customers = () => {
           + Add Customer
         </button>
       </div>
+
+      {detailCustomer && (
+        <div className="modal-overlay" onClick={closeCustomerDetailModal}>
+          <div
+            className="modal-content advance-token-modal customer-detail-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3>
+                {detailCustomer.customerName || detailCustomer.name || 'Customer'} —{' '}
+                <span className="customer-detail-phone">{detailCustomer.phone || '—'}</span>
+              </h3>
+              <button type="button" className="modal-close" onClick={closeCustomerDetailModal}>
+                ×
+              </button>
+            </div>
+            <div className="customer-detail-tablist" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === 'details'}
+                className={`customer-detail-tab ${detailTab === 'details' ? 'active' : ''}`}
+                onClick={() => setDetailTab('details')}
+              >
+                Details
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === 'bills'}
+                className={`customer-detail-tab ${detailTab === 'bills' ? 'active' : ''}`}
+                onClick={() => setDetailTab('bills')}
+              >
+                Bill history
+              </button>
+            </div>
+            <div className="modal-body">
+              {detailLoading && !customerDetail && !detailError ? (
+                <p>Loading…</p>
+              ) : (
+                <>
+                  {detailTab === 'details' && (
+                    <div className="customer-detail-panel" role="tabpanel">
+                      {detailError ? (
+                        <p className="customer-detail-error">{detailError}</p>
+                      ) : customerDetail ? (
+                        <dl className="customer-detail-grid">
+                          <dt>Name</dt>
+                          <dd>{customerDetail.customerName || customerDetail.name || '—'}</dd>
+                          <dt>Phone</dt>
+                          <dd>{customerDetail.phone || '—'}</dd>
+                          <dt>Email</dt>
+                          <dd>{customerDetail.email || '—'}</dd>
+                          <dt>Location</dt>
+                          <dd>{customerDetail.location || '—'}</dd>
+                          <dt>Address</dt>
+                          <dd>{customerDetail.address || '—'}</dd>
+                          <dt>GSTIN</dt>
+                          <dd>{customerDetail.gstin || '—'}</dd>
+                          <dt>Notes</dt>
+                          <dd>{customerDetail.notes || '—'}</dd>
+                          {customerDetail.createdAt && (
+                            <>
+                              <dt>Created</dt>
+                              <dd>{new Date(customerDetail.createdAt).toLocaleString()}</dd>
+                            </>
+                          )}
+                          {customerDetail.updatedAt && (
+                            <>
+                              <dt>Updated</dt>
+                              <dd>{new Date(customerDetail.updatedAt).toLocaleString()}</dd>
+                            </>
+                          )}
+                        </dl>
+                      ) : null}
+                    </div>
+                  )}
+                  {detailTab === 'bills' && (
+                    <div className="customer-detail-panel" role="tabpanel">
+                      {detailLoading && billsHistory.length === 0 && !billsError ? (
+                        <p>Loading bills…</p>
+                      ) : billsError ? (
+                        <p className="customer-detail-error">{billsError}</p>
+                      ) : billsHistory.length === 0 ? (
+                        <p className="customer-detail-empty">No bills found for this customer at your location.</p>
+                      ) : (
+                        <div className="customer-bills-wrap">
+                          <table className="data-table customer-bills-table">
+                            <thead>
+                              <tr>
+                                <th>Bill #</th>
+                                <th>Type</th>
+                                <th>Date</th>
+                                <th>Total (₹)</th>
+                                <th>Paid (₹)</th>
+                                <th>Due (₹)</th>
+                                <th>Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {billsHistory.map((b) => (
+                                <tr key={`${b.billType || 'bill'}-${b.id}`}>
+                                  <td>{b.billNumber ?? '—'}</td>
+                                  <td>
+                                    {b.billType === 'NON_GST'
+                                      ? 'Non-GST'
+                                      : b.billType === 'GST'
+                                        ? 'GST'
+                                        : b.billType || '—'}
+                                  </td>
+                                  <td>
+                                    {b.billDate
+                                      ? new Date(b.billDate).toLocaleDateString()
+                                      : '—'}
+                                  </td>
+                                  <td>{money(b.totalAmount)}</td>
+                                  <td>{money(b.totalPaid ?? b.paidAmount)}</td>
+                                  <td>{money(b.amountDue)}</td>
+                                  <td>{b.paymentStatus || '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {advanceModalCustomer && (
         <div className="modal-overlay" onClick={closeAdvanceModal}>
@@ -668,7 +875,16 @@ const Customers = () => {
                 <tbody>
                   {paginatedCustomers.map((customer) => (
                     <tr key={customer.id}>
-                      <td className="date-cell">{customer.customerName || customer.name || '-'}</td>
+                      <td className="date-cell">
+                        <button
+                          type="button"
+                          className="customer-name-tab"
+                          onClick={() => openCustomerDetail(customer)}
+                          title="View customer details and bill history"
+                        >
+                          {customer.customerName || customer.name || '-'}
+                        </button>
+                      </td>
                       <td>{customer.phone || '-'}</td>
                       <td>{customer.location || customer.city || '-'}</td>
                       <td>{customer.gstin || '-'}</td>

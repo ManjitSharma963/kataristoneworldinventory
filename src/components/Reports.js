@@ -105,8 +105,10 @@ function buildDailyClosingCsv(data, from, to) {
   rows.push(['Advance applied on bills', data.totalAdvanceAppliedOnBills ?? 0].map(csvEscapeCell).join(','));
   rows.push(['Advance available (deposits - applied)', data.totalAdvanceAvailable ?? ((data.totalAdvanceDeposits ?? 0) - (data.totalAdvanceAppliedOnBills ?? 0))].map(csvEscapeCell).join(','));
   rows.push(['Total collected', data.totalCollected ?? 0].map(csvEscapeCell).join(','));
-  rows.push(['Total expenses', data.totalExpenses ?? 0].map(csvEscapeCell).join(','));
-  rows.push(['Budget in hand (Cash + UPI)', resolveInHand(data)].map(csvEscapeCell).join(','));
+  rows.push(['Total outflow (all DEBIT, ledger)', data.totalOutflow ?? data.totalExpenses ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Expense-only DEBIT (ledger, source EXPENSE)', data.expenseOnlyTotal ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Total expenses (legacy label, same as outflow)', data.totalExpenses ?? data.totalOutflow ?? 0].map(csvEscapeCell).join(','));
+  rows.push(['Net balance (CREDIT − DEBIT, ledger)', resolveInHand(data)].map(csvEscapeCell).join(','));
   const ps = data.paymentSummary || {};
   rows.push(['Mode summary', 'Amount'].map(csvEscapeCell).join(','));
   Object.entries(ps).forEach(([k, v]) => {
@@ -257,6 +259,11 @@ const Reports = () => {
 
   const expenseLines = closingData?.expenseLines ?? [];
   const billsRows = closingData?.bills ?? [];
+
+  const expenseRegisterRowsSum = useMemo(
+    () => expenseLines.reduce((s, ex) => s + (Number(ex.amount) || 0), 0),
+    [expenseLines]
+  );
 
   const expensePageCount = Math.max(1, Math.ceil(expenseLines.length / PAGE_SIZE));
   const billsPageCount = Math.max(1, Math.ceil(billsRows.length / PAGE_SIZE));
@@ -688,35 +695,47 @@ const Reports = () => {
                     <col className="col-exp-amt" />
                   </colgroup>
                   <tfoot>
+                    <tr>
+                      <td colSpan={2}>Sum of rows above (expense register)</td>
+                      <td>{money(expenseRegisterRowsSum)}</td>
+                    </tr>
                     <tr className="report-row-strong">
-                      <td colSpan={2}>Total expenses</td>
-                      <td>{money(closingData.totalExpenses)}</td>
+                      <td colSpan={2}>Ledger — all DEBIT (outflow)</td>
+                      <td>{money(closingData.totalOutflow ?? closingData.totalExpenses)}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={2}>Ledger — manual expenses only (source EXPENSE)</td>
+                      <td>{money(closingData.expenseOnlyTotal)}</td>
                     </tr>
                   </tfoot>
                 </table>
               </div>
             </div>
             <div className="cash-summary-card">
-              <h4 title="Cash + UPI available after expenses">Budget in hand summary</h4>
+              <h4 title="From financial_ledger (active rows only)">Ledger summary</h4>
               <div className="report-row">
-                <span>Cash + UPI collected {isRange ? 'in period' : '(today)'}</span>
-                <span className="report-value positive">
-                  {money((Number(paySummary.CASH) || 0) + (Number(paySummary.UPI) || 0))}
+                <span>Total credit {isRange ? 'in period' : ''}</span>
+                <span className="report-value positive">{money(closingData.totalCollected)}</span>
+              </div>
+              <div className="report-row">
+                <span>Total debit / outflow {isRange ? 'in period' : ''}</span>
+                <span className="report-value negative">
+                  {money(closingData.totalOutflow ?? closingData.totalExpenses)}
                 </span>
               </div>
               <div className="report-row">
-                <span>Total expenses {isRange ? 'in period' : '(today)'}</span>
-                <span className="report-value negative">{money(closingData.totalExpenses)}</span>
+                <span>Manual expenses DEBIT (ledger)</span>
+                <span className="report-value negative">{money(closingData.expenseOnlyTotal)}</span>
               </div>
               <div
                 className={`report-row report-row-strong cash-final ${(resolveInHand(closingData) || 0) < 0 ? 'negative' : 'positive'}`}
               >
-                <span>Final budget in hand {isRange ? '(period)' : ''}</span>
+                <span>Net balance (credit − debit)</span>
                 <span className="report-value">{money(resolveInHand(closingData))}</span>
               </div>
               <p className="report-muted daily-microcopy">
-                <strong>Cash + UPI collected</strong> in the selected {isRange ? 'range' : 'day'} minus{' '}
-                <strong>expenses posted</strong> in the same {isRange ? 'range' : 'day'}. Bank/Cheque are not in this number.
+                Totals are from <strong>financial_ledger</strong> for this location and date range. The expense table above is
+                the operational register; foot totals reconcile register sum vs ledger EXPENSE debits.
               </p>
             </div>
           </div>
