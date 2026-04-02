@@ -435,6 +435,42 @@
   flex-wrap: wrap;
 }
 
+/* Daily budget history (modal table) */
+.daily-budget-history-table-wrap {
+  width: 100%;
+}
+
+.daily-budget-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: rgba(224, 229, 236, 0.25);
+  border: 1px solid rgba(163, 177, 198, 0.25);
+  border-radius: 12px;
+}
+
+.daily-budget-history-table thead th {
+  position: sticky;
+  top: 0;
+  background: #e0e5ec;
+  color: #334155;
+  text-align: left;
+  font-size: 13px;
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(163, 177, 198, 0.35);
+}
+
+.daily-budget-history-table tbody td {
+  border-bottom: 1px solid rgba(163, 177, 198, 0.18);
+}
+
+.budget-tx-credit {
+  color: #16a34a;
+}
+
+.budget-tx-debit {
+  color: #dc2626;
+}
+
 .type-btn {
   flex: 1;
   min-width: 150px;

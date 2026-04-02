@@ -457,6 +457,19 @@ export const getDailyBudgetHistory = async () => {
 };
 
 /**
+ * Daily budget event history (opening/closing per date).
+ * Backend: GET /api/budget/daily/history (also mapped to /budget/daily/history)
+ */
+export const getDailyBudgetEvents = async ({ from, to, limit } = {}) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', String(from));
+  if (to) params.set('to', String(to));
+  if (limit != null) params.set('limit', String(limit));
+  const qs = params.toString();
+  return await apiCall(`/budget/daily/history${qs ? `?${qs}` : ''}`, { method: 'GET' });
+};
+
+/**
  * Daily closing report (location-scoped from JWT). Reads bills, bill_payments, expenses from the database.
  * @param {{ date: string, dateTo?: string, backfillLegacy?: boolean }} params - date and optional inclusive end (YYYY-MM-DD)
  * @returns {Promise<Object>} DailyClosingReportDTO

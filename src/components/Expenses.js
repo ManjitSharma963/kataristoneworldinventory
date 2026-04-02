@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 // Note: localStorage functions are no longer used - all data comes from API
 // Keeping imports for potential future use or reference, but not actively used
 import { getExpenses, addExpense, updateExpense, deleteExpense, getEmployees, addEmployee, updateEmployee, deleteEmployee } from '../utils/storage';
@@ -23,7 +23,7 @@ import {
   fetchAllPayments,
   getDailyBudget as apiGetDailyBudget,
   getDailyBudgetByDate as apiGetDailyBudgetByDate,
-  getDailyBudgetHistory as apiGetDailyBudgetHistory,
+  getDailyBudgetEvents as apiGetDailyBudgetEvents,
   createDailyBudget as apiCreateDailyBudget,
   updateDailyBudget as apiUpdateDailyBudget,
   deleteDailyBudget as apiDeleteDailyBudget
@@ -64,6 +64,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     // Sync react-hook-form so submitted date is today (form uses register, not formData)
     setExpenseValue('date', today);
     setExpenseValue('employeeId', '');
+    setShowCustomCategoryInput(false);
+    setCustomCategoryDraft('');
     setEditingExpense(null);
   };
   
@@ -229,15 +231,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const loadBudgetHistory = async () => {
     setLoadingBudgetHistory(true);
     try {
-      const list = await apiGetDailyBudgetHistory();
+      const list = await apiGetDailyBudgetEvents({ limit: 50 });
       const arr = Array.isArray(list) ? list : [];
-      // Sort by updatedAt/createdAt (camelCase) or updated_at/created_at descending (newest first)
-      const sorted = [...arr].sort((a, b) => {
-        const tA = new Date(a.updatedAt || a.createdAt || a.updated_at || a.created_at || 0).getTime();
-        const tB = new Date(b.updatedAt || b.createdAt || b.updated_at || b.created_at || 0).getTime();
-        return tB - tA;
-      });
-      setBudgetHistory(sorted.slice(0, 20));
+      // Backend already returns newest-first (createdAt DESC).
+      setBudgetHistory(arr.slice(0, 20));
     } catch (_) {
       setBudgetHistory([]);
     } finally {
@@ -337,6 +334,40 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     date: getLocalDateString()
   });
   const selectedExpenseCategory = String(watchExpense('category') || '').toLowerCase();
+  
+  // Allow adding custom category names from the UI.
+  // Backend accepts any string for `category` (it is saved as-is).
+  const predefinedExpenseCategories = [
+    'water',
+    'electricity',
+    'petrol',
+    'grocery',
+    'rent',
+    'maintenance',
+    'transport',
+    'employee',
+    'other',
+  ];
+  const [showCustomCategoryInput, setShowCustomCategoryInput] = useState(false);
+  const [customCategoryDraft, setCustomCategoryDraft] = useState('');
+
+  const toTitleCase = (s) => String(s || '')
+    .trim()
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+  
+  // Build dropdown options from existing saved expenses so custom categories remain reusable.
+  const customCategoryOptions = useMemo(() => {
+    const map = new Map(); // normalized -> raw category
+    (Array.isArray(expenses) ? expenses : []).forEach((ex) => {
+      const c = String(ex?.category || '').trim();
+      if (!c) return;
+      const normalized = c.toLowerCase();
+      if (predefinedExpenseCategories.includes(normalized)) return;
+      if (!map.has(normalized)) map.set(normalized, c);
+    });
+    return Array.from(map.values()).sort((a, b) => String(a).localeCompare(String(b)));
+  }, [expenses]);
 
   const [clientPurchaseFormData, setClientPurchaseFormData] = useState({
     clientName: '',
@@ -845,6 +876,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     Object.keys(editData).forEach(key => {
       setExpenseValue(key, editData[key]);
     });
+
+    // If category is not one of the predefined options, treat it as a custom category.
+    const existingCategory = String(expense.category || '').trim();
+    const normalized = existingCategory.toLowerCase();
+    const isPredefined = predefinedExpenseCategories.includes(normalized);
+    setShowCustomCategoryInput(existingCategory !== '' && !isPredefined);
+    setCustomCategoryDraft(existingCategory);
+
     if (externalShowForm !== null) {
       // External control - open form
       if (onFormOpen) {
@@ -890,6 +929,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     setFormData(defaults);
     // Reset react-hook-form so date and other fields stay in sync (submitted value = today)
     resetExpense(defaults);
+    setShowCustomCategoryInput(false);
+    setCustomCategoryDraft('');
     if (externalShowForm !== null && onFormClose) {
       onFormClose();
     } else {
@@ -1123,7 +1164,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       {/* Daily budget modal */}
       {showDailyBudgetModal && (
         <div className="modal-overlay" onClick={() => !savingBudget && setShowDailyBudgetModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '980px' }}>
             <div className="modal-header">
               <h3>{hasDailyBudgetFromApi ? 'Edit daily budget' : 'Add daily budget'}</h3>
               <button type="button" className="modal-close" onClick={() => !savingBudget && setShowDailyBudgetModal(false)}>×</button>
@@ -1179,16 +1220,41 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 ) : budgetHistory.length === 0 ? (
                   <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>No history yet.</p>
                 ) : (
-                  <ul className="budget-history-list" style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: '200px', overflowY: 'auto' }}>
+                  <div className="daily-budget-history-table-wrap" style={{ maxHeight: '280px', overflowY: 'auto' }}>
+                    <table className="daily-budget-history-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: '120px' }}>Date</th>
+                          <th style={{ width: '180px' }}>Opening balance</th>
+                          <th style={{ width: '120px' }}>Type</th>
+                          <th style={{ width: '180px' }}>Transaction amount</th>
+                          <th style={{ width: '180px' }}>Remaining amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
                     {budgetHistory.map((entry, idx) => {
-                      const amount = Number(entry.amount ?? entry.budgetAmount ?? 0);
-                      const dateStr = entry.updatedAt ?? entry.createdAt ?? entry.date ?? entry.updated_at ?? entry.created_at ?? '';
-                      const displayDate = dateStr ? (dateStr.length >= 10 ? dateStr.slice(0, 10) : dateStr) : '—';
-                      const remaining = Number(entry.remainingBudget ?? entry.remaining_budget ?? 0);
+                      const opening = Number(
+                        entry.openingBalance ??
+                        entry.amount ??
+                        entry.budgetAmount ??
+                        0
+                      );
+                      const closing = Number(
+                        entry.closingBalance ??
+                        entry.remainingBudget ??
+                        entry.remaining_budget ??
+                        0
+                      );
+
+                      const dateStr = entry.date ?? entry.createdAt ?? entry.updatedAt ?? entry.created_at ?? entry.updated_at ?? '';
+                      const displayDate = dateStr ? (String(dateStr).length >= 10 ? String(dateStr).slice(0, 10) : String(dateStr)) : '—';
                       const location = entry.location || '';
                       const isToday = displayDate === getLocalDateString();
                       const rowKey = entry.id != null ? entry.id : `idx-${idx}`;
                       const isEditingThis = isToday && editingBudgetEntryId === rowKey;
+
+                      const txType = Number.isFinite(opening) && Number.isFinite(closing) && closing >= opening ? 'CREDIT' : 'DEBIT';
+                      const txAmount = Number.isFinite(opening) && Number.isFinite(closing) ? Math.abs(closing - opening) : 0;
                       const handleSaveInlineBudget = async () => {
                         const num = Math.max(0, parseFloat(editingBudgetAmount) || 0);
                         setSavingBudget(true);
@@ -1207,56 +1273,57 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         }
                       };
                       return (
-                        <li key={entry.id ?? idx} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0', fontSize: '13px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ color: '#666' }}>{displayDate}</span>
-                            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              {isToday && isEditingThis ? (
-                                <>
-                                  <span style={{ fontWeight: '600' }}>₹</span>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="100"
-                                    value={editingBudgetAmount}
-                                    onChange={(e) => setEditingBudgetAmount(e.target.value)}
-                                    onBlur={handleSaveInlineBudget}
-                                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSaveInlineBudget(); } }}
-                                    autoFocus
-                                    disabled={savingBudget}
-                                    style={{ width: '90px', padding: '4px 8px', fontSize: '13px', fontWeight: '600' }}
-                                  />
-                                </>
-                              ) : (
-                                <>
-                                  <span style={{ fontWeight: '600', background: isToday ? '#f0f0f0' : 'transparent', padding: isToday ? '2px 6px' : 0, borderRadius: '4px' }}>
-                                    ₹{Number.isFinite(amount) ? amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                                  </span>
-                                  {isToday && (
-                                    <button
-                                      type="button"
-                                      className="btn btn-secondary"
-                                      onClick={() => { setEditingBudgetEntryId(rowKey); setEditingBudgetAmount(String(amount)); }}
-                                      style={{ fontSize: '12px', padding: '4px 10px' }}
-                                    >
-                                      Edit
-                                    </button>
-                                  )}
-                                </>
-                              )}
+                        <tr key={entry.id ?? idx}>
+                          <td style={{ color: '#666', fontSize: '13px', padding: '10px 10px' }}>{displayDate}</td>
+                          <td style={{ fontWeight: 600, fontSize: '13px', padding: '10px 10px' }}>
+                            ₹{Number.isFinite(opening) ? opening.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                          </td>
+                          <td style={{ fontWeight: 700, fontSize: '13px', padding: '10px 10px' }}>
+                            <span className={txType === 'CREDIT' ? 'budget-tx-credit' : 'budget-tx-debit'}>
+                              {txType}
                             </span>
-                          </div>
-                          {(location || Number.isFinite(remaining)) && (
-                            <div style={{ marginTop: '2px', fontSize: '12px', color: '#888' }}>
-                              {location && <span>{location}</span>}
-                              {location && Number.isFinite(remaining) && ' · '}
-                              {Number.isFinite(remaining) && <span>Left: ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
-                            </div>
-                          )}
-                        </li>
+                          </td>
+                          <td style={{ fontWeight: 600, fontSize: '13px', padding: '10px 10px' }}>
+                            ₹{Number.isFinite(txAmount) ? txAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                          </td>
+                          <td style={{ fontWeight: 600, fontSize: '13px', padding: '10px 10px' }}>
+                            {isToday && isEditingThis ? (
+                              <input
+                                type="number"
+                                min="0"
+                                step="100"
+                                value={editingBudgetAmount}
+                                onChange={(e) => setEditingBudgetAmount(e.target.value)}
+                                onBlur={handleSaveInlineBudget}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSaveInlineBudget(); } }}
+                                autoFocus
+                                disabled={savingBudget}
+                                style={{ width: '140px', padding: '6px 10px', fontSize: '13px', fontWeight: '600' }}
+                              />
+                            ) : (
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                                <span style={{ color: '#0f766e', fontWeight: 700 }}>
+                                  ₹{Number.isFinite(closing) ? closing.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                                </span>
+                                {isToday && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => { setEditingBudgetEntryId(rowKey); setEditingBudgetAmount(String(opening)); }}
+                                    style={{ fontSize: '12px', padding: '4px 10px' }}
+                                  >
+                                    Edit
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
                       );
                     })}
-                  </ul>
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             </div>
@@ -1306,6 +1373,20 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               <label>Category *</label>
               <select
                 {...registerExpense('category')}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === '__add_new__') {
+                    setShowCustomCategoryInput(true);
+                    setCustomCategoryDraft('');
+                    setExpenseValue('category', '', { shouldValidate: true, shouldDirty: true });
+                    return;
+                  }
+                  const normalized = String(v || '').trim().toLowerCase();
+                  const isPredefined = predefinedExpenseCategories.includes(normalized);
+                  setShowCustomCategoryInput(!isPredefined && String(v || '').trim() !== '');
+                  setCustomCategoryDraft(v);
+                  setExpenseValue('category', v, { shouldValidate: true, shouldDirty: true });
+                }}
               >
                 <option value="">Select Category</option>
                 <option value="water">Water Bill</option>
@@ -1317,11 +1398,41 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 <option value="transport">Transport</option>
                 <option value="employee">Employee</option>
                 <option value="other">Other</option>
+                {customCategoryOptions.map((c) => (
+                  <option key={String(c).trim().toLowerCase()} value={c}>
+                    {toTitleCase(c)}
+                  </option>
+                ))}
+                {(() => {
+                  const current = String(watchExpense('category') || '').trim();
+                  if (!current) return null;
+                  const normalized = current.toLowerCase();
+                  if (predefinedExpenseCategories.includes(normalized)) return null;
+                  // Avoid duplicating an already-displayed custom option.
+                  if (customCategoryOptions.some((x) => String(x).trim().toLowerCase() === normalized)) return null;
+                  return <option value={current}>{toTitleCase(current)}</option>;
+                })()}
+                <option value="__add_new__">Add new category...</option>
               </select>
               {expenseErrors.category && (
                 <span className="error-message">{expenseErrors.category.message}</span>
               )}
             </div>
+            {showCustomCategoryInput && (
+              <div className="form-group">
+                <label>New Category Name *</label>
+                <input
+                  type="text"
+                  value={customCategoryDraft}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setCustomCategoryDraft(v);
+                    setExpenseValue('category', v, { shouldValidate: true, shouldDirty: true });
+                  }}
+                  placeholder="e.g. Snacks, Stationery, Laundry..."
+                />
+              </div>
+            )}
             {selectedExpenseCategory === 'employee' && (
               <div className="form-group">
                 <label>Employee *</label>
