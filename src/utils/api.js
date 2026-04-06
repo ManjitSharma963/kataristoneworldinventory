@@ -444,12 +444,75 @@ export const deleteDailyBudget = async () => {
   return await apiCall('/budget/daily', { method: 'DELETE' });
 };
 
+// ==================== UNIFIED CASHBOOK (ledger + day balance) ====================
+// Location is taken from JWT on the backend.
+
+export const fetchCashbookTransactions = async ({ from, to, type } = {}) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  if (type) params.set('type', type);
+  const qs = params.toString();
+  return await apiCall(`/cashbook/transactions${qs ? `?${qs}` : ''}`, { method: 'GET' });
+};
+
+export const createCashbookTransaction = async (payload) => {
+  return await apiCall('/cashbook/transactions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};
+
+export const updateCashbookTransaction = async (id, payload) => {
+  return await apiCall(`/cashbook/transactions/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+};
+
+export const deleteCashbookTransaction = async (id) => {
+  return await apiCall(`/cashbook/transactions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+};
+
+export const getCashbookBudgetToday = async (date) => {
+  const params = new URLSearchParams();
+  if (date) params.set('date', date);
+  const qs = params.toString();
+  return await apiCall(`/cashbook/budget/today${qs ? `?${qs}` : ''}`, { method: 'GET' });
+};
+
 /**
- * Get all daily budget records from the table (GET /api/daily-budget/all)
- * @returns {Promise<Array>} e.g. [{ id, amount, location, netLedgerBalance, ... }]; legacy key remainingBudget may appear
+ * @param {{ kind: 'ADD'|'SUBTRACT'|'SET_BALANCE', amount: number|string, budgetDate?: string, note?: string }} payload
+ */
+export const postCashbookBudgetUpdate = async (payload) => {
+  return await apiCall('/cashbook/budget/update', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};
+
+/**
+ * Daily budget summary for the logged-in user's branch only (JWT location). 0 or 1 rows.
  */
 export const getDailyBudgetHistory = async () => {
-  const res = await apiCall('/daily-budget/all', { method: 'GET' });
+  const res = await apiCall('/budget/daily/mine', { method: 'GET' });
+  if (Array.isArray(res)) return res;
+  if (res?.content) return res.content;
+  if (res?.data) return Array.isArray(res.data) ? res.data : [];
+  return [];
+};
+
+/**
+ * Per-location budget change log (opening/closing/delta). Location from JWT.
+ * @param {{ from?: string, to?: string, limit?: number }} opts - yyyy-MM-dd, default last ~90d + limit 100
+ */
+export const getDailyBudgetEventHistory = async (opts = {}) => {
+  const { from, to, limit = 100 } = opts;
+  const p = new URLSearchParams();
+  if (from) p.set('from', from);
+  if (to) p.set('to', to);
+  p.set('limit', String(Math.min(500, Math.max(1, Number(limit) || 100))));
+  const res = await apiCall(`/budget/daily/history?${p.toString()}`, { method: 'GET' });
   if (Array.isArray(res)) return res;
   if (res?.content) return res.content;
   if (res?.data) return Array.isArray(res.data) ? res.data : [];
@@ -614,14 +677,6 @@ export const fetchAuditLedger = async ({ date, source, userId, limit } = {}) => 
   if (limit != null && limit !== '') params.set('limit', String(limit));
   const q = params.toString();
   return await apiCall(`/audit/ledger${q ? `?${q}` : ''}`, { method: 'GET' });
-};
-
-/** Admin: ledger rows for a bill (reference BILL). billKind: GST | NON_GST */
-export const fetchAuditBillLedger = async (billId, { billKind } = {}) => {
-  const params = new URLSearchParams();
-  if (billKind != null && billKind !== '') params.set('billKind', billKind);
-  const q = params.toString();
-  return await apiCall(`/audit/bill/${encodeURIComponent(billId)}${q ? `?${q}` : ''}`, { method: 'GET' });
 };
 
 export const fetchSalesPaymentModeSummary = async ({ date, dateTo }) => {

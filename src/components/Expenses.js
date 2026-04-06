@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 // Note: localStorage functions are no longer used - all data comes from API
 // Keeping imports for potential future use or reference, but not actively used
 import { getExpenses, addExpense, updateExpense, deleteExpense, getEmployees, addEmployee, updateEmployee, deleteEmployee } from '../utils/storage';
@@ -24,9 +24,12 @@ import {
   getDailyBudget as apiGetDailyBudget,
   getDailyBudgetByDate as apiGetDailyBudgetByDate,
   getDailyBudgetHistory as apiGetDailyBudgetHistory,
+  getDailyBudgetEventHistory as apiGetDailyBudgetEventHistory,
   createDailyBudget as apiCreateDailyBudget,
   updateDailyBudget as apiUpdateDailyBudget,
-  deleteDailyBudget as apiDeleteDailyBudget
+  deleteDailyBudget as apiDeleteDailyBudget,
+  fetchCashbookTransactions,
+  getCashbookBudgetToday
 } from '../utils/api';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
@@ -34,6 +37,23 @@ import { expenseSchema, employeeSchema, salaryPaymentSchema, advancePaymentSchem
 import Loading from './Loading';
 import ConfirmationModal from './ConfirmationModal';
 import './Expenses.css';
+
+const roundMoney2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** Local YYYY-MM-DD for an expense row (for cashbook alignment). */
+const expenseDateKey = (expense) => {
+  if (!expense?.date) return null;
+  const d = new Date(expense.date);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const formatLedgerInr = (n) => {
+  if (n == null || n === '') return '—';
+  const x = Number(n);
+  if (!Number.isFinite(x)) return '—';
+  return `₹${x.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
   const [expenses, setExpenses] = useState([]);
@@ -75,7 +95,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   }, [externalShowForm]);
   const [editingExpense, setEditingExpense] = useState(null);
   const [filterType, setFilterType] = useState('all'); // all, daily
-  const [activeTab, setActiveTab] = useState('all'); // all(daily expenses), employee(payroll), client(transactions)
+  const [activeTab, setActiveTab] = useState('all'); // all, employee, client
   const [showSalaryForm, setShowSalaryForm] = useState(false);
   const [showPaySalaryForm, setShowPaySalaryForm] = useState(false);
   const [showPayAdvanceForm, setShowPayAdvanceForm] = useState(false);
@@ -101,8 +121,11 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [showDailyBudgetModal, setShowDailyBudgetModal] = useState(false);
   const [dailyBudgetModalValue, setDailyBudgetModalValue] = useState('');
   const [hasDailyBudgetFromApi, setHasDailyBudgetFromApi] = useState(false);
+  /** Latest GET /budget/daily/by-date fields so the card matches server (incl. bill payments). */
+  const [dailyBudgetSnapshot, setDailyBudgetSnapshot] = useState(null);
   const [savingBudget, setSavingBudget] = useState(false);
   const [budgetHistory, setBudgetHistory] = useState([]);
+  const [budgetEvents, setBudgetEvents] = useState([]);
   const [loadingBudgetHistory, setLoadingBudgetHistory] = useState(false);
   const [editingBudgetEntryId, setEditingBudgetEntryId] = useState(null);
   const [editingBudgetAmount, setEditingBudgetAmount] = useState('');
@@ -187,6 +210,21 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return Number.isFinite(num) ? Math.max(0, num) : 0;
   };
 
+  const parseBudgetSnapshot = (res) => {
+    if (res == null || typeof res !== 'object') return null;
+    const root = res.data && typeof res.data === 'object' ? res.data : res;
+    const numOrNull = (v) => {
+      if (v == null || v === '') return null;
+      const n = typeof v === 'string' ? parseFloat(v.replace(/,/g, '')) : Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    return {
+      spent: numOrNull(root.spentAmount ?? root.spent_amount),
+      remaining: numOrNull(root.remainingAmount ?? root.remaining_amount),
+      budget: numOrNull(root.budgetAmount ?? root.budget_amount)
+    };
+  };
+
   const loadDailyBudget = async () => {
     const todayStr = getLocalDateString(); // YYYY-MM-DD for today
     try {
@@ -194,6 +232,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       const res = await apiGetDailyBudgetByDate(todayStr);
       const amount = getBudgetAmountFromResponse(res);
       setBudgetInHand(amount);
+      setDailyBudgetSnapshot(parseBudgetSnapshot(res));
       setHasDailyBudgetFromApi(true);
       // Persist so fallback is in sync with database
       try {
@@ -204,6 +243,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         const res = await apiGetDailyBudget();
         const amount = getBudgetAmountFromResponse(res);
         setBudgetInHand(amount);
+        setDailyBudgetSnapshot(parseBudgetSnapshot(res));
         setHasDailyBudgetFromApi(true);
         try {
           localStorage.setItem('expenses_budget_in_hand', String(amount));
@@ -216,6 +256,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         } catch (err) {
           setBudgetInHand(0);
         }
+        setDailyBudgetSnapshot(null);
         setHasDailyBudgetFromApi(false);
       }
     }
@@ -226,20 +267,40 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     loadDailyBudget();
   }, []);
 
+  // After creating a bill elsewhere, coming back to this tab should refresh totals
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible' && activeTab === 'all') {
+        loadDailyBudget();
+        setLedgerRefreshKey((k) => k + 1);
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [activeTab]);
+
   const loadBudgetHistory = async () => {
     setLoadingBudgetHistory(true);
     try {
-      const list = await apiGetDailyBudgetHistory();
+      const toStr = getLocalDateString();
+      const fromD = new Date();
+      fromD.setDate(fromD.getDate() - 90);
+      const fromStr = `${fromD.getFullYear()}-${String(fromD.getMonth() + 1).padStart(2, '0')}-${String(fromD.getDate()).padStart(2, '0')}`;
+      const [list, events] = await Promise.all([
+        apiGetDailyBudgetHistory(),
+        apiGetDailyBudgetEventHistory({ from: fromStr, to: toStr, limit: 150 }),
+      ]);
       const arr = Array.isArray(list) ? list : [];
-      // Sort by updatedAt/createdAt (camelCase) or updated_at/created_at descending (newest first)
       const sorted = [...arr].sort((a, b) => {
         const tA = new Date(a.updatedAt || a.createdAt || a.updated_at || a.created_at || 0).getTime();
         const tB = new Date(b.updatedAt || b.createdAt || b.updated_at || b.created_at || 0).getTime();
         return tB - tA;
       });
       setBudgetHistory(sorted.slice(0, 20));
+      setBudgetEvents(Array.isArray(events) ? events : []);
     } catch (_) {
       setBudgetHistory([]);
+      setBudgetEvents([]);
     } finally {
       setLoadingBudgetHistory(false);
     }
@@ -257,11 +318,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       } else {
         await apiCreateDailyBudget(num);
       }
-      setBudgetInHand(num);
       setHasDailyBudgetFromApi(true);
+      await loadDailyBudget();
     } else {
       await apiDeleteDailyBudget();
       setBudgetInHand(0);
+      setDailyBudgetSnapshot(null);
       setHasDailyBudgetFromApi(false);
     }
   };
@@ -358,6 +420,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [loadingExpenses, setLoadingExpenses] = useState(false);
   const [apiError, setApiError] = useState(false);
+  /** Maps expense id string → cashbook row (referenceType EXPENSE). */
+  const [cashbookExpenseMap, setCashbookExpenseMap] = useState({});
+  const [cashbookLedgerLoading, setCashbookLedgerLoading] = useState(false);
+  /** date YYYY-MM-DD → opening balance for that day (cashbook / this location). */
+  const [openingByDate, setOpeningByDate] = useState({});
+  const [ledgerRefreshKey, setLedgerRefreshKey] = useState(0);
+  const [submittingExpense, setSubmittingExpense] = useState(false);
 
   useEffect(() => {
     loadExpenses();
@@ -749,6 +818,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       setApiError(false);
       const allExpenses = await apiFetchExpenses();
       setExpenses(allExpenses || []);
+      await loadDailyBudget();
     } catch (error) {
       console.error('Error loading expenses from API:', error);
       setApiError(true);
@@ -759,6 +829,104 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     }
   };
 
+  const cashbookFetchKey = useMemo(() => {
+    if (!expenses.length) return '';
+    let min = null;
+    let max = null;
+    for (const e of expenses) {
+      const k = expenseDateKey(e);
+      if (!k) continue;
+      if (!min || k < min) min = k;
+      if (!max || k > max) max = k;
+    }
+    if (!min || !max) return '';
+    return `${min}:${max}:${expenses.length}`;
+  }, [expenses]);
+
+  const expenseDatesForOpening = useMemo(() => {
+    const s = new Set();
+    for (const e of expenses) {
+      const k = expenseDateKey(e);
+      if (k) s.add(k);
+    }
+    const sorted = [...s].sort().reverse();
+    return sorted.slice(0, 55);
+  }, [expenses]);
+
+  useEffect(() => {
+    if (activeTab !== 'all') return;
+    if (!cashbookFetchKey) {
+      setCashbookExpenseMap({});
+      return;
+    }
+    const [min, max] = cashbookFetchKey.split(':').slice(0, 2);
+    if (!min || !max) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setCashbookLedgerLoading(true);
+        const res = await fetchCashbookTransactions({ from: min, to: max });
+        if (cancelled) return;
+        const rows = Array.isArray(res?.rows) ? res.rows : [];
+        const map = {};
+        for (const row of rows) {
+          if (
+            row.rowKind === 'TRANSACTION' &&
+            row.referenceType === 'EXPENSE' &&
+            row.referenceId != null &&
+            String(row.referenceId) !== ''
+          ) {
+            map[String(row.referenceId)] = row;
+          }
+        }
+        setCashbookExpenseMap(map);
+      } catch (err) {
+        console.warn('Cashbook sync for expenses list failed:', err);
+        if (!cancelled) setCashbookExpenseMap({});
+      } finally {
+        if (!cancelled) setCashbookLedgerLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, cashbookFetchKey, ledgerRefreshKey]);
+
+  useEffect(() => {
+    if (activeTab !== 'all') return;
+    if (!expenseDatesForOpening.length) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const results = await Promise.all(
+          expenseDatesForOpening.map(async (d) => {
+            try {
+              const b = await getCashbookBudgetToday(d);
+              const raw = b?.openingBalance ?? b?.opening_balance;
+              const v = Number(raw);
+              return [d, Number.isFinite(v) ? v : null];
+            } catch {
+              return [d, null];
+            }
+          })
+        );
+        if (cancelled) return;
+        setOpeningByDate((prev) => {
+          const next = { ...prev };
+          for (const [d, v] of results) {
+            if (v != null) next[d] = v;
+          }
+          return next;
+        });
+      } catch (_) {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, expenseDatesForOpening.join('|'), ledgerRefreshKey]);
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -766,8 +934,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       [name]: value
     }));
   };
-
-  const [submittingExpense, setSubmittingExpense] = useState(false);
 
   const onSubmitExpense = async (data) => {
     const selectedEmp = employees.find(emp => String(emp.id) === String(data.employeeId || ''));
@@ -904,7 +1070,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     if (activeTab === 'all') {
       // Show all expenses (no type filter needed)
     } else if (activeTab === 'employee') {
-      // Don't show expenses in employee tab - employees are shown separately
       return false;
     }
     
@@ -1022,15 +1187,41 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const carryOverFromYesterday = 0;
   const todayBudgetWithCarryOver = dailyBudget;
 
-  // Daily budget card always uses only TODAY: only today's expenses are deducted from today's budget (no yesterday/past).
-  const todayOnlyBudgetContext = {
-    spent: todayExpenses,
-    budgetTotal: dailyBudget,
-    periodLabel: 'Today',
-    days: 1,
-    carryOver: 0,
-    baseBudget: dailyBudget
-  };
+  // Daily budget card: prefer API (includes bill payment credits in remaining for today).
+  const todayOnlyBudgetContext = useMemo(() => {
+    if (hasDailyBudgetFromApi && dailyBudgetSnapshot) {
+      const s = dailyBudgetSnapshot;
+      const savedCap =
+        s.budget != null && s.budget >= 0 ? s.budget : dailyBudget;
+      const spent = s.spent != null ? s.spent : todayExpenses;
+      const remaining =
+        s.remaining != null ? s.remaining : Math.max(0, savedCap - spent);
+      // Effective "budget today" = saved cap + today's cash/UPI bill collections (= spent + remaining)
+      const effectiveBudgetToday = roundMoney2(spent + remaining);
+      return {
+        spent,
+        budgetTotal: savedCap,
+        effectiveBudgetToday,
+        remaining,
+        periodLabel: 'Today',
+        days: 1,
+        carryOver: 0,
+        baseBudget: savedCap
+      };
+    }
+    const spent = todayExpenses;
+    const rem = dailyBudget - todayExpenses;
+    return {
+      spent,
+      budgetTotal: dailyBudget,
+      effectiveBudgetToday: roundMoney2(spent + rem),
+      remaining: rem,
+      periodLabel: 'Today',
+      days: 1,
+      carryOver: 0,
+      baseBudget: dailyBudget
+    };
+  }, [hasDailyBudgetFromApi, dailyBudgetSnapshot, todayExpenses, dailyBudget]);
 
   // Daily / date-wise budget: spent and budget for the current view (today, selected date, or date range)
   const getBudgetContext = () => {
@@ -1123,7 +1314,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       {/* Daily budget modal */}
       {showDailyBudgetModal && (
         <div className="modal-overlay" onClick={() => !savingBudget && setShowDailyBudgetModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 'min(920px, 96vw)' }}>
             <div className="modal-header">
               <h3>{hasDailyBudgetFromApi ? 'Edit daily budget' : 'Add daily budget'}</h3>
               <button type="button" className="modal-close" onClick={() => !savingBudget && setShowDailyBudgetModal(false)}>×</button>
@@ -1174,10 +1365,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               {/* Budget history */}
               <div className="budget-history-section" style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '12px' }}>
                 <h4 style={{ margin: '0 0 8px 0', fontSize: '14px', color: '#555' }}>Budget history</h4>
+                <p style={{ margin: '0 0 10px', fontSize: '12px', color: '#777' }}>
+                  Your branch only (from login). Shows the saved daily cap for this location if one exists. Ledger net is for the calendar day of that row's last update.
+                </p>
                 {loadingBudgetHistory ? (
                   <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>Loading...</p>
                 ) : budgetHistory.length === 0 ? (
-                  <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>No history yet.</p>
+                  <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>No summary rows yet.</p>
                 ) : (
                   <ul className="budget-history-list" style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: '200px', overflowY: 'auto' }}>
                     {budgetHistory.map((entry, idx) => {
@@ -1253,7 +1447,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                               {location && <span>{location}</span>}
                               {location && Number.isFinite(remaining) && ' · '}
                               {Number.isFinite(remaining) && (
-                                <span>Net (ledger today): ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                <span>Net (ledger that day): ₹{remaining.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               )}
                             </div>
                           )}
@@ -1261,6 +1455,62 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       );
                     })}
                   </ul>
+                )}
+                <p style={{ margin: '12px 0 6px', fontSize: '12px', color: '#777' }}>
+                  <strong>Your location — balance changes</strong> (from server log; last ~90 days). Each row is one budget update, expense, or collection affecting remaining balance.
+                </p>
+                {loadingBudgetHistory ? (
+                  <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>Loading events…</p>
+                ) : budgetEvents.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>No event log for this period.</p>
+                ) : (
+                  <div style={{ overflowX: 'auto', maxHeight: '280px', overflowY: 'auto', border: '1px solid #eee', borderRadius: '6px' }}>
+                    <table className="data-table" style={{ width: '100%', fontSize: '12px', margin: 0 }}>
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th style={{ textAlign: 'right' }}>Opening</th>
+                          <th>Type</th>
+                          <th style={{ textAlign: 'right' }}>Δ amount</th>
+                          <th style={{ textAlign: 'right' }}>Remaining</th>
+                          <th>Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {budgetEvents.map((ev) => {
+                          const d = Number(ev.delta ?? 0);
+                          const isCredit = d >= 0;
+                          const day =
+                            (ev.date && String(ev.date).slice(0, 10)) ||
+                            (ev.createdAt && String(ev.createdAt).slice(0, 10)) ||
+                            '—';
+                          const open = Number(ev.openingBalance ?? 0);
+                          const close = Number(ev.closingBalance ?? 0);
+                          const absAmt = Math.abs(d);
+                          return (
+                            <tr key={ev.id ?? `${day}-${ev.createdAt}`}>
+                              <td>{day}</td>
+                              <td style={{ textAlign: 'right' }}>
+                                ₹{open.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td style={{ color: isCredit ? '#0a7a32' : '#b00020', fontWeight: 600 }}>
+                                {isCredit ? 'CREDIT' : 'DEBIT'}
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                ₹{absAmt.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                ₹{close.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td style={{ color: '#666', maxWidth: '140px', wordBreak: 'break-word' }}>
+                                {ev.eventType || '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             </div>
@@ -1422,8 +1672,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           {/* Budget in hand card – daily / date-wise */}
           <div className="budget-in-hand-card">
             <div className="budget-in-hand-header">
-              <span className="budget-in-hand-title" title="Cash + UPI available after expenses">
+              <span
+                className="budget-in-hand-title"
+                title="Today: saved cap minus today's expenses, plus today's bill payments in Cash and UPI only (same as main-branch behaviour)."
+              >
                 💰 Daily available balance
+                <span style={{ fontWeight: 500, fontSize: '0.85em', color: '#64748b', marginLeft: '8px' }}>
+                  ({getLocalDateString()})
+                </span>
               </span>
             </div>
             <div className="budget-in-hand-stats">
@@ -1432,14 +1688,23 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 <span className="budget-stat-value spent">₹{(Number(todayOnlyBudgetContext.spent || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
               <div className="budget-stat">
-                <span className="budget-stat-label">Budget today</span>
-                <span className="budget-stat-value">₹{(Number(todayOnlyBudgetContext.budgetTotal || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span
+                  className="budget-stat-label"
+                  title="Saved daily cap (Budget button) plus today's customer bill payments in Cash and UPI. Bank/cheque on bills are not added here."
+                >
+                  Budget today
+                </span>
+                <span className="budget-stat-value">
+                  ₹
+                  {(Number(todayOnlyBudgetContext.effectiveBudgetToday) || 0).toLocaleString('en-IN', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })}
+                </span>
               </div>
               <div className="budget-stat">
                 {(() => {
-                  const budget = Number(todayOnlyBudgetContext.budgetTotal || 0) || 0;
-                  const spent = Number(todayOnlyBudgetContext.spent || 0) || 0;
-                  const left = budget - spent;
+                  const left = Number(todayOnlyBudgetContext.remaining ?? 0) || 0;
                   if (left >= 0) {
                     return (
                       <>
@@ -1447,14 +1712,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         <span className="budget-stat-value left">₹{left.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </>
                     );
-                  } else {
-                    return (
-                      <>
-                        <span className="budget-stat-label">Over budget by</span>
-                        <span className="budget-stat-value over">₹{Math.abs(left).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      </>
-                    );
                   }
+                  return (
+                    <>
+                      <span className="budget-stat-label">Over budget by</span>
+                      <span className="budget-stat-value over">₹{Math.abs(left).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </>
+                  );
                 })()}
               </div>
             </div>
@@ -3036,36 +3300,73 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           <Loading message="Loading expenses..." />
         ) : filteredExpenses.length > 0 ? (
           <>
+            <p className="expense-ledger-hint">
+              {cashbookLedgerLoading
+                ? 'Syncing with cashbook…'
+                : 'Day opening, cash change (Δ), and remaining balance come from the unified cashbook for this location. Balances use posting order for that day (not your current table sort).'}
+            </p>
             {/* Desktop Table View */}
-            <div className="sales-table-wrapper">
-              <table className="data-table expenses-table">
+            <div className="sales-table-wrapper expenses-table-wrap">
+              <table className="data-table expenses-table expenses-table-with-ledger">
                 <thead>
                   <tr>
-                    <th className="sortable" onClick={() => handleSort('date')}>
+                    <th className="sortable expense-col-date" onClick={() => handleSort('date')}>
                       Date
                       {sortConfig.key === 'date' && (
                         <span className="sort-icon">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                       )}
                     </th>
-                    <th className="sortable" onClick={() => handleSort('type')}>
+                    <th className="sortable expense-col-type" onClick={() => handleSort('type')}>
                       Type
                       {sortConfig.key === 'type' && (
                         <span className="sort-icon">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                       )}
                     </th>
-                    <th>Details</th>
+                    <th className="expense-details-col">Details</th>
                     <th className="sortable" onClick={() => handleSort('amount')}>
                       Amount
                       {sortConfig.key === 'amount' && (
                         <span className="sort-icon">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                       )}
                     </th>
+                    <th
+                      className="expense-ledger-col"
+                      title="Cash on hand at the start of this calendar day (before that day’s ledger entries)."
+                    >
+                      Day opening
+                    </th>
+                    <th
+                      className="expense-ledger-col"
+                      title="How this expense moved cash: negative = outflow. “Before” is cash immediately before this entry in ledger order."
+                    >
+                      Δ Cash
+                    </th>
+                    <th
+                      className="expense-ledger-col"
+                      title="Cash remaining right after this expense, in ledger posting order for that day."
+                    >
+                      Balance after
+                    </th>
                     <th>Payment Method</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {paginatedExpenses.map((expense) => (
+                  {paginatedExpenses.map((expense) => {
+                    const dKey = expenseDateKey(expense);
+                    const ledger = cashbookExpenseMap[String(expense.id)];
+                    const dayOpen =
+                      dKey != null && openingByDate[dKey] !== undefined ? openingByDate[dKey] : null;
+                    const signed =
+                      ledger != null && ledger.signedAmount != null ? Number(ledger.signedAmount) : null;
+                    const afterBal =
+                      ledger != null && ledger.balanceAfter != null ? Number(ledger.balanceAfter) : null;
+                    const amt = Number(parseFloat(expense?.amount || 0) || 0) || 0;
+                    const beforeBal =
+                      afterBal != null && Number.isFinite(afterBal)
+                        ? roundMoney2(afterBal + amt)
+                        : null;
+                    return (
                     <tr key={expense.id}>
                       <td className="date-cell">{formatDate(expense.date)}</td>
                       <td>
@@ -3073,14 +3374,51 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           {getTypeIcon(expense.type)} {getTypeLabel(expense.type)}
                         </span>
                       </td>
-                      <td>
-                        <div>
-                          <strong>{expense.category?.charAt(0).toUpperCase() + expense.category?.slice(1)}</strong>
-                          {expense.description && <div className="expense-desc">{expense.description}</div>}
+                      <td className="expense-details-cell">
+                        <div className="expense-details-inner">
+                          <span className="expense-details-cat" title={expense.category || ''}>
+                            {expense.category
+                              ? expense.category.charAt(0).toUpperCase() + expense.category.slice(1)
+                              : '—'}
+                          </span>
+                          <span
+                            className={`expense-details-text${expense.description ? '' : ' expense-details-muted'}`}
+                            title={expense.description || undefined}
+                          >
+                            {expense.description || '—'}
+                          </span>
                         </div>
                       </td>
                       <td className="amount-cell total-col">
                         <span className="expense-amount">₹{(Number(parseFloat(expense?.amount || 0) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </td>
+                      <td className="amount-cell expense-ledger-cell" title={dKey ? `Date key: ${dKey}` : undefined}>
+                        <span className="expense-ledger-value">{formatLedgerInr(dayOpen)}</span>
+                      </td>
+                      <td className="amount-cell expense-ledger-cell">
+                        {signed != null && Number.isFinite(signed) ? (
+                          <div>
+                            <div className={`expense-ledger-delta ${signed >= 0 ? 'ledger-in' : 'ledger-out'}`}>
+                              {signed >= 0 ? '+' : '−'}
+                              {formatLedgerInr(Math.abs(signed))}
+                            </div>
+                            {beforeBal != null && (
+                              <div className="expense-ledger-sub">
+                                before {formatLedgerInr(beforeBal)}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div title="This expense is not linked in the cashbook yet (e.g. older data). Δ shows the expense amount only.">
+                            <div className="expense-ledger-delta ledger-out expense-ledger-unlinked">
+                              −{formatLedgerInr(amt)}
+                            </div>
+                            <span className="expense-ledger-sub muted">not in ledger</span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="amount-cell total-col expense-ledger-cell">
+                        <span className="expense-ledger-value strong">{formatLedgerInr(afterBal)}</span>
                       </td>
                       <td>
                         <span className="payment-badge">{expense.paymentMethod}</span>
@@ -3102,7 +3440,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -3111,6 +3450,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             <div className="mobile-expenses-cards">
               {paginatedExpenses.map((expense) => {
                 const isExpanded = expandedExpenses.has(expense.id);
+                const dKeyM = expenseDateKey(expense);
+                const ledgerM = cashbookExpenseMap[String(expense.id)];
+                const dayOpenM =
+                  dKeyM != null && openingByDate[dKeyM] !== undefined ? openingByDate[dKeyM] : null;
+                const signedM =
+                  ledgerM != null && ledgerM.signedAmount != null ? Number(ledgerM.signedAmount) : null;
+                const afterM =
+                  ledgerM != null && ledgerM.balanceAfter != null ? Number(ledgerM.balanceAfter) : null;
+                const amtM = Number(parseFloat(expense?.amount || 0) || 0) || 0;
+                const beforeM =
+                  afterM != null && Number.isFinite(afterM) ? roundMoney2(afterM + amtM) : null;
                 return (
                   <div key={expense.id} className={`expense-card ${isExpanded ? 'expanded' : ''}`}>
                     <div className="expense-card-header" onClick={() => toggleExpense(expense.id)}>
@@ -3132,6 +3482,34 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         <div className="expense-card-row">
                           <span className="expense-card-label">Date:</span>
                           <span className="expense-card-value">{formatDate(expense.date)}</span>
+                        </div>
+                        <div className="expense-card-row">
+                          <span className="expense-card-label">Day opening:</span>
+                          <span className="expense-card-value">{formatLedgerInr(dayOpenM)}</span>
+                        </div>
+                        <div className="expense-card-row">
+                          <span className="expense-card-label">Δ Cash:</span>
+                          <span className="expense-card-value">
+                            {signedM != null && Number.isFinite(signedM) ? (
+                              <>
+                                <span className={signedM >= 0 ? 'ledger-in' : 'ledger-out'}>
+                                  {signedM >= 0 ? '+' : '−'}
+                                  {formatLedgerInr(Math.abs(signedM))}
+                                </span>
+                                {beforeM != null && (
+                                  <span className="expense-ledger-sub"> (before {formatLedgerInr(beforeM)})</span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="expense-ledger-unlinked" title="Not linked in cashbook">
+                                −{formatLedgerInr(amtM)} <span className="expense-ledger-sub muted">(not in ledger)</span>
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                        <div className="expense-card-row">
+                          <span className="expense-card-label">Balance after:</span>
+                          <span className="expense-card-value">{formatLedgerInr(afterM)}</span>
                         </div>
                         {expense.description && (
                           <div className="expense-card-row">

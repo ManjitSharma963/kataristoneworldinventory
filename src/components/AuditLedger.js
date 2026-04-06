@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { fetchAuditLedger, fetchAuditBillLedger } from '../utils/api';
+import { fetchAuditLedger } from '../utils/api';
 import './AuditLedger.css';
 
 function localISODate(d = new Date()) {
@@ -37,12 +37,6 @@ export default function AuditLedger() {
   const [userId, setUserId] = useState('');
   const [limit, setLimit] = useState('100');
 
-  const [billId, setBillId] = useState('');
-  const [billKind, setBillKind] = useState('GST');
-  const [billRows, setBillRows] = useState([]);
-  const [billLoading, setBillLoading] = useState(false);
-  const [billError, setBillError] = useState('');
-
   const loadMain = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -65,25 +59,6 @@ export default function AuditLedger() {
   useEffect(() => {
     loadMain();
   }, [loadMain]);
-
-  const loadBillAudit = async () => {
-    const id = String(billId || '').trim();
-    if (!id) {
-      setBillError('Enter bill id');
-      return;
-    }
-    setBillLoading(true);
-    setBillError('');
-    try {
-      const data = await fetchAuditBillLedger(id, { billKind: billKind || undefined });
-      setBillRows(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setBillRows([]);
-      setBillError(e?.message || 'Failed to load bill ledger');
-    } finally {
-      setBillLoading(false);
-    }
-  };
 
   return (
     <div className="audit-ledger-page">
@@ -179,61 +154,6 @@ export default function AuditLedger() {
           </tbody>
         </table>
       </div>
-
-      <section className="audit-bill-section">
-        <h2>Bill-level ledger</h2>
-        <p className="audit-ledger-sub">Rows with reference BILL for this bill id (use kind to disambiguate).</p>
-        <div className="audit-filter-row audit-bill-row">
-          <label>
-            Bill id
-            <input type="text" inputMode="numeric" value={billId} onChange={(e) => setBillId(e.target.value)} />
-          </label>
-          <label>
-            Bill kind
-            <select value={billKind} onChange={(e) => setBillKind(e.target.value)}>
-              <option value="GST">GST</option>
-              <option value="NON_GST">NON_GST</option>
-            </select>
-          </label>
-          <button type="button" className="audit-btn-primary" onClick={loadBillAudit} disabled={billLoading}>
-            {billLoading ? 'Loading…' : 'Load bill ledger'}
-          </button>
-        </div>
-        {billError ? <p className="audit-error">{billError}</p> : null}
-        {billRows.length > 0 ? (
-          <div className="audit-table-wrap">
-            <table className="audit-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Source</th>
-                  <th>Amount</th>
-                  <th>Mode</th>
-                  <th>User</th>
-                  <th>Deleted</th>
-                </tr>
-              </thead>
-              <tbody>
-                {billRows.map((row) => (
-                  <tr key={row.id ?? `${row.sourceId}-${row.createdAt}`}>
-                    <td>{formatDateTime(row.createdAt)}</td>
-                    <td>
-                      <span className="audit-mono">{row.sourceType}</span> #{row.sourceId}
-                    </td>
-                    <td>{formatMoney(row.amount)}</td>
-                    <td>{row.paymentMode}</td>
-                    <td>
-                      {row.createdByName || '—'}
-                      {row.createdBy != null ? <span className="audit-sub"> ({row.createdBy})</span> : null}
-                    </td>
-                    <td>{row.deleted ? 'Yes' : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </section>
     </div>
   );
 }

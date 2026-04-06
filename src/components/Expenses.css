@@ -644,6 +644,224 @@
   overflow-x: auto;
 }
 
+/* Daily expenses: keep table in viewport — wrap details, no horizontal scroll */
+.expenses-table-container .sales-table-wrapper.expenses-table-wrap {
+  /* auto: avoid clipping first/last columns when table is tight; no forced hide */
+  overflow-x: auto;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger {
+  table-layout: fixed;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger thead th {
+  white-space: normal;
+  line-height: 1.2;
+  vertical-align: bottom;
+}
+
+/* min-width:0 helps fixed-layout columns shrink; do NOT hide overflow on every cell — it clips badges/shadows */
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td {
+  min-width: 0;
+  overflow: visible;
+  vertical-align: top;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th {
+  min-width: 0;
+  overflow: visible;
+}
+
+/* Single-line numeric/date/payment only — NOT type column (badges need space + visible overflow) */
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td.date-cell,
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td.total-col,
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(8) {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(2) {
+  overflow: visible;
+  white-space: normal;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td.expense-ledger-cell {
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td.actions-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.expenses-table-container .data-table.expenses-table .expense-type-badge {
+  padding: 3px 7px;
+  font-size: 9px;
+  gap: 3px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* Column widths (ledger table): force Details to wrap instead of stretching page */
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th:nth-child(1),
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(1) {
+  width: 7%;
+  overflow: hidden;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th:nth-child(2),
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(2) {
+  width: 12%;
+  min-width: 7.5rem;
+  overflow: visible;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th:nth-child(3),
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(3) {
+  width: 26%;
+  min-width: 0;
+  max-width: 26%;
+  box-sizing: border-box;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th:nth-child(4),
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(4) {
+  width: 8%;
+  box-sizing: border-box;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th:nth-child(5),
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(5) {
+  width: 9%;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th:nth-child(6),
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(6) {
+  width: 10%;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th:nth-child(7),
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(7) {
+  width: 8%;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th:nth-child(8),
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(8) {
+  width: 11%;
+  min-width: 4.25rem;
+  box-sizing: border-box;
+  padding-right: 14px !important;
+  vertical-align: middle;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th:nth-child(9),
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(9) {
+  width: 11%;
+  min-width: 5.5rem;
+  box-sizing: border-box;
+  padding-left: 14px !important;
+  vertical-align: middle;
+}
+
+/* Compact payment pill + keep it inside its column (no bleed into Actions) */
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td:nth-child(8) .payment-badge {
+  display: inline-block;
+  max-width: 100%;
+  padding: 4px 8px;
+  font-size: 10px;
+  line-height: 1.2;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 2px 2px 4px rgba(163, 177, 198, 0.35), -1px -1px 3px rgba(255, 255, 255, 0.6);
+}
+
+/* Action buttons stay inside last column; softer shadow = less visual spill */
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td.actions-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td.actions-cell .btn-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  box-shadow: 2px 2px 4px rgba(163, 177, 198, 0.45), -1px -1px 3px rgba(255, 255, 255, 0.55);
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td.actions-cell .btn-icon.btn-edit:hover,
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td.actions-cell .btn-icon.btn-delete:hover {
+  transform: none;
+  box-shadow: 2px 2px 5px rgba(163, 177, 198, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.expense-details-col {
+  text-align: left !important;
+}
+
+.expense-details-cell {
+  min-width: 0;
+  max-width: 100%;
+  text-align: left !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  /* Only Details cell clips so long unbroken text doesn’t paint over Amount */
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.expense-details-inner {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.expense-details-cat {
+  display: block;
+  font-weight: 700;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #475569;
+  line-height: 1.25;
+  margin-bottom: 3px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.expense-details-text {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  font-size: 10px;
+  line-height: 1.35;
+  color: #4a5568;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+  white-space: normal;
+}
+
+.expense-details-muted {
+  color: #94a3b8;
+  font-style: italic;
+}
+
 /* Mobile expenses cards - hidden on desktop */
 .mobile-expenses-cards,
 .mobile-employees-cards {
@@ -793,23 +1011,45 @@
   text-align: center;
 }
 
-/* Compact employee table */
+/* Compact expenses + employee tables using .expenses-table */
 .expenses-table-container .data-table.expenses-table {
-  font-size: 11px;
+  font-size: 10px;
 }
 
-.expenses-table-container .data-table.expenses-table th {
-  padding: 14px 12px;
-  font-size: 11px;
+.expenses-table-container .data-table.expenses-table:not(.expenses-table-with-ledger) th {
+  padding: 8px 5px;
+  font-size: 10px;
 }
 
-.expenses-table-container .data-table.expenses-table td {
-  padding: 12px;
-  font-size: 11px;
+.expenses-table-container .data-table.expenses-table:not(.expenses-table-with-ledger) td {
+  padding: 6px 5px;
+  font-size: 10px;
+  vertical-align: top;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger th {
+  font-size: 10px;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger td {
+  font-size: 10px;
+  vertical-align: top;
+}
+
+/* Must come after generic .data-table tbody td padding so gutters apply */
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger thead th,
+.expenses-table-container .data-table.expenses-table.expenses-table-with-ledger tbody td {
+  padding: 8px 12px;
+  box-sizing: border-box;
 }
 
 .expenses-table-container .data-table.expenses-table .expense-amount {
-  font-size: 11px;
+  font-size: 10px;
+}
+
+/* Less vertical jump on row hover (fits more rows on screen) */
+.expenses-table-container .data-table.expenses-table tbody tr:hover {
+  transform: none;
 }
 
 .expenses-table-container .data-table th:first-child,
@@ -831,11 +1071,11 @@
   justify-content: center;
 }
 
-.expenses-table-container .data-table td > div {
+.expenses-table-container .data-table td > div:not(.expense-details-inner) {
   text-align: center;
 }
 
-.expenses-table-container .data-table td > div strong {
+.expenses-table-container .data-table td > div:not(.expense-details-inner) strong {
   display: block;
   text-align: center;
 }
@@ -1621,4 +1861,75 @@
 .toast-close:hover {
   background: rgba(255, 255, 255, 0.3);
   transform: scale(1.1);
+}
+
+/* Unified cashbook columns on Daily Expenses table */
+.expense-ledger-hint {
+  font-size: 0.85rem;
+  color: #64748b;
+  margin: 0 0 12px;
+  line-height: 1.45;
+  max-width: 960px;
+}
+
+.expenses-table-with-ledger .expense-ledger-col {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #475569;
+  white-space: normal;
+  max-width: 7.5rem;
+  line-height: 1.25;
+}
+
+.expenses-table-with-ledger .expense-ledger-cell {
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+  font-size: 0.88rem;
+}
+
+.expense-ledger-value.strong {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.expense-ledger-delta {
+  font-weight: 700;
+}
+
+.expense-ledger-delta.ledger-in {
+  color: #15803d;
+}
+
+.expense-ledger-delta.ledger-out {
+  color: #b91c1c;
+}
+
+.expense-ledger-delta.expense-ledger-unlinked {
+  opacity: 0.85;
+}
+
+.expense-ledger-sub {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.expense-ledger-sub.muted {
+  font-style: italic;
+}
+
+.expense-card-value .ledger-in {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.expense-card-value .ledger-out {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.expense-card-value .expense-ledger-unlinked {
+  color: #b91c1c;
 }

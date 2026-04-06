@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import Dashboard from './components/Dashboard';
-import MobileTodayDashboard from './components/MobileTodayDashboard';
 import Customers from './components/Customers';
 import Reports from './components/Reports';
 import AuditLedger from './components/AuditLedger';
@@ -322,13 +321,6 @@ function App() {
               </>
             )}
             <button 
-              className={`nav-item ${activeNav === 'mobile-today' ? 'active' : ''}`}
-              onClick={() => setActiveNav('mobile-today')}
-            >
-              <span className="nav-icon">📱</span>
-              <span className="nav-label">Today</span>
-            </button>
-            <button 
               className={`nav-item ${activeNav === 'products' ? 'active' : ''}`}
               onClick={() => setActiveNav('products')}
             >
@@ -437,16 +429,6 @@ function App() {
                     </>
                   )}
                   <button 
-                    className={`nav-item ${activeNav === 'mobile-today' ? 'active' : ''}`}
-                    onClick={() => {
-                      setActiveNav('mobile-today');
-                      setMobileMenuOpen(false);
-                    }}
-                  >
-                    <span className="nav-icon">📱</span>
-                    <span className="nav-label">Today</span>
-                  </button>
-                  <button 
                     className={`nav-item ${activeNav === 'products' ? 'active' : ''}`}
                     onClick={() => {
                       setActiveNav('products');
@@ -488,11 +470,7 @@ function App() {
           {/* Dashboard Content */}
           <main className="dashboard-main">
             {!userIsAdmin ? (
-              activeNav === 'mobile-today' ? (
-                <MobileTodayDashboard />
-              ) : (
-                <Products />
-              )
+              <Products />
             ) : activeNav === 'products' ? (
               <Products />
             ) : activeNav === 'inventory' ? (
@@ -505,8 +483,6 @@ function App() {
               <AuditLedger />
             ) : activeNav === 'sales' ? (
               <Sales />
-            ) : activeNav === 'mobile-today' ? (
-              <MobileTodayDashboard />
             ) : (
               <Dashboard activeNav={activeNav} setActiveNav={setActiveNav} />
             )}
@@ -517,13 +493,6 @@ function App() {
         <nav className="bottom-nav">
           {userIsAdmin && (
             <>
-              <button 
-                className={`bottom-nav-item ${activeNav === 'mobile-today' ? 'active' : ''}`}
-                onClick={() => setActiveNav('mobile-today')}
-              >
-                <span className="bottom-nav-icon">📱</span>
-                <span className="bottom-nav-label">Today</span>
-              </button>
               <button 
                 className={`bottom-nav-item ${activeNav === 'dashboard' ? 'active' : ''}`}
                 onClick={() => setActiveNav('dashboard')}
@@ -567,15 +536,6 @@ function App() {
                 <span className="bottom-nav-label">Reports</span>
               </button>
             </>
-          )}
-          {!userIsAdmin && (
-            <button 
-              className={`bottom-nav-item ${activeNav === 'mobile-today' ? 'active' : ''}`}
-              onClick={() => setActiveNav('mobile-today')}
-            >
-              <span className="bottom-nav-icon">📱</span>
-              <span className="bottom-nav-label">Today</span>
-            </button>
           )}
           <button 
             className={`bottom-nav-item ${activeNav === 'products' ? 'active' : ''}`}
