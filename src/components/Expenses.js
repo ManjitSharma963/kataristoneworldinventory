@@ -35,6 +35,37 @@ import Loading from './Loading';
 import ConfirmationModal from './ConfirmationModal';
 import './Expenses.css';
 
+const numBudgetEventField = (ev, camel, snake) => {
+  const v = ev[camel] ?? ev[snake];
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** `closingBalance` on the newest row in `daily_budget_events` (by createdAt). */
+function latestRemainingFromBudgetEvents(newestFirstRows) {
+  if (!Array.isArray(newestFirstRows) || newestFirstRows.length === 0) return 0;
+  const latest = newestFirstRows[0];
+  return numBudgetEventField(latest, 'closingBalance', 'closing_balance');
+}
+
+/** Net expense today from rows whose event `date` is today (EXPENSE_DEBIT / EXPENSE_CREDIT only). */
+function todayExpenseFromBudgetEvents(list, todayYyyyMmDd) {
+  if (!Array.isArray(list) || !todayYyyyMmDd) return 0;
+  const day = String(todayYyyyMmDd).slice(0, 10);
+  let expenseNet = 0;
+  for (const ev of list) {
+    const d = ev.date ?? ev.event_date;
+    if (d == null) continue;
+    const ds = typeof d === 'string' ? d.slice(0, 10) : String(d).slice(0, 10);
+    if (ds !== day) continue;
+    const type = ev.eventType ?? ev.event_type;
+    if (type === 'EXPENSE_DEBIT' || type === 'EXPENSE_CREDIT') {
+      expenseNet += numBudgetEventField(ev, 'spentAmount', 'spent_amount');
+    }
+  }
+  return Math.max(0, expenseNet);
+}
+
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
   const [expenses, setExpenses] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -93,6 +124,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   // Start with 0 so we always show database value after fetch; never show stale localStorage first
   const [budgetInHand, setBudgetInHand] = useState(0);
+  /** Card "Daily available balance": spent + remaining from `daily_budget_events` only. */
+  const [todayFromEvents, setTodayFromEvents] = useState({ expense: 0, remaining: 0 });
   const [currentPage, setCurrentPage] = useState(1);
   // Default to sorting by date (newest first) for all tabs
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
@@ -223,9 +256,30 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     }
   };
 
+  const loadTodayBudgetFromEvents = async () => {
+    const todayStr = getLocalDateString();
+    try {
+      // Remaining: newest row in the table (createdAt DESC, limit 1) — not limited to today's event date.
+      // Expense: rows for today only.
+      const [latestGlobal, todayOnly] = await Promise.all([
+        apiGetDailyBudgetEvents({ from: '1900-01-01', to: todayStr, limit: 1 }),
+        apiGetDailyBudgetEvents({ from: todayStr, to: todayStr, limit: 500 }),
+      ]);
+      const latestList = Array.isArray(latestGlobal) ? latestGlobal : [];
+      const todayList = Array.isArray(todayOnly) ? todayOnly : [];
+      setTodayFromEvents({
+        remaining: latestRemainingFromBudgetEvents(latestList),
+        expense: todayExpenseFromBudgetEvents(todayList, todayStr),
+      });
+    } catch (_) {
+      setTodayFromEvents({ expense: 0, remaining: 0 });
+    }
+  };
+
   // Automatically fetch daily budget when user opens the Expenses tab (component mounts)
   useEffect(() => {
     loadDailyBudget();
+    loadTodayBudgetFromEvents();
   }, []);
 
   const loadBudgetHistory = async () => {
@@ -841,6 +895,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       resetForm();
       resetExpense();
       await loadExpenses();
+      await loadTodayBudgetFromEvents();
       await loadPayrollSummary();
       // Notify parent component (Dashboard) to refresh expenses for chart
       if (onExpenseUpdate) {
@@ -902,6 +957,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         try {
           await apiDeleteExpense(id);
           await loadExpenses();
+          await loadTodayBudgetFromEvents();
           showToast('Expense deleted successfully!', 'success');
           // Notify parent component (Dashboard) to refresh expenses for chart
           if (onExpenseUpdate) {
@@ -1058,62 +1114,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       return sum + (parseFloat(exp.amount) || 0);
     }, 0);
 
-  const dailyBudget = Number(parseFloat(budgetInHand) || 0) || 0;
-  // Carry-over disabled: we don't store per-day budget history, so we can't know what was actually left yesterday.
-  const carryOverFromYesterday = 0;
-  const todayBudgetWithCarryOver = dailyBudget;
-
-  // Daily budget card always uses only TODAY: only today's expenses are deducted from today's budget (no yesterday/past).
-  const todayOnlyBudgetContext = {
-    spent: todayExpenses,
-    budgetTotal: dailyBudget,
-    periodLabel: 'Today',
-    days: 1,
-    carryOver: 0,
-    baseBudget: dailyBudget
-  };
-
-  // Daily / date-wise budget: spent and budget for the current view (today, selected date, or date range)
-  const getBudgetContext = () => {
-    const start = dateFilter.start;
-    const end = dateFilter.end;
-    if (!start && !end) {
-      return {
-        spent: todayExpenses,
-        budgetTotal: todayBudgetWithCarryOver,
-        periodLabel: 'Today',
-        days: 1,
-        carryOver: carryOverFromYesterday,
-        baseBudget: dailyBudget
-      };
-    }
-    const singleDay = start && !end ? start : (!start && end ? end : null);
-    if (singleDay) {
-      const dayStart = new Date(singleDay);
-      dayStart.setHours(0, 0, 0, 0);
-      const dayEnd = new Date(singleDay);
-      dayEnd.setHours(23, 59, 59, 999);
-      const spentOnDay = expenses
-        .filter(exp => {
-          const d = new Date(exp.date);
-          return d >= dayStart && d <= dayEnd;
-        })
-        .reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
-      return { spent: spentOnDay, budgetTotal: dailyBudget, periodLabel: `On ${formatDate(singleDay)}`, days: 1 };
-    }
-    if (start && end) {
-      const startDate = new Date(start);
-      const endDate = new Date(end);
-      startDate.setHours(0, 0, 0, 0);
-      endDate.setHours(23, 59, 59, 999);
-      const daysInRange = Math.max(1, Math.ceil((endDate - startDate) / (24 * 60 * 60 * 1000)) + 1);
-      const budgetForPeriod = dailyBudget * daysInRange;
-      return { spent: totalExpenses, budgetTotal: budgetForPeriod, periodLabel: `Selected period (${daysInRange} day${daysInRange !== 1 ? 's' : ''})`, days: daysInRange };
-    }
-    return { spent: todayExpenses, budgetTotal: dailyBudget, periodLabel: 'Today', days: 1 };
-  };
-  const budgetContext = getBudgetContext();
-
   // If showAddButtonInHeader is true, only render the button
   if (showAddButtonInHeader) {
     return (
@@ -1199,6 +1199,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     setSavingBudget(true);
                     try {
                       await saveDailyBudgetToApi(num);
+                      await loadTodayBudgetFromEvents();
                       setShowDailyBudgetModal(false);
                       showToast(num > 0 ? `Daily budget set to ₹${num.toLocaleString('en-IN')}` : 'Daily budget cleared.');
                     } catch (err) {
@@ -1263,6 +1264,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           setEditingBudgetEntryId(null);
                           setEditingBudgetAmount('');
                           await loadDailyBudget();
+                          await loadTodayBudgetFromEvents();
                           await loadBudgetHistory();
                           showToast(num > 0 ? `Budget updated to ₹${num.toLocaleString('en-IN')}` : 'Budget cleared.');
                         } catch (err) {
@@ -1535,33 +1537,26 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             </div>
             <div className="budget-in-hand-stats">
               <div className="budget-stat">
-                <span className="budget-stat-label">Spent (Today)</span>
-                <span className="budget-stat-value spent">₹{(Number(todayOnlyBudgetContext.spent || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              </div>
-              <div className="budget-stat">
-                <span className="budget-stat-label">Budget today</span>
-                <span className="budget-stat-value">₹{(Number(todayOnlyBudgetContext.budgetTotal || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="budget-stat-label">Today&apos;s expense</span>
+                <span className="budget-stat-value spent">₹{(Number(todayFromEvents.expense || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
               <div className="budget-stat">
                 {(() => {
-                  const budget = Number(todayOnlyBudgetContext.budgetTotal || 0) || 0;
-                  const spent = Number(todayOnlyBudgetContext.spent || 0) || 0;
-                  const left = budget - spent;
+                  const left = Number(todayFromEvents.remaining || 0) || 0;
                   if (left >= 0) {
                     return (
                       <>
-                        <span className="budget-stat-label">Available Balance</span>
+                        <span className="budget-stat-label">Available balance</span>
                         <span className="budget-stat-value left">₹{left.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </>
                     );
-                  } else {
-                    return (
-                      <>
-                        <span className="budget-stat-label">Over budget by</span>
-                        <span className="budget-stat-value over">₹{Math.abs(left).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      </>
-                    );
                   }
+                  return (
+                    <>
+                      <span className="budget-stat-label">Over budget by</span>
+                      <span className="budget-stat-value over">₹{Math.abs(left).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </>
+                  );
                 })()}
               </div>
             </div>
@@ -2762,6 +2757,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         
                         await apiCreateExpense(expenseData);
                         await loadExpenses();
+                        await loadTodayBudgetFromEvents();
                         
                         showToast(`Payment of ₹${paymentAmount.toLocaleString('en-IN')} recorded and added to expenses!`, 'success');
                       } catch (error) {

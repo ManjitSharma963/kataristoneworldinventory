@@ -27,6 +27,31 @@ const stripLeadingZeros = (str) => {
   return out === '' ? '0' : out;
 };
 
+/** Discount field: keep user text (e.g. "0.", "0.10"); digits + one dot + max 2 decimals. */
+const sanitizeDiscountInput = (raw) => {
+  let s = String(raw || '').replace(/[^\d.]/g, '');
+  const firstDot = s.indexOf('.');
+  if (firstDot !== -1) {
+    s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, '');
+    const [whole, frac] = s.split('.');
+    if (frac != null && frac.length > 2) s = `${whole}.${frac.slice(0, 2)}`;
+  }
+  if (s === '') return '';
+  return stripLeadingZeros(s);
+};
+
+/** Parse discount string for totals / API (incomplete "0." → 0 until more digits). */
+const discountInputToNumber = (s) => {
+  if (s === '' || s === null || s === undefined) return 0;
+  const t = String(s).trim();
+  if (t === '.' || t.endsWith('.')) {
+    const n = parseFloat(t.slice(0, -1));
+    return isNaN(n) ? 0 : Math.max(0, n);
+  }
+  const n = parseFloat(t);
+  return isNaN(n) ? 0 : Math.max(0, n);
+};
+
 /** Single source for cart totals (items + tax/discount + charges + advance cap). */
 function computeCartFinancials(
   cart,
@@ -72,10 +97,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [cart, setCart] = useState([]);
   const [cartCount, setCartCount] = useState(0);
   const [taxRate, setTaxRate] = useState(0);
-  const [discountAmount, setDiscountAmount] = useState(() => {
+  const [discountInput, setDiscountInput] = useState(() => {
     const saved = localStorage.getItem('cartDiscountAmount');
-    const n = saved !== null && saved !== '' ? parseFloat(String(saved).replace(/^0+(?=\d)/, '')) : 0;
-    return isNaN(n) ? 0 : n;
+    if (saved === null || saved === '') return '';
+    return sanitizeDiscountInput(saved);
   });
   const [mobileNumber, setMobileNumber] = useState(() => {
     const saved = localStorage.getItem('cartMobileNumber');
@@ -187,8 +212,10 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   }, [taxRate]);
 
   useEffect(() => {
-    localStorage.setItem('cartDiscountAmount', discountAmount.toString());
-  }, [discountAmount]);
+    localStorage.setItem('cartDiscountAmount', discountInput);
+  }, [discountInput]);
+
+  const discountAmountNum = useMemo(() => discountInputToNumber(discountInput), [discountInput]);
 
   useEffect(() => {
     localStorage.setItem('cartMobileNumber', mobileNumber);
@@ -264,7 +291,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       computeCartFinancials(
         cart,
         taxRate,
-        discountAmount,
+        discountAmountNum,
         labourCharge,
         transportationCharge,
         otherExpense,
@@ -273,7 +300,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     [
       cart,
       taxRate,
-      discountAmount,
+      discountAmountNum,
       labourCharge,
       transportationCharge,
       otherExpense,
@@ -571,7 +598,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     const finCo = computeCartFinancials(
       cart,
       taxRate,
-      discountAmount,
+      discountAmountNum,
       labourCharge,
       transportationCharge,
       otherExpense,
@@ -616,7 +643,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       customerEmail: email.trim() || null,
       items: formatCartItemsForBilling(cart),
       taxPercentage: taxRateNum,
-      discountAmount: discountAmount || 0,
+      discountAmount: discountAmountNum,
       totalAmount: totalCheckout,
       labourCharge: labourChargeNum || 0,
       transportationCharge: transportationChargeNum || 0,
@@ -696,7 +723,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       setPincode('');
       setGstin('');
       setTaxRate(0);
-      setDiscountAmount(0);
+      setDiscountInput('');
       setBillType('NON-GST');
       setPayCash('');
       setPayUpi('');
@@ -1204,17 +1231,20 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               <div className="discount-input-wrapper">
                 <input
                   type="text"
-                  inputMode="numeric"
+                  inputMode="decimal"
                   min="0"
-                  value={discountAmount === 0 ? '' : toDisplayNumber(discountAmount, '')}
-                  onChange={(e) => {
-                    const raw = stripLeadingZeros(e.target.value.replace(/\D/g, ''));
-                    setDiscountAmount(raw === '' ? 0 : Math.max(0, parseFloat(raw) || 0));
-                  }}
+                  value={discountInput}
+                  onChange={(e) => setDiscountInput(sanitizeDiscountInput(e.target.value))}
                   className="discount-input"
                   placeholder="0"
                 />
-                <span className="summary-value discount-amount" style={{ color: '#10b981' }}>- ₹ {(discountAmount || 0).toLocaleString('en-IN')}</span>
+                <span className="summary-value discount-amount" style={{ color: '#10b981' }}>
+                  - ₹{' '}
+                  {discountAmountNum.toLocaleString('en-IN', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })}
+                </span>
               </div>
             </div>
           </div>
