@@ -413,6 +413,18 @@ export const getDailyBudgetByDate = async (date) => {
 };
 
 /**
+ * Server-computed remaining + expense totals from daily_budget_events for a date range.
+ * GET /api/budget/daily/summary?from=&to=
+ */
+export const getDailyBudgetCalculatedSummary = async ({ from, to } = {}) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', String(from));
+  if (to) params.set('to', String(to));
+  const qs = params.toString();
+  return await apiCall(`/budget/daily/summary${qs ? `?${qs}` : ''}`, { method: 'GET' });
+};
+
+/**
  * Create daily budget (POST)
  * @param {number} amount - Budget amount per day
  * @returns {Promise<Object>}
@@ -630,6 +642,16 @@ export const deleteBillPayment = async (billId, billType, paymentId) => {
     `/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/payments/${encodeURIComponent(paymentId)}`,
     { method: 'DELETE' }
   );
+};
+
+/**
+ * Soft-delete bill: restore stock, roll back all payments (ledger + in-hand budget), reverse advance usage.
+ * @param {string|number} billId
+ * @param {string} billType - 'GST' or 'NON-GST' (or NON_GST)
+ */
+export const deleteBill = async (billId, billType) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}`, { method: 'DELETE' });
 };
 
 // Authentication API functions

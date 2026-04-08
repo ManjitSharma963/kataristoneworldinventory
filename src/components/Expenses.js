@@ -23,6 +23,7 @@ import {
   fetchAllPayments,
   getDailyBudget as apiGetDailyBudget,
   getDailyBudgetByDate as apiGetDailyBudgetByDate,
+  getDailyBudgetCalculatedSummary as apiGetDailyBudgetCalculatedSummary,
   getDailyBudgetEvents as apiGetDailyBudgetEvents,
   createDailyBudget as apiCreateDailyBudget,
   updateDailyBudget as apiUpdateDailyBudget,
@@ -34,37 +35,6 @@ import { expenseSchema, employeeSchema, salaryPaymentSchema, advancePaymentSchem
 import Loading from './Loading';
 import ConfirmationModal from './ConfirmationModal';
 import './Expenses.css';
-
-const numBudgetEventField = (ev, camel, snake) => {
-  const v = ev[camel] ?? ev[snake];
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
-
-/** `closingBalance` on the newest row in `daily_budget_events` (by createdAt). */
-function latestRemainingFromBudgetEvents(newestFirstRows) {
-  if (!Array.isArray(newestFirstRows) || newestFirstRows.length === 0) return 0;
-  const latest = newestFirstRows[0];
-  return numBudgetEventField(latest, 'closingBalance', 'closing_balance');
-}
-
-/** Net expense today from rows whose event `date` is today (EXPENSE_DEBIT / EXPENSE_CREDIT only). */
-function todayExpenseFromBudgetEvents(list, todayYyyyMmDd) {
-  if (!Array.isArray(list) || !todayYyyyMmDd) return 0;
-  const day = String(todayYyyyMmDd).slice(0, 10);
-  let expenseNet = 0;
-  for (const ev of list) {
-    const d = ev.date ?? ev.event_date;
-    if (d == null) continue;
-    const ds = typeof d === 'string' ? d.slice(0, 10) : String(d).slice(0, 10);
-    if (ds !== day) continue;
-    const type = ev.eventType ?? ev.event_type;
-    if (type === 'EXPENSE_DEBIT' || type === 'EXPENSE_CREDIT') {
-      expenseNet += numBudgetEventField(ev, 'spentAmount', 'spent_amount');
-    }
-  }
-  return Math.max(0, expenseNet);
-}
 
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
   const [expenses, setExpenses] = useState([]);
@@ -124,7 +94,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   // Start with 0 so we always show database value after fetch; never show stale localStorage first
   const [budgetInHand, setBudgetInHand] = useState(0);
-  /** Card "Daily available balance": spent + remaining from `daily_budget_events` only. */
+  /** Card "Daily available balance": GET /budget/daily/summary (server-computed for the date range). */
   const [todayFromEvents, setTodayFromEvents] = useState({ expense: 0, remaining: 0 });
   const [currentPage, setCurrentPage] = useState(1);
   // Default to sorting by date (newest first) for all tabs
@@ -222,21 +192,26 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return Number.isFinite(num) ? Math.max(0, num) : 0;
   };
 
-  const loadDailyBudget = async () => {
-    const todayStr = getLocalDateString(); // YYYY-MM-DD for today
+  /** One backend call: cap (modal), remaining + today's spent (same basis as Reports / Daily Closing). */
+  const loadBudgetState = async () => {
+    const todayStr = getLocalDateString();
     try {
-      // Always fetch from API (by-date) so UI reflects database
-      const res = await apiGetDailyBudgetByDate(todayStr);
-      const amount = getBudgetAmountFromResponse(res);
-      setBudgetInHand(amount);
+      const s = await apiGetDailyBudgetCalculatedSummary({ from: todayStr, to: todayStr });
+      const cap = Number(s?.budgetAmount ?? s?.budget_amount);
+      const spent = Number(s?.spentAmount ?? s?.spent_amount);
+      const rem = Number(s?.remainingAmount ?? s?.remaining_amount);
+      setBudgetInHand(Number.isFinite(cap) ? Math.max(0, cap) : 0);
       setHasDailyBudgetFromApi(true);
-      // Persist so fallback is in sync with database
+      setTodayFromEvents({
+        remaining: Number.isFinite(rem) ? rem : 0,
+        expense: Number.isFinite(spent) ? Math.max(0, spent) : 0,
+      });
       try {
-        localStorage.setItem('expenses_budget_in_hand', String(amount));
+        localStorage.setItem('expenses_budget_in_hand', String(Number.isFinite(cap) ? Math.max(0, cap) : 0));
       } catch (_) {}
     } catch (e) {
       try {
-        const res = await apiGetDailyBudget();
+        const res = await apiGetDailyBudgetByDate(todayStr);
         const amount = getBudgetAmountFromResponse(res);
         setBudgetInHand(amount);
         setHasDailyBudgetFromApi(true);
@@ -245,41 +220,31 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         } catch (_) {}
       } catch (e2) {
         try {
-          const saved = localStorage.getItem('expenses_budget_in_hand');
-          const val = saved !== null && saved !== '' ? Math.max(0, parseFloat(saved) || 0) : 0;
-          setBudgetInHand(val);
-        } catch (err) {
-          setBudgetInHand(0);
+          const res = await apiGetDailyBudget();
+          const amount = getBudgetAmountFromResponse(res);
+          setBudgetInHand(amount);
+          setHasDailyBudgetFromApi(true);
+          try {
+            localStorage.setItem('expenses_budget_in_hand', String(amount));
+          } catch (_) {}
+        } catch (e3) {
+          try {
+            const saved = localStorage.getItem('expenses_budget_in_hand');
+            const val = saved !== null && saved !== '' ? Math.max(0, parseFloat(saved) || 0) : 0;
+            setBudgetInHand(val);
+          } catch (err) {
+            setBudgetInHand(0);
+          }
+          setHasDailyBudgetFromApi(false);
         }
-        setHasDailyBudgetFromApi(false);
       }
-    }
-  };
-
-  const loadTodayBudgetFromEvents = async () => {
-    const todayStr = getLocalDateString();
-    try {
-      // Remaining: newest row in the table (createdAt DESC, limit 1) — not limited to today's event date.
-      // Expense: rows for today only.
-      const [latestGlobal, todayOnly] = await Promise.all([
-        apiGetDailyBudgetEvents({ from: '1900-01-01', to: todayStr, limit: 1 }),
-        apiGetDailyBudgetEvents({ from: todayStr, to: todayStr, limit: 500 }),
-      ]);
-      const latestList = Array.isArray(latestGlobal) ? latestGlobal : [];
-      const todayList = Array.isArray(todayOnly) ? todayOnly : [];
-      setTodayFromEvents({
-        remaining: latestRemainingFromBudgetEvents(latestList),
-        expense: todayExpenseFromBudgetEvents(todayList, todayStr),
-      });
-    } catch (_) {
       setTodayFromEvents({ expense: 0, remaining: 0 });
     }
   };
 
   // Automatically fetch daily budget when user opens the Expenses tab (component mounts)
   useEffect(() => {
-    loadDailyBudget();
-    loadTodayBudgetFromEvents();
+    loadBudgetState();
   }, []);
 
   const loadBudgetHistory = async () => {
@@ -895,7 +860,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       resetForm();
       resetExpense();
       await loadExpenses();
-      await loadTodayBudgetFromEvents();
+      await loadBudgetState();
       await loadPayrollSummary();
       // Notify parent component (Dashboard) to refresh expenses for chart
       if (onExpenseUpdate) {
@@ -957,7 +922,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         try {
           await apiDeleteExpense(id);
           await loadExpenses();
-          await loadTodayBudgetFromEvents();
+          await loadBudgetState();
           showToast('Expense deleted successfully!', 'success');
           // Notify parent component (Dashboard) to refresh expenses for chart
           if (onExpenseUpdate) {
@@ -1171,7 +1136,11 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label>Available Balance per day (₹)</label>
+                <label>Daily budget amount (₹)</label>
+                <p style={{ margin: '4px 0 8px', fontSize: '13px', color: '#666' }}>
+                  This is the budget cap stored for today (same field as Reports). Current remaining in hand:{' '}
+                  <strong>₹{(Number(todayFromEvents.remaining) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                </p>
                 <input
                   type="number"
                   min="0"
@@ -1199,7 +1168,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     setSavingBudget(true);
                     try {
                       await saveDailyBudgetToApi(num);
-                      await loadTodayBudgetFromEvents();
+                      await loadBudgetState();
                       setShowDailyBudgetModal(false);
                       showToast(num > 0 ? `Daily budget set to ₹${num.toLocaleString('en-IN')}` : 'Daily budget cleared.');
                     } catch (err) {
@@ -1263,8 +1232,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           await saveDailyBudgetToApi(num);
                           setEditingBudgetEntryId(null);
                           setEditingBudgetAmount('');
-                          await loadDailyBudget();
-                          await loadTodayBudgetFromEvents();
+                          await loadBudgetState();
                           await loadBudgetHistory();
                           showToast(num > 0 ? `Budget updated to ₹${num.toLocaleString('en-IN')}` : 'Budget cleared.');
                         } catch (err) {
@@ -2757,7 +2725,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         
                         await apiCreateExpense(expenseData);
                         await loadExpenses();
-                        await loadTodayBudgetFromEvents();
+                        await loadBudgetState();
                         
                         showToast(`Payment of ₹${paymentAmount.toLocaleString('en-IN')} recorded and added to expenses!`, 'success');
                       } catch (error) {

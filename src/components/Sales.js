@@ -5,7 +5,8 @@ import {
   downloadBillPDF,
   fetchSalesPaymentModeSummary,
   addBillPayment,
-  deleteBillPayment
+  deleteBillPayment,
+  deleteBill
 } from '../utils/api';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
@@ -411,6 +412,30 @@ const Sales = () => {
       closeBillPopup();
     } catch (e) {
       setToast({ message: e?.message || 'Payment could not be deleted.', type: 'error' });
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  };
+
+  const handleDeleteBill = async () => {
+    if (!selectedBill?.id || !selectedBill?.billType) return;
+    const ok = window.confirm(
+      'Delete this entire bill?\n\n' +
+        'This will:\n' +
+        '• Put all line-item quantities back into inventory\n' +
+        '• Remove all payments (paid, partial, or pending) and reverse cash/UPI effects on daily budget\n' +
+        '• Restore any customer advance used on this bill\n\n' +
+        'The bill will be cancelled and hidden from sales lists. This cannot be undone from the app.'
+    );
+    if (!ok) return;
+    try {
+      setPaymentSubmitting(true);
+      await deleteBill(selectedBill.id, selectedBill.billType);
+      await loadData();
+      setToast({ message: 'Bill deleted; stock and payments were rolled back.', type: 'success' });
+      closeBillPopup();
+    } catch (e) {
+      setToast({ message: e?.message || 'Bill could not be deleted.', type: 'error' });
     } finally {
       setPaymentSubmitting(false);
     }
@@ -830,6 +855,27 @@ const Sales = () => {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
+              </p>
+            </div>
+
+            <div
+              style={{
+                marginTop: '24px',
+                paddingTop: '16px',
+                borderTop: '1px solid #e2e8f0',
+              }}
+            >
+              <p style={{ margin: '0 0 8px', fontWeight: 600, color: '#b91c1c' }}>Danger zone</p>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={paymentSubmitting}
+                onClick={handleDeleteBill}
+              >
+                {paymentSubmitting ? 'Working…' : 'Delete entire bill'}
+              </button>
+              <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#64748b', maxWidth: '520px' }}>
+                Cancels the bill and rolls back inventory and all payments (any status).
               </p>
             </div>
           </div>

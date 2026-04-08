@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { fetchDailyClosingReport, downloadBillPDF, getDailyBudgetEvents } from '../utils/api';
+import { fetchDailyClosingReport, downloadBillPDF, getDailyBudgetEvents, getDailyBudgetCalculatedSummary } from '../utils/api';
 import Loading from './Loading';
 import './Reports.css';
 import jsPDF from 'jspdf';
@@ -87,7 +87,9 @@ function buildDailyClosingPdf({
   dateTo,
   openingBudget,
   budgetEvents,
-  pdfFonts
+  pdfFonts,
+  /** When one day: server summary so PDF matches Expenses / daily_budget. */
+  singleDayBudgetSync = null
 }) {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   if (pdfFonts) {
@@ -179,8 +181,12 @@ function buildDailyClosingPdf({
   const totalExpenses = Number(closingData?.totalExpenses) || 0;
   const cashUpiCollected = cash + upi;
   const cashInHandDelta = Number(resolveInHand(closingData)) || 0;
-  const opening = Number(openingBudget) || 0;
-  const closing = opening + cashInHandDelta;
+  const oneDay = dateFrom === dateTo;
+  const sync = oneDay && singleDayBudgetSync && typeof singleDayBudgetSync === 'object' ? singleDayBudgetSync : null;
+  const openingSync = sync != null ? Number(sync.openingBalanceForDay ?? sync.opening_balance) : NaN;
+  const closingSync = sync != null ? Number(sync.remainingAmount ?? sync.remaining_amount) : NaN;
+  const opening = Number.isFinite(openingSync) ? openingSync : (Number(openingBudget) || 0);
+  const closing = Number.isFinite(closingSync) ? closingSync : (opening + cashInHandDelta);
   const efficiency = totalSales > 0 ? (totalCollected / totalSales) * 100 : 0;
 
   // Header band
@@ -590,6 +596,8 @@ const Reports = () => {
   const [closingErrorRequestId, setClosingErrorRequestId] = useState('');
   const [fetchedRange, setFetchedRange] = useState(null);
   const [openingBudget, setOpeningBudget] = useState(0);
+  /** Single-day only: GET /budget/daily/summary — aligns Expenses card + report + daily_budget. */
+  const [budgetSummarySync, setBudgetSummarySync] = useState(null);
   const [budgetEvents, setBudgetEvents] = useState([]);
   const [expensesPage, setExpensesPage] = useState(1);
   const [billsPage, setBillsPage] = useState(1);
@@ -622,6 +630,22 @@ const Reports = () => {
         setOpeningBudget(0);
       }
 
+      // Same source of truth as Expenses page (DailyBudgetService summary).
+      if (from === to) {
+        try {
+          const sync = await getDailyBudgetCalculatedSummary({ from, to: from });
+          setBudgetSummarySync(sync);
+          const obSync = Number(sync?.openingBalanceForDay ?? sync?.opening_balance);
+          if (Number.isFinite(obSync)) {
+            setOpeningBudget(obSync);
+          }
+        } catch (e) {
+          setBudgetSummarySync(null);
+        }
+      } else {
+        setBudgetSummarySync(null);
+      }
+
       // Budget history for selected date range (for PDF and quick reconciliation).
       try {
         const events = await getDailyBudgetEvents({ from, to, limit: 1000 });
@@ -650,11 +674,12 @@ const Reports = () => {
         dateTo,
         openingBudget,
         budgetEvents,
-        pdfFonts: fonts
+        pdfFonts: fonts,
+        singleDayBudgetSync: dateFrom === dateTo ? budgetSummarySync : null
       });
       doc.save(`daily-closing_${dateFrom}_${dateTo}.pdf`);
     })();
-  }, [closingData, dateFrom, dateTo, openingBudget, budgetEvents]);
+  }, [closingData, dateFrom, dateTo, openingBudget, budgetEvents, budgetSummarySync]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {
@@ -697,6 +722,15 @@ const Reports = () => {
     const start = (billsPageSafe - 1) * PAGE_SIZE;
     return billsRows.slice(start, start + PAGE_SIZE);
   }, [billsRows, billsPageSafe]);
+
+  /** Single day: same as GET /budget/daily/summary (Expenses page). Range: opening + net in-hand from closing report. */
+  const finalBudgetInHand = useMemo(() => {
+    if (!isRange && budgetSummarySync != null) {
+      const r = Number(budgetSummarySync?.remainingAmount ?? budgetSummarySync?.remaining_amount);
+      if (Number.isFinite(r)) return r;
+    }
+    return (Number(openingBudget) || 0) + resolveInHand(closingData);
+  }, [isRange, budgetSummarySync, openingBudget, closingData]);
 
   const onChangeFrom = (e) => {
     const v = e.target.value;
@@ -1085,22 +1119,26 @@ const Reports = () => {
                 <span>Total expenses {isRange ? 'in period' : '(today)'}</span>
                 <span className="report-value negative">{money(closingData.totalExpenses)}</span>
               </div>
-                {(() => {
-                  const finalBudgetInHand = openingBudget + resolveInHand(closingData);
-                  return (
-                    <div
-                      className={`report-row report-row-strong cash-final ${
-                        finalBudgetInHand < 0 ? 'negative' : 'positive'
-                      }`}
-                    >
-                      <span>Final budget in hand {isRange ? '(period)' : ''}</span>
-                      <span className="report-value">{money(finalBudgetInHand)}</span>
-                    </div>
-                  );
-                })()}
+                <div
+                  className={`report-row report-row-strong cash-final ${
+                    finalBudgetInHand < 0 ? 'negative' : 'positive'
+                  }`}
+                >
+                  <span>Final budget in hand {isRange ? '(period)' : ''}</span>
+                  <span className="report-value">{money(finalBudgetInHand)}</span>
+                </div>
               <p className="report-muted daily-microcopy">
-                <strong>Cash + UPI collected</strong> in the selected {isRange ? 'range' : 'day'} minus{' '}
-                <strong>expenses posted</strong> in the same {isRange ? 'range' : 'day'}. Bank/Cheque are not in this number.
+                {isRange ? (
+                  <>
+                    <strong>Cash + UPI collected</strong> in the selected range minus{' '}
+                    <strong>expenses posted</strong> in the same range. Bank/Cheque are not in this number.
+                  </>
+                ) : (
+                  <>
+                    For a single day, <strong>opening</strong> and <strong>final</strong> match the daily budget ledger (same as the Expenses page).{' '}
+                    Cash + UPI above is for reference; collections also feed the budget through the server.
+                  </>
+                )}
               </p>
             </div>
           </div>
