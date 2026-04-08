@@ -192,11 +192,19 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return Number.isFinite(num) ? Math.max(0, num) : 0;
   };
 
+  const unwrapApiPayload = (x) => {
+    if (x != null && typeof x === 'object' && x.data != null && typeof x.data === 'object' && !Array.isArray(x.data)) {
+      return x.data;
+    }
+    return x;
+  };
+
   /** One backend call: cap (modal), remaining + today's spent (same basis as Reports / Daily Closing). */
   const loadBudgetState = async () => {
     const todayStr = getLocalDateString();
     try {
-      const s = await apiGetDailyBudgetCalculatedSummary({ from: todayStr, to: todayStr });
+      const raw = await apiGetDailyBudgetCalculatedSummary({ from: todayStr, to: todayStr });
+      const s = unwrapApiPayload(raw);
       const cap = Number(s?.budgetAmount ?? s?.budget_amount);
       const spent = Number(s?.spentAmount ?? s?.spent_amount);
       const rem = Number(s?.remainingAmount ?? s?.remaining_amount);
@@ -211,19 +219,35 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       } catch (_) {}
     } catch (e) {
       try {
-        const res = await apiGetDailyBudgetByDate(todayStr);
+        const resRaw = await apiGetDailyBudgetByDate(todayStr);
+        const res = unwrapApiPayload(resRaw);
         const amount = getBudgetAmountFromResponse(res);
+        const remFallback = Number(res?.remainingAmount ?? res?.remaining_amount);
         setBudgetInHand(amount);
         setHasDailyBudgetFromApi(true);
+        setTodayFromEvents({
+          remaining: Number.isFinite(remFallback) ? remFallback : 0,
+          expense: Number.isFinite(Number(res?.spentAmount ?? res?.spent_amount))
+            ? Math.max(0, Number(res.spentAmount ?? res.spent_amount))
+            : 0,
+        });
         try {
           localStorage.setItem('expenses_budget_in_hand', String(amount));
         } catch (_) {}
       } catch (e2) {
         try {
-          const res = await apiGetDailyBudget();
+          const resRaw = await apiGetDailyBudget();
+          const res = unwrapApiPayload(resRaw);
           const amount = getBudgetAmountFromResponse(res);
+          const remF = Number(res?.remainingAmount ?? res?.remaining_amount);
           setBudgetInHand(amount);
           setHasDailyBudgetFromApi(true);
+          setTodayFromEvents({
+            remaining: Number.isFinite(remF) ? remF : 0,
+            expense: Number.isFinite(Number(res?.spentAmount ?? res?.spent_amount))
+              ? Math.max(0, Number(res.spentAmount ?? res.spent_amount))
+              : 0,
+          });
           try {
             localStorage.setItem('expenses_budget_in_hand', String(amount));
           } catch (_) {}
@@ -236,9 +260,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             setBudgetInHand(0);
           }
           setHasDailyBudgetFromApi(false);
+          setTodayFromEvents({ expense: 0, remaining: 0 });
         }
       }
-      setTodayFromEvents({ expense: 0, remaining: 0 });
     }
   };
 
