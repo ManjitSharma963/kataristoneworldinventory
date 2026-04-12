@@ -5,6 +5,7 @@ import {
   handleApiResponse,
   getInventoryEndpoint,
   fetchInventoryHistory,
+  fetchStockAsOf,
   fetchProductById,
   fetchProductChangeHistory,
   updateInventoryProduct,
@@ -97,6 +98,11 @@ function formatActionLabel(action) {
   if (u === 'UPDATE') return 'Update';
   if (u === 'ADJUST') return 'Adjust';
   return action;
+}
+
+function localTodayYMD() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function productToFormData(p) {
@@ -280,6 +286,14 @@ const InventoryItemsPage = () => {
   /** On-hand qty when update form loaded; saved total = baseline + stock_quantity_to_add */
   const [updateStockBaseline, setUpdateStockBaseline] = useState(null);
 
+  const [stockHistoryEndDate, setStockHistoryEndDate] = useState(() => localTodayYMD());
+  const [stockHistoryStartDate, setStockHistoryStartDate] = useState('');
+  const [stockAsOfActive, setStockAsOfActive] = useState(false);
+  const [stockAsOfById, setStockAsOfById] = useState({});
+  const [stockAsOfRangeEnd, setStockAsOfRangeEnd] = useState('');
+  const [stockAsOfRangeStart, setStockAsOfRangeStart] = useState(null);
+  const [stockAsOfLoading, setStockAsOfLoading] = useState(false);
+
   const updatePricingFormData = useMemo(
     () => ({
       ...updateFormData,
@@ -441,6 +455,51 @@ const InventoryItemsPage = () => {
       setHistoryLoading(false);
       setProductChangeLoading(false);
     }
+  }, []);
+
+  const applyStockAsOf = useCallback(async () => {
+    const end = String(stockHistoryEndDate || '').trim();
+    if (!end) {
+      window.alert('Choose an end date (stock is computed at the end of that day).');
+      return;
+    }
+    const start = String(stockHistoryStartDate || '').trim();
+    if (start && start > end) {
+      window.alert('Start date cannot be after end date.');
+      return;
+    }
+    setStockAsOfLoading(true);
+    try {
+      const res = await fetchStockAsOf({ endDate: end, startDate: start || undefined });
+      const map = {};
+      const rows = Array.isArray(res?.rows) ? res.rows : [];
+      for (const row of rows) {
+        if (row.productId != null) {
+          map[String(row.productId)] = {
+            quantityAtEnd: row.quantityAtEnd != null ? Number(row.quantityAtEnd) : null,
+            quantityAtStart: row.quantityAtStart != null ? Number(row.quantityAtStart) : null
+          };
+        }
+      }
+      setStockAsOfById(map);
+      setStockAsOfRangeEnd(res?.rangeEnd || end);
+      setStockAsOfRangeStart(res?.rangeStart ?? (start || null));
+      setStockAsOfActive(true);
+      setCurrentPage(1);
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not load historical stock.');
+    } finally {
+      setStockAsOfLoading(false);
+    }
+  }, [stockHistoryEndDate, stockHistoryStartDate]);
+
+  const clearStockAsOf = useCallback(() => {
+    setStockAsOfActive(false);
+    setStockAsOfById({});
+    setStockAsOfRangeEnd('');
+    setStockAsOfRangeStart(null);
+    setCurrentPage(1);
   }, []);
 
   const openProductDetail = (item) => {
@@ -763,7 +822,7 @@ const InventoryItemsPage = () => {
   };
 
   let filteredInventory = useMemo(() => {
-    let list = inventory.filter(item => {
+    let list = inventory.filter((item) => {
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase().trim();
       const name = item.name?.toLowerCase() || '';
@@ -771,6 +830,11 @@ const InventoryItemsPage = () => {
       const color = (item.color || '').toLowerCase();
       const priceStr = (item.pricePerSqft ?? item.price_per_sqft ?? item.pricePerUnit ?? item.unitPrice ?? 0).toString();
       const stockStr = (item.totalSqftStock ?? item.total_sqft_stock ?? item.quantity ?? 0).toString();
+      const hist = stockAsOfById[String(item.id)];
+      const histEndStr =
+        stockAsOfActive && hist?.quantityAtEnd != null ? String(hist.quantityAtEnd) : '';
+      const histStartStr =
+        stockAsOfActive && hist?.quantityAtStart != null ? String(hist.quantityAtStart) : '';
       const slug = (item.slug || '').toLowerCase();
       const supplier = (item.supplierName || item.supplier_name || '').toLowerCase();
       const dealer = (item.dealerName || item.dealer_name || '').toLowerCase();
@@ -780,6 +844,8 @@ const InventoryItemsPage = () => {
         color.includes(q) ||
         priceStr.includes(q) ||
         stockStr.includes(q) ||
+        histEndStr.includes(q) ||
+        histStartStr.includes(q) ||
         slug.includes(q) ||
         supplier.includes(q) ||
         dealer.includes(q)
@@ -798,6 +864,16 @@ const InventoryItemsPage = () => {
         } else if (sortConfig.key === 'totalSqftStock') {
           aVal = a.totalSqftStock ?? a.total_sqft_stock ?? 0;
           bVal = b.totalSqftStock ?? b.total_sqft_stock ?? 0;
+        } else if (sortConfig.key === 'stockAsOfEnd') {
+          aVal = stockAsOfById[String(a.id)]?.quantityAtEnd;
+          bVal = stockAsOfById[String(b.id)]?.quantityAtEnd;
+          aVal = aVal != null ? aVal : -1;
+          bVal = bVal != null ? bVal : -1;
+        } else if (sortConfig.key === 'stockAsOfStart') {
+          aVal = stockAsOfById[String(a.id)]?.quantityAtStart;
+          bVal = stockAsOfById[String(b.id)]?.quantityAtStart;
+          aVal = aVal != null ? aVal : -1;
+          bVal = bVal != null ? bVal : -1;
         } else if (sortConfig.key === 'name') {
           aVal = (a.name || '').toLowerCase();
           bVal = (b.name || '').toLowerCase();
@@ -809,7 +885,13 @@ const InventoryItemsPage = () => {
       });
     }
     return list;
-  }, [inventory, searchQuery, sortConfig]);
+  }, [
+    inventory,
+    searchQuery,
+    sortConfig,
+    stockAsOfActive,
+    stockAsOfById
+  ]);
 
   const totalPages = Math.ceil(filteredInventory.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
@@ -817,24 +899,53 @@ const InventoryItemsPage = () => {
 
   const totalValueSum = useMemo(() => {
     return filteredInventory.reduce((sum, item) => {
-      const stock = item.totalSqftStock ?? item.total_sqft_stock ?? item.quantity ?? 0;
-      return sum + (stock * getPricePerUnitAfter(item));
+      let stock = item.totalSqftStock ?? item.total_sqft_stock ?? item.quantity ?? 0;
+      if (stockAsOfActive) {
+        const row = stockAsOfById[String(item.id)];
+        stock = row?.quantityAtEnd != null ? row.quantityAtEnd : 0;
+      }
+      return sum + (Number(stock) || 0) * getPricePerUnitAfter(item);
     }, 0);
-  }, [filteredInventory]);
+  }, [filteredInventory, stockAsOfActive, stockAsOfById]);
 
   const handleExportCSV = () => {
-    const headers = ['Product Name', 'Product Type', 'Price/Unit (after expenses)', 'Quantity/Stock', 'Color', 'Total Value'];
-    const csvData = filteredInventory.map(item => {
+    const hist = stockAsOfActive;
+    const startLabel = hist && stockAsOfRangeStart ? `Quantity as of ${stockAsOfRangeStart}` : null;
+    const headers = [
+      'Product Name',
+      'Product Type',
+      'Price/Unit (after expenses)',
+      ...(hist && startLabel ? [startLabel] : []),
+      ...(hist ? [`Quantity as of ${stockAsOfRangeEnd || stockHistoryEndDate}`] : []),
+      ...(hist ? ['Quantity (current)'] : []),
+      ...(!hist ? ['Quantity/Stock'] : []),
+      'Color',
+      'Total Value'
+    ];
+    const csvData = filteredInventory.map((item) => {
       const pricePerUnitAfter = getPricePerUnitAfter(item);
-      const totalSqftStock = item.totalSqftStock ?? item.total_sqft_stock ?? item.quantity ?? 0;
-      return {
+      const currentStock = item.totalSqftStock ?? item.total_sqft_stock ?? item.quantity ?? 0;
+      const row = stockAsOfById[String(item.id)];
+      const qEnd = hist ? row?.quantityAtEnd : null;
+      const qStart = hist ? row?.quantityAtStart : null;
+      const stockForValue = hist && qEnd != null ? qEnd : currentStock;
+      const base = {
         'Product Name': item.name || '',
         'Product Type': item.productType || item.product_type || '',
         'Price/Unit (after expenses)': pricePerUnitAfter,
-        'Quantity/Stock': totalSqftStock,
-        'Color': item.color || '',
-        'Total Value': pricePerUnitAfter * totalSqftStock
+        Color: item.color || '',
+        'Total Value': pricePerUnitAfter * (Number(stockForValue) || 0)
       };
+      if (hist) {
+        if (startLabel) {
+          base[startLabel] = qStart != null ? qStart : '';
+        }
+        base[`Quantity as of ${stockAsOfRangeEnd || stockHistoryEndDate}`] = qEnd != null ? qEnd : '';
+        base['Quantity (current)'] = currentStock;
+        return base;
+      }
+      base['Quantity/Stock'] = currentStock;
+      return base;
     });
     exportToCSV(csvData, `inventory_items_${new Date().toISOString().split('T')[0]}.csv`, headers);
   };
@@ -859,7 +970,12 @@ const InventoryItemsPage = () => {
           {filteredInventory.length > 0 && (
             <>
               <div className="section-summary">
-                <span className="summary-item">Total Value: ₹{totalValueSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="summary-item">
+                  {stockAsOfActive
+                    ? `Total value (qty as of ${stockAsOfRangeEnd}): `
+                    : 'Total Value: '}
+                  ₹{totalValueSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
               </div>
               <button type="button" className="btn btn-export" onClick={handleExportCSV} title="Export to CSV">📥 Export CSV</button>
             </>
@@ -898,6 +1014,46 @@ const InventoryItemsPage = () => {
         </div>
       )}
 
+      {inventory.length > 0 && (
+        <div className="inventory-stock-asof-panel">
+          <div className="inventory-stock-asof-row">
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: '#475569' }}>Start</label>
+              <input
+                type="date"
+                value={stockHistoryStartDate}
+                onChange={(e) => setStockHistoryStartDate(e.target.value)}
+                disabled={stockAsOfLoading}
+                style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+              />
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: '#475569' }}>End</label>
+              <input
+                type="date"
+                value={stockHistoryEndDate}
+                onChange={(e) => setStockHistoryEndDate(e.target.value)}
+                disabled={stockAsOfLoading}
+                style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+              />
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => applyStockAsOf()}
+              disabled={stockAsOfLoading}
+            >
+              {stockAsOfLoading ? 'Loading…' : 'Apply'}
+            </button>
+            {stockAsOfActive && (
+              <button type="button" className="btn btn-secondary" onClick={() => clearStockAsOf()}>
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="section-content">
         {inventory.length === 0 ? (
           <div className="empty-state-wrapper">
@@ -921,7 +1077,32 @@ const InventoryItemsPage = () => {
                     <th className="sortable" onClick={() => handleSort('name')}>Product Name{sortConfig.key === 'name' && (sortConfig.direction === 'asc' ? ' ↑' : ' ↓')}</th>
                     <th className="sortable" onClick={() => handleSort('productType')}>Product Type{sortConfig.key === 'productType' && (sortConfig.direction === 'asc' ? ' ↑' : ' ↓')}</th>
                     <th className="sortable" onClick={() => handleSort('pricePerSqft')} title="Per unit after expenses">Price/Unit (after expenses){sortConfig.key === 'pricePerSqft' && (sortConfig.direction === 'asc' ? ' ↑' : ' ↓')}</th>
-                    <th className="sortable" onClick={() => handleSort('totalSqftStock')}>Quantity/Stock{sortConfig.key === 'totalSqftStock' && (sortConfig.direction === 'asc' ? ' ↑' : ' ↓')}</th>
+                    {stockAsOfActive && stockAsOfRangeStart ? (
+                      <th
+                        className="sortable"
+                        title={`End of ${stockAsOfRangeStart}`}
+                        onClick={() => handleSort('stockAsOfStart')}
+                      >
+                        Qty (start){sortConfig.key === 'stockAsOfStart' && (sortConfig.direction === 'asc' ? ' ↑' : ' ↓')}
+                      </th>
+                    ) : null}
+                    {stockAsOfActive ? (
+                      <th
+                        className="sortable"
+                        title={`End of ${stockAsOfRangeEnd || stockHistoryEndDate}`}
+                        onClick={() => handleSort('stockAsOfEnd')}
+                      >
+                        Qty (end){sortConfig.key === 'stockAsOfEnd' && (sortConfig.direction === 'asc' ? ' ↑' : ' ↓')}
+                      </th>
+                    ) : null}
+                    <th
+                      className="sortable"
+                      onClick={() => handleSort('totalSqftStock')}
+                      title={stockAsOfActive ? 'Current on-hand quantity' : undefined}
+                    >
+                      {stockAsOfActive ? 'Qty (now)' : 'Quantity/Stock'}
+                      {sortConfig.key === 'totalSqftStock' && (sortConfig.direction === 'asc' ? ' ↑' : ' ↓')}
+                    </th>
                     <th>Color</th>
                     <th className="total-col">Total Value</th>
                     <th>Actions</th>
@@ -931,10 +1112,20 @@ const InventoryItemsPage = () => {
                   {paginatedItems.map((item, index) => {
                     const pricePerUnitAfter = getPricePerUnitAfter(item);
                     const totalSqftStock = item.totalSqftStock ?? item.total_sqft_stock ?? item.quantity ?? 0;
+                    const asof = stockAsOfById[String(item.id)];
+                    const qEnd = asof?.quantityAtEnd;
+                    const qStart = asof?.quantityAtStart;
+                    const stockForValue = stockAsOfActive && qEnd != null ? qEnd : totalSqftStock;
                     const productType = item.productType || item.product_type || item.category || '-';
                     const primaryImageUrl = item.primaryImageUrl || item.primary_image_url;
-                    const totalValue = totalSqftStock * pricePerUnitAfter;
-                    const isLowStock = totalSqftStock < 10;
+                    const totalValue = (Number(stockForValue) || 0) * pricePerUnitAfter;
+                    const isLowStock = stockAsOfActive
+                      ? qEnd != null && qEnd < 10
+                      : totalSqftStock < 10;
+                    const fmtQty = (v) =>
+                      v == null
+                        ? '—'
+                        : Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                     return (
                       <tr
                         key={`inv-${item.id ?? index}`}
@@ -960,9 +1151,23 @@ const InventoryItemsPage = () => {
                         </td>
                         <td><span className="product-type-badge">{productType}</span></td>
                         <td className="amount-cell">₹{pricePerUnitAfter.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        <td className={isLowStock ? 'low-stock-cell' : 'stock-cell'}>
-                          {isLowStock && <span className="low-stock-indicator">⚠️ </span>}
-                          {totalSqftStock.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {stockAsOfActive && stockAsOfRangeStart ? (
+                          <td className="stock-cell" title={`Stock at end of ${stockAsOfRangeStart}`}>
+                            {fmtQty(qStart)}
+                          </td>
+                        ) : null}
+                        {stockAsOfActive ? (
+                          <td
+                            className={qEnd != null && qEnd < 10 ? 'low-stock-cell' : 'stock-cell'}
+                            title={`Stock at end of ${stockAsOfRangeEnd || stockHistoryEndDate}`}
+                          >
+                            {qEnd != null && qEnd < 10 && <span className="low-stock-indicator">⚠️ </span>}
+                            {fmtQty(qEnd)}
+                          </td>
+                        ) : null}
+                        <td className={!stockAsOfActive && isLowStock ? 'low-stock-cell' : 'stock-cell'}>
+                          {!stockAsOfActive && isLowStock && <span className="low-stock-indicator">⚠️ </span>}
+                          {Number(totalSqftStock).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td>{item.color ? <span className="color-badge">{item.color}</span> : '-'}</td>
                         <td className="total-cell total-col"><span className="total-amount">₹{totalValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></td>

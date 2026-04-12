@@ -7,10 +7,11 @@
 
 .inventory-items-tab-list {
   display: flex;
-  gap: 4px;
+  gap: 12px;
   border-bottom: 2px solid #e0e0e0;
   background: #f0f2f5;
-  padding: 8px 12px 0 12px;
+  padding: 10px 16px 0 16px;
+  margin-bottom: 4px;
   flex-shrink: 0;
   min-height: 48px;
   align-items: flex-end;
@@ -56,6 +57,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  padding: 12px 0 20px;
 }
 
 .inventory-items-panel[hidden] {

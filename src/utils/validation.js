@@ -20,7 +20,8 @@ export const expenseSchema = yup.object().shape({
   paymentMethod: yup
     .string()
     .required('Payment method is required')
-    .oneOf(['cash', 'card', 'bank', 'upi', 'other'], 'Invalid payment method')
+    .oneOf(['cash', 'card', 'bank', 'upi', 'other'], 'Invalid payment method'),
+  lenderId: yup.string().nullable(),
 });
 
 // Employee Form Validation Schema

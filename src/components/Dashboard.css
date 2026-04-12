@@ -1756,6 +1756,39 @@
   margin-bottom: 20px;
 }
 
+/* Inventory page vertical rhythm (search → date row → table) */
+.inventory-section .section-header-enhanced {
+  margin-bottom: 22px;
+}
+
+.inventory-section .search-section {
+  margin-bottom: 22px;
+}
+
+.inventory-stock-asof-panel {
+  margin-top: 8px;
+  margin-bottom: 28px;
+  padding: 0 0 0 20px;
+  background: transparent;
+  max-width: 960px;
+}
+
+.inventory-stock-asof-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.inventory-stock-asof-row .form-group label {
+  margin-bottom: 6px;
+}
+
+.inventory-table.data-table th,
+.inventory-table.data-table td {
+  padding: 16px 14px;
+}
+
 .search-wrapper {
   position: relative;
   display: flex;
@@ -2010,6 +2043,29 @@
 .low-stock-indicator {
   font-size: 14px;
   margin-right: 4px;
+}
+
+/*
+ * Inventory grid: extra columns (historical Qty start/end/now) compete for width.
+ * Without a floor on the product column, word-break:break-word on .product-name-cell lets
+ * the browser shrink that column to a few characters wide.
+ */
+.inventory-table {
+  min-width: 1140px;
+  table-layout: auto;
+}
+
+.inventory-table .product-name-cell {
+  min-width: 13.5rem;
+  max-width: 26rem;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.inventory-table .product-name-cell .product-name {
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .inventory-table tbody tr {
@@ -2984,6 +3040,20 @@
     margin-bottom: 15px;
   }
 
+  .inventory-section .search-section {
+    margin-bottom: 18px;
+  }
+
+  .inventory-stock-asof-panel {
+    margin-top: 4px;
+    margin-bottom: 24px;
+    padding-left: 14px;
+  }
+
+  .inventory-stock-asof-row {
+    gap: 14px;
+  }
+
   .search-wrapper {
     width: 100%;
   }
@@ -3016,7 +3086,7 @@
     background: #e0e5ec;
     border-radius: 16px;
     padding: 16px;
-    margin-bottom: 12px;
+    margin-bottom: 18px;
     box-shadow: 
       6px 6px 12px rgba(163, 177, 198, 0.7),
       -6px -6px 12px rgba(255, 255, 255, 0.8),

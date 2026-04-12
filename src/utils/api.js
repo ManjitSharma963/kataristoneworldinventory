@@ -425,6 +425,42 @@ export const getDailyBudgetCalculatedSummary = async ({ from, to } = {}) => {
 };
 
 /**
+ * Record cash borrowed (market / financier / personal). Increases today's available balance.
+ * Repay via Add Expense → category "Loan repayment".
+ */
+export const recordLoanReceipt = async ({ amount, lenderId, lenderName, notes, paymentMode } = {}) => {
+  const body = { amount: Number(amount) };
+  if (lenderId != null && lenderId !== '' && Number.isFinite(Number(lenderId))) {
+    body.lenderId = Number(lenderId);
+  }
+  if (paymentMode != null && String(paymentMode).trim() !== '') {
+    body.paymentMode = String(paymentMode).trim();
+  }
+  if (lenderName != null && String(lenderName).trim() !== '') {
+    body.lenderName = String(lenderName).trim();
+  }
+  if (notes != null && String(notes).trim() !== '') {
+    body.notes = String(notes).trim();
+  }
+  return await apiCall('/budget/daily/loan-receipt', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+};
+
+/** Lenders with borrowed / repaid / outstanding (location from JWT). */
+export const fetchLoanLenders = async () => {
+  const res = await apiCall('/loans/lenders', { method: 'GET' });
+  return Array.isArray(res) ? res : [];
+};
+
+/** Full RECEIPT + REPAYMENT history for one lender. */
+export const fetchLoanLenderLedger = async (lenderId) => {
+  const res = await apiCall(`/loans/lenders/${lenderId}/ledger`, { method: 'GET' });
+  return Array.isArray(res) ? res : [];
+};
+
+/**
  * Create daily budget (POST)
  * @param {number} amount - Budget amount per day
  * @returns {Promise<Object>}
@@ -571,6 +607,27 @@ export const updateInventoryStock = async ({ productId, newQuantity, notes }) =>
 /** Stock audit trail for a product (newest first). */
 export const fetchInventoryHistory = async (productId) => {
   return await apiCall(`/inventory/history/${productId}`, { method: 'GET' });
+};
+
+/** Stock audit trail across all products for your location (newest first). */
+export const fetchInventoryHistoryAll = async ({ from, to, actionType, limit } = {}) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', String(from));
+  if (to) params.set('to', String(to));
+  if (actionType) params.set('actionType', String(actionType));
+  if (limit != null) params.set('limit', String(limit));
+  const qs = params.toString();
+  return await apiCall(`/inventory/history${qs ? `?${qs}` : ''}`, { method: 'GET' });
+};
+
+/**
+ * Reconstructed stock at end of endDate (and optionally startDate) from inventory_history. See response.explanation.
+ */
+export const fetchStockAsOf = async ({ endDate, startDate } = {}) => {
+  const params = new URLSearchParams();
+  if (endDate) params.set('endDate', String(endDate));
+  if (startDate) params.set('startDate', String(startDate));
+  return await apiCall(`/inventory/stock-as-of?${params.toString()}`, { method: 'GET' });
 };
 
 export const fetchDailyClosingReport = async ({ date, dateTo, backfillLegacy = false }) => {

@@ -193,7 +193,7 @@ const WebsiteItemsPage = () => {
           </div>
         ) : (
           <div className="sales-table-wrapper">
-            <table className="data-table inventory-table website-items-table">
+            <table className="data-table website-items-table">
               <thead>
                 <tr>
                   <th>Product name</th>

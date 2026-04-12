@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 // Note: localStorage functions are no longer used - all data comes from API
 // Keeping imports for potential future use or reference, but not actively used
 import { getExpenses, addExpense, updateExpense, deleteExpense, getEmployees, addEmployee, updateEmployee, deleteEmployee } from '../utils/storage';
@@ -25,16 +25,59 @@ import {
   getDailyBudgetByDate as apiGetDailyBudgetByDate,
   getDailyBudgetCalculatedSummary as apiGetDailyBudgetCalculatedSummary,
   getDailyBudgetEvents as apiGetDailyBudgetEvents,
+  recordLoanReceipt as apiRecordLoanReceipt,
+  fetchLoanLenders as apiFetchLoanLenders,
+  fetchLoanLenderLedger as apiFetchLoanLenderLedger,
   createDailyBudget as apiCreateDailyBudget,
   updateDailyBudget as apiUpdateDailyBudget,
-  deleteDailyBudget as apiDeleteDailyBudget
+  deleteDailyBudget as apiDeleteDailyBudget,
+  fetchSuppliers as apiFetchSuppliers
 } from '../utils/api';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import { expenseSchema, employeeSchema, salaryPaymentSchema, advancePaymentSchema, clientPurchaseSchema, clientPaymentSchema } from '../utils/validation';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import Loading from './Loading';
 import ConfirmationModal from './ConfirmationModal';
 import './Expenses.css';
+
+/** Payment-channel bucket shown in budget history “Source” column. */
+const BUDGET_SOURCE_CASH_UPI = 'Cash + UPI';
+const BUDGET_SOURCE_BANK = 'Bank + card + cheque';
+
+/**
+ * Channel for a daily_budget_events row. Today all persisted events are in-hand (cash/UPI).
+ * Reserve BANK_* (or similar) for a future split if those ever post here.
+ */
+function budgetHistorySourceChannel(entry) {
+  const raw = entry?.eventType ?? entry?.event_type ?? '';
+  const code = String(raw).trim().toUpperCase();
+  if (code.startsWith('BANK_')) return BUDGET_SOURCE_BANK;
+  return BUDGET_SOURCE_CASH_UPI;
+}
+
+/** What happened (detail); channel is shown separately as Source. */
+function formatBudgetHistoryDetail(entry) {
+  const raw = entry?.eventType ?? entry?.event_type ?? '';
+  const code = String(raw).trim().toUpperCase();
+  const labels = {
+    IN_HAND_COLLECTION: 'Bill collection',
+    LOAN_RECEIVED: 'Loan received',
+    EXPENSE_DEBIT: 'Expense paid',
+    EXPENSE_CREDIT: 'Expense reversal / credit',
+    BUDGET_SET: 'Daily budget set',
+    BUDGET_CLEARED: 'Daily budget cleared',
+    BUDGET_UPDATE: 'Budget update',
+    ROLL_OVER: 'New day — carry forward balance',
+    IN_HAND_COLLECTION_ADJUSTMENT: 'Adjustment (bill / payment edit)',
+    IN_HAND_INCREASE: 'In-hand increase',
+    IN_HAND_DECREASE: 'In-hand decrease'
+  };
+  if (code && labels[code]) return labels[code];
+  if (code) return `Other (${code.replace(/_/g, ' ')})`;
+  return '—';
+}
 
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
   const [expenses, setExpenses] = useState([]);
@@ -65,6 +108,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     // Sync react-hook-form so submitted date is today (form uses register, not formData)
     setExpenseValue('date', today);
     setExpenseValue('employeeId', '');
+    setExpenseValue('lenderId', '');
     setShowCustomCategoryInput(false);
     setCustomCategoryDraft('');
     setEditingExpense(null);
@@ -78,7 +122,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   }, [externalShowForm]);
   const [editingExpense, setEditingExpense] = useState(null);
   const [filterType, setFilterType] = useState('all'); // all, daily
-  const [activeTab, setActiveTab] = useState('all'); // all(daily expenses), employee(payroll), client(transactions)
+  const [activeTab, setActiveTab] = useState('all'); // all | loan | employee | client
   const [showSalaryForm, setShowSalaryForm] = useState(false);
   const [showPaySalaryForm, setShowPaySalaryForm] = useState(false);
   const [showPayAdvanceForm, setShowPayAdvanceForm] = useState(false);
@@ -96,6 +140,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [budgetInHand, setBudgetInHand] = useState(0);
   /** Card "Daily available balance": GET /budget/daily/summary (server-computed for the date range). */
   const [todayFromEvents, setTodayFromEvents] = useState({ expense: 0, remaining: 0 });
+  /**
+   * Channel debit/credit totals from GET …/calculated-summary (full picture: expenses + bills + loans + client/advance).
+   * null field ⇒ fall back to summing today’s expense list only for that slice.
+   */
+  const [channelBudgetSummary, setChannelBudgetSummary] = useState({
+    bankCredits: null,
+    bankDebits: null,
+    cashUpiDebits: null,
+    bankOpeningCarried: null,
+    bankBalanceWithOpening: null,
+  });
   const [currentPage, setCurrentPage] = useState(1);
   // Default to sorting by date (newest first) for all tabs
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
@@ -109,8 +164,24 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [savingBudget, setSavingBudget] = useState(false);
   const [budgetHistory, setBudgetHistory] = useState([]);
   const [loadingBudgetHistory, setLoadingBudgetHistory] = useState(false);
+  const [budgetHistoryDateRange, setBudgetHistoryDateRange] = useState({ from: '', to: '' });
+  const [budgetHistoryTypeFilter, setBudgetHistoryTypeFilter] = useState('ALL');
   const [editingBudgetEntryId, setEditingBudgetEntryId] = useState(null);
   const [editingBudgetAmount, setEditingBudgetAmount] = useState('');
+  const [loanReceiptAmount, setLoanReceiptAmount] = useState('');
+  /** '' = unspecified, '__new__' = type new name, else lender id string */
+  const [loanReceiptLenderSelect, setLoanReceiptLenderSelect] = useState('');
+  const [loanReceiptNewLenderName, setLoanReceiptNewLenderName] = useState('');
+  const [loanReceiptPaymentMode, setLoanReceiptPaymentMode] = useState('cash'); // cash | upi | bank_transfer | cheque
+  const [submittingLoanReceipt, setSubmittingLoanReceipt] = useState(false);
+  const [loanLenders, setLoanLenders] = useState([]);
+  const [loadingLoanLenders, setLoadingLoanLenders] = useState(false);
+  const [loanHistoryModal, setLoanHistoryModal] = useState({
+    open: false,
+    lender: null,
+    rows: [],
+    loading: false,
+  });
   const [showEmployeeLedgerModal, setShowEmployeeLedgerModal] = useState(false);
   const [selectedLedgerEmployee, setSelectedLedgerEmployee] = useState(null);
   const [employeeLedgerRows, setEmployeeLedgerRows] = useState([]);
@@ -214,6 +285,20 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         remaining: Number.isFinite(rem) ? rem : 0,
         expense: Number.isFinite(spent) ? Math.max(0, spent) : 0,
       });
+      const bcPrimary = Number(s?.bankCreditsInRange ?? s?.bank_credits_in_range);
+      const bcFallback = Number(s?.loanReceiptsBankChequeInRange ?? s?.loan_receipts_bank_cheque_in_range);
+      const bankCreditsVal = Number.isFinite(bcPrimary) ? bcPrimary : bcFallback;
+      const bd = Number(s?.bankDebitsInRange ?? s?.bank_debits_in_range);
+      const cud = Number(s?.cashUpiDebitsInRange ?? s?.cash_upi_debits_in_range);
+      const bankOpen = Number(s?.bankOpeningBalanceCarriedForward ?? s?.bank_opening_balance_carried_forward);
+      const bankWithOpen = Number(s?.bankBalanceIncludingOpening ?? s?.bank_balance_including_opening);
+      setChannelBudgetSummary({
+        bankCredits: Number.isFinite(bankCreditsVal) ? Math.max(0, bankCreditsVal) : null,
+        bankDebits: Number.isFinite(bd) ? Math.max(0, bd) : null,
+        cashUpiDebits: Number.isFinite(cud) ? Math.max(0, cud) : null,
+        bankOpeningCarried: Number.isFinite(bankOpen) ? bankOpen : null,
+        bankBalanceWithOpening: Number.isFinite(bankWithOpen) ? bankWithOpen : null,
+      });
       try {
         localStorage.setItem('expenses_budget_in_hand', String(Number.isFinite(cap) ? Math.max(0, cap) : 0));
       } catch (_) {}
@@ -230,6 +315,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           expense: Number.isFinite(Number(res?.spentAmount ?? res?.spent_amount))
             ? Math.max(0, Number(res.spentAmount ?? res.spent_amount))
             : 0,
+        });
+        setChannelBudgetSummary({
+          bankCredits: null,
+          bankDebits: null,
+          cashUpiDebits: null,
+          bankOpeningCarried: null,
+          bankBalanceWithOpening: null,
         });
         try {
           localStorage.setItem('expenses_budget_in_hand', String(amount));
@@ -248,6 +340,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               ? Math.max(0, Number(res.spentAmount ?? res.spent_amount))
               : 0,
           });
+          setChannelBudgetSummary({
+            bankCredits: null,
+            bankDebits: null,
+            cashUpiDebits: null,
+            bankOpeningCarried: null,
+            bankBalanceWithOpening: null,
+          });
           try {
             localStorage.setItem('expenses_budget_in_hand', String(amount));
           } catch (_) {}
@@ -261,6 +360,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           }
           setHasDailyBudgetFromApi(false);
           setTodayFromEvents({ expense: 0, remaining: 0 });
+          setChannelBudgetSummary({
+            bankCredits: null,
+            bankDebits: null,
+            cashUpiDebits: null,
+            bankOpeningCarried: null,
+            bankBalanceWithOpening: null,
+          });
         }
       }
     }
@@ -270,6 +376,106 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   useEffect(() => {
     loadBudgetState();
   }, []);
+
+  const loadLoanLenders = async () => {
+    setLoadingLoanLenders(true);
+    try {
+      const list = await apiFetchLoanLenders();
+      setLoanLenders(Array.isArray(list) ? list : []);
+    } catch (e) {
+      console.error('loadLoanLenders', e);
+      setLoanLenders([]);
+      showToast(e?.message || 'Could not load lenders. Check login and try again.', 'error');
+    } finally {
+      setLoadingLoanLenders(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'loan') {
+      loadLoanLenders();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (showForm) {
+      loadLoanLenders();
+    }
+  }, [showForm]);
+
+  const handleRecordLoanReceipt = async (e) => {
+    e.preventDefault();
+    const amt = parseFloat(String(loanReceiptAmount).replace(/,/g, ''), 10);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      showToast('Enter a valid loan amount.', 'error');
+      return;
+    }
+    const sel = String(loanReceiptLenderSelect || '').trim();
+    if (sel === '__new__') {
+      const nm = String(loanReceiptNewLenderName || '').trim();
+      if (!nm) {
+        showToast('Enter the new lender name, or pick an existing lender.', 'error');
+        return;
+      }
+    }
+    setSubmittingLoanReceipt(true);
+    try {
+      const payload = { amount: amt };
+      if (loanReceiptPaymentMode) {
+        payload.paymentMode = String(loanReceiptPaymentMode).trim();
+      }
+      if (sel === '__new__') {
+        payload.lenderName = String(loanReceiptNewLenderName || '').trim();
+      } else if (sel !== '' && /^\d+$/.test(sel)) {
+        payload.lenderId = parseInt(sel, 10);
+      }
+      await apiRecordLoanReceipt(payload);
+      let toastName = '';
+      if (sel === '__new__') {
+        toastName = String(loanReceiptNewLenderName || '').trim();
+      } else if (sel !== '' && /^\d+$/.test(sel)) {
+        const row = loanLenders.find((x) => String(x.id) === sel);
+        toastName = row ? (row.displayName ?? row.display_name ?? '') : '';
+      }
+      setLoanReceiptAmount('');
+      setLoanReceiptLenderSelect('');
+      setLoanReceiptNewLenderName('');
+      setLoanReceiptPaymentMode('cash');
+      await loadBudgetState();
+      await loadLoanLenders();
+      showToast(
+        toastName
+          ? `Loan recorded (${toastName}).`
+          : 'Loan recorded.'
+      );
+    } catch (err) {
+      console.error('recordLoanReceipt', err);
+      showToast(err?.message || 'Failed to record loan.', 'error');
+    } finally {
+      setSubmittingLoanReceipt(false);
+    }
+  };
+
+  const openLoanLenderHistory = async (lender) => {
+    if (!lender?.id) return;
+    setLoanHistoryModal({ open: true, lender, rows: [], loading: true });
+    try {
+      const rows = await apiFetchLoanLenderLedger(lender.id);
+      setLoanHistoryModal((m) => ({
+        ...m,
+        rows: Array.isArray(rows) ? rows : [],
+        loading: false,
+      }));
+    } catch (err) {
+      console.error('lender ledger', err);
+      setLoanHistoryModal((m) => ({ ...m, rows: [], loading: false }));
+      showToast(err?.message || 'Failed to load history.', 'error');
+    }
+  };
+
+  const closeLoanHistoryModal = () => {
+    setLoanHistoryModal({ open: false, lender: null, rows: [], loading: false });
+  };
 
   const loadBudgetHistory = async () => {
     setLoadingBudgetHistory(true);
@@ -288,6 +494,85 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   useEffect(() => {
     if (showDailyBudgetModal) loadBudgetHistory();
   }, [showDailyBudgetModal]);
+
+  const budgetTxTypeFromRow = (opening, closing) => (
+    Number.isFinite(opening) && Number.isFinite(closing) && closing >= opening ? 'CREDIT' : 'DEBIT'
+  );
+
+  const budgetHistoryRows = useMemo(() => {
+    return (budgetHistory || []).map((entry, idx) => {
+      const opening = Number(
+        entry.openingBalance ??
+        entry.amount ??
+        entry.budgetAmount ??
+        0
+      );
+      const closing = Number(
+        entry.closingBalance ??
+        entry.remainingBudget ??
+        entry.remaining_budget ??
+        0
+      );
+      const txType = budgetTxTypeFromRow(opening, closing);
+      const txAmount = Number.isFinite(opening) && Number.isFinite(closing) ? Math.abs(closing - opening) : 0;
+      const dateStr = entry.date ?? entry.createdAt ?? entry.updatedAt ?? entry.created_at ?? entry.updated_at ?? '';
+      const displayDate = dateStr ? (String(dateStr).length >= 10 ? String(dateStr).slice(0, 10) : String(dateStr)) : '—';
+      const sourceChannel = budgetHistorySourceChannel(entry);
+      const detailLabel = formatBudgetHistoryDetail(entry);
+      return { entry, idx, opening, closing, txType, txAmount, displayDate, sourceChannel, detailLabel };
+    });
+  }, [budgetHistory]);
+
+  const filteredBudgetHistoryRows = useMemo(() => {
+    const from = budgetHistoryDateRange.from || '';
+    const to = budgetHistoryDateRange.to || '';
+    return budgetHistoryRows.filter((row) => {
+      if (budgetHistoryTypeFilter !== 'ALL' && row.txType !== budgetHistoryTypeFilter) return false;
+      if (row.displayDate === '—') return false;
+      if (from && row.displayDate < from) return false;
+      if (to && row.displayDate > to) return false;
+      return true;
+    });
+  }, [budgetHistoryRows, budgetHistoryTypeFilter, budgetHistoryDateRange]);
+
+  const downloadBudgetHistoryPdf = () => {
+    const rows = filteredBudgetHistoryRows;
+    if (!rows.length) {
+      showToast('No budget history rows to download for selected filters.', 'error');
+      return;
+    }
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    doc.setFontSize(14);
+    doc.text('Budget History', 40, 36);
+    doc.setFontSize(10);
+    const fromText = budgetHistoryDateRange.from || 'Any';
+    const toText = budgetHistoryDateRange.to || 'Any';
+    const typeText = budgetHistoryTypeFilter || 'ALL';
+    doc.text(`Filters: From ${fromText} | To ${toText} | Type ${typeText}`, 40, 54);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`This table: ${BUDGET_SOURCE_CASH_UPI} only.`, 40, 66);
+    doc.text(`${BUDGET_SOURCE_BANK}: see Amount in bank on Expenses.`, 40, 76);
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(10);
+    autoTable(doc, {
+      startY: 86,
+      head: [['Date', 'Source', 'Details', 'Opening balance', 'Type', 'Transaction amount', 'Remaining amount']],
+      body: rows.map((r) => [
+        r.displayDate,
+        r.sourceChannel,
+        r.detailLabel,
+        (Number.isFinite(r.opening) ? r.opening : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        r.txType,
+        (Number.isFinite(r.txAmount) ? r.txAmount : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        (Number.isFinite(r.closing) ? r.closing : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      ]),
+      styles: { fontSize: 9, cellPadding: 5 },
+      headStyles: { fillColor: [79, 70, 229] },
+    });
+    const today = getLocalDateString();
+    doc.save(`budget-history-${today}.pdf`);
+  };
 
   const saveDailyBudgetToApi = async (amount) => {
     const num = Number.isFinite(amount) ? Math.max(0, amount) : 0;
@@ -344,7 +629,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       description: '',
       amount: '',
       paymentMethod: 'cash',
-      employeeId: ''
+      employeeId: '',
+      lenderId: '',
     }
   });
 
@@ -377,7 +663,78 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     date: getLocalDateString()
   });
   const selectedExpenseCategory = String(watchExpense('category') || '').toLowerCase();
-  
+  const watchedLenderId = watchExpense('lenderId');
+  const watchedExpenseAmount = watchExpense('amount');
+
+  /** Negative outstanding = repaid more than borrowed (credit / overpaid). */
+  const formatLenderOutstandingLabel = (out) => {
+    const n = Number(out) || 0;
+    const abs = Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (n < -0.005) return `₹${abs} credit (overpaid)`;
+    if (n > 0.005) return `₹${abs} left to repay`;
+    return '₹0.00 (settled)';
+  };
+
+  const loanRepayLenderSummary = useMemo(() => {
+    if (!watchedLenderId) return null;
+    const l = loanLenders.find((x) => String(x.id) === String(watchedLenderId));
+    if (!l) return null;
+    const borrowed = Number(l.totalBorrowed ?? l.total_borrowed ?? 0) || 0;
+    const repaid = Number(l.totalRepaid ?? l.total_repaid ?? 0) || 0;
+    const outstanding = Number(l.outstanding ?? 0) || 0;
+    return {
+      name: l.displayName ?? l.display_name ?? `Lender #${l.id}`,
+      borrowed,
+      repaid,
+      outstanding,
+    };
+  }, [watchedLenderId, loanLenders]);
+
+  const loanRepayOverpayHint = useMemo(() => {
+    if (selectedExpenseCategory !== 'loan_repayment' || !loanRepayLenderSummary) return null;
+    const amt = parseFloat(String(watchedExpenseAmount || '').replace(/,/g, ''), 10);
+    if (!Number.isFinite(amt) || amt <= 0) return null;
+    const out = loanRepayLenderSummary.outstanding;
+    if (out < -0.005) {
+      return {
+        kind: 'credit',
+        message: `This lender already shows a credit (you overpaid by ₹${Math.abs(out).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}). This payment will increase that credit.`,
+      };
+    }
+    if (amt > out + 0.005) {
+      const extra = amt - out;
+      return {
+        kind: 'overpay',
+        message: `₹${amt.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} is more than remaining ₹${out.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. Extra ₹${extra.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} will show as lender credit after save.`,
+      };
+    }
+    return null;
+  }, [selectedExpenseCategory, loanRepayLenderSummary, watchedExpenseAmount]);
+
+  const loanLendersTotals = useMemo(() => {
+    let totalBorrowed = 0;
+    let totalRepaid = 0;
+    let totalOutstanding = 0;
+    let totalOverpay = 0;
+    for (const l of loanLenders) {
+      totalBorrowed += Number(l.totalBorrowed ?? l.total_borrowed ?? 0) || 0;
+      totalRepaid += Number(l.totalRepaid ?? l.total_repaid ?? 0) || 0;
+      const out = Number(l.outstanding ?? 0) || 0;
+      totalOutstanding += out;
+      if (out < -0.005) totalOverpay += Math.abs(out);
+    }
+    return {
+      count: loanLenders.length,
+      totalBorrowed,
+      totalRepaid,
+      totalOutstanding,
+      totalOverpay,
+    };
+  }, [loanLenders]);
+
+  const formatLoanInr = (n) =>
+    `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
   // Allow adding custom category names from the UI.
   // Backend accepts any string for `category` (it is saved as-is).
   const predefinedExpenseCategories = [
@@ -388,6 +745,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     'rent',
     'maintenance',
     'transport',
+    'loan_repayment',
     'employee',
     'other',
   ];
@@ -398,7 +756,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     .trim()
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (m) => m.toUpperCase());
-  
+
+  const formatExpenseCategoryLabel = (cat) => {
+    const c = String(cat || '').trim().toLowerCase();
+    if (c === 'loan_repayment' || c === 'loan_repay') return 'Loan Repay';
+    if (!cat) return '';
+    return String(cat).charAt(0).toUpperCase() + String(cat).slice(1);
+  };
+
   // Build dropdown options from existing saved expenses so custom categories remain reusable.
   const customCategoryOptions = useMemo(() => {
     const map = new Map(); // normalized -> raw category
@@ -413,12 +778,18 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   }, [expenses]);
 
   const [clientPurchaseFormData, setClientPurchaseFormData] = useState({
-    clientName: '',
     purchaseDescription: '',
     totalAmount: '',
     purchaseDate: getLocalDateString(),
     notes: ''
   });
+  /** Suppliers master (GET /suppliers) for client purchase picker. */
+  const [suppliersList, setSuppliersList] = useState([]);
+  const [loadingSuppliersForPurchase, setLoadingSuppliersForPurchase] = useState(false);
+  /** '' | `s:{id}` | `p:{encodedName}` | '__new__' */
+  const [clientPurchaseSupplierSelect, setClientPurchaseSupplierSelect] = useState('');
+  const [clientPurchaseNewSupplierName, setClientPurchaseNewSupplierName] = useState('');
+  const [clientPurchaseSupplierSearchQuery, setClientPurchaseSupplierSearchQuery] = useState('');
 
   const [clientPaymentFormData, setClientPaymentFormData] = useState({
     purchaseId: '',
@@ -527,6 +898,83 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       console.error('Error saving client payments to localStorage:', error);
     }
   };
+
+  const loadSuppliersForClientPurchase = useCallback(async () => {
+    setLoadingSuppliersForPurchase(true);
+    try {
+      const raw = await apiFetchSuppliers();
+      const arr = Array.isArray(raw) ? raw : (raw?.data && Array.isArray(raw.data) ? raw.data : []);
+      setSuppliersList(arr);
+    } catch (e) {
+      console.error('loadSuppliersForClientPurchase', e);
+      setSuppliersList([]);
+    } finally {
+      setLoadingSuppliersForPurchase(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showClientPurchaseForm) return;
+    setClientPurchaseSupplierSelect('');
+    setClientPurchaseNewSupplierName('');
+    setClientPurchaseSupplierSearchQuery('');
+    loadSuppliersForClientPurchase();
+  }, [showClientPurchaseForm, loadSuppliersForClientPurchase]);
+
+  const clientPurchaseSupplierRows = useMemo(() => {
+    return (suppliersList || [])
+      .map((s) => ({
+        id: Number(s.id),
+        name: String(s.name ?? s.displayName ?? '').trim(),
+      }))
+      .filter((s) => s.name && Number.isFinite(s.id));
+  }, [suppliersList]);
+
+  const clientPurchasePriorNames = useMemo(() => {
+    const supplierLower = new Set(clientPurchaseSupplierRows.map((r) => r.name.toLowerCase()));
+    const seen = new Set();
+    const out = [];
+    for (const p of clientPayments || []) {
+      const n = String(p?.clientName ?? '').trim();
+      if (!n) continue;
+      const low = n.toLowerCase();
+      if (supplierLower.has(low)) continue;
+      if (seen.has(low)) continue;
+      seen.add(low);
+      out.push(n);
+    }
+    return out.sort((a, b) => a.localeCompare(b));
+  }, [clientPayments, clientPurchaseSupplierRows]);
+
+  const clientPurchasePickFiltered = useMemo(() => {
+    const q = clientPurchaseSupplierSearchQuery.trim().toLowerCase();
+    const sup = clientPurchaseSupplierRows.filter(
+      (s) => !q || s.name.toLowerCase().includes(q)
+    );
+    const pri = clientPurchasePriorNames.filter(
+      (n) => !q || n.toLowerCase().includes(q)
+    );
+    return { suppliers: sup, prior: pri };
+  }, [clientPurchaseSupplierRows, clientPurchasePriorNames, clientPurchaseSupplierSearchQuery]);
+
+  const resolveClientPurchaseClientName = useCallback(() => {
+    const v = String(clientPurchaseSupplierSelect || '').trim();
+    if (v === '__new__') return String(clientPurchaseNewSupplierName || '').trim();
+    if (v.startsWith('s:')) {
+      const id = parseInt(v.slice(2), 10);
+      if (!Number.isFinite(id)) return '';
+      const s = suppliersList.find((x) => Number(x.id) === id);
+      return s ? String(s.name ?? '').trim() : '';
+    }
+    if (v.startsWith('p:')) {
+      try {
+        return decodeURIComponent(v.slice(2)).trim();
+      } catch {
+        return '';
+      }
+    }
+    return '';
+  }, [clientPurchaseSupplierSelect, clientPurchaseNewSupplierName, suppliersList]);
 
   // Load all payments from API endpoint
   const loadAllPayments = async () => {
@@ -846,9 +1294,34 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const onSubmitExpense = async (data) => {
     const selectedEmp = employees.find(emp => String(emp.id) === String(data.employeeId || ''));
     const isEmployeeCategory = String(data.category || '').trim().toLowerCase() === 'employee';
+    const catLower = String(data.category || '').trim().toLowerCase();
+    const isLoanRepayment = catLower === 'loan_repayment' || catLower === 'loan_repay';
     if (isEmployeeCategory && !selectedEmp) {
       showToast('Please select employee for employee expense.', 'error');
       return;
+    }
+    if (isLoanRepayment && !String(data.lenderId || '').trim()) {
+      showToast('Select lender for loan repayment.', 'error');
+      return;
+    }
+    const repayAmt = parseFloat(String(data.amount ?? '').replace(/,/g, ''), 10);
+    if (isLoanRepayment && Number.isFinite(repayAmt) && repayAmt > 0 && String(data.lenderId || '').trim()) {
+      const lid = parseInt(String(data.lenderId).trim(), 10);
+      const lenderRow = loanLenders.find((x) => String(x.id) === String(lid));
+      if (lenderRow) {
+        const out = Number(lenderRow.outstanding ?? 0) || 0;
+        if (out >= -0.005 && repayAmt > out + 0.005) {
+          const fmt = (n) =>
+            Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          const extra = repayAmt - out;
+          const ok = window.confirm(
+            `This payment is ₹${fmt(repayAmt)} but only ₹${fmt(out)} is left on the loan. ` +
+              `The extra ₹${fmt(extra)} will be stored as lender credit (negative outstanding). ` +
+              `You can offset it later by recording more borrowing from the same lender. Continue?`
+          );
+          if (!ok) return;
+        }
+      }
     }
     const expenseData = {
       type: isEmployeeCategory ? 'advance' : 'daily',
@@ -862,7 +1335,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         employeeName: selectedEmp?.employeeName,
         settled: false,
         description: data.description || `Employee expense advance for ${selectedEmp?.employeeName || ''}`.trim()
-      } : {})
+      } : {}),
+      ...(isLoanRepayment && String(data.lenderId || '').trim()
+        ? { lenderId: parseInt(String(data.lenderId).trim(), 10) }
+        : {}),
     };
 
     try {
@@ -885,6 +1361,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       resetExpense();
       await loadExpenses();
       await loadBudgetState();
+      await loadLoanLenders();
       await loadPayrollSummary();
       // Notify parent component (Dashboard) to refresh expenses for chart
       if (onExpenseUpdate) {
@@ -892,7 +1369,11 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       }
     } catch (error) {
       console.error('Error saving expense to API:', error);
-      showToast('Failed to save expense. Please check your connection and try again.', 'error');
+      const msg =
+        error && typeof error.message === 'string' && error.message.trim() !== ''
+          ? error.message.trim()
+          : 'Failed to save expense. Please try again.';
+      showToast(msg, 'error');
       // Don't use localStorage fallback - only use API
     } finally {
       setSubmittingExpense(false);
@@ -914,6 +1395,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       amount: expense.amount?.toString() || '',
       paymentMethod: expense.paymentMethod || 'cash',
       employeeId: expense.employeeId ? String(expense.employeeId) : '',
+      lenderId: expense.lenderId != null && expense.lenderId !== '' ? String(expense.lenderId) : '',
     };
     setFormData(editData);
     // Update react-hook-form values
@@ -947,6 +1429,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           await apiDeleteExpense(id);
           await loadExpenses();
           await loadBudgetState();
+          await loadLoanLenders();
           showToast('Expense deleted successfully!', 'success');
           // Notify parent component (Dashboard) to refresh expenses for chart
           if (onExpenseUpdate) {
@@ -969,7 +1452,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       description: '',
       amount: '',
       paymentMethod: 'cash',
-      employeeId: ''
+      employeeId: '',
+      lenderId: '',
     };
     setFormData(defaults);
     // Reset react-hook-form so date and other fields stay in sync (submitted value = today)
@@ -989,8 +1473,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     // Tab filter
     if (activeTab === 'all') {
       // Show all expenses (no type filter needed)
-    } else if (activeTab === 'employee') {
-      // Don't show expenses in employee tab - employees are shown separately
+    } else if (activeTab === 'employee' || activeTab === 'loan') {
       return false;
     }
     
@@ -1103,6 +1586,35 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       return sum + (parseFloat(exp.amount) || 0);
     }, 0);
 
+  const todayExpenseSplit = useMemo(() => {
+    const toNum = (v) => Number.parseFloat(v) || 0;
+    const isToday = (d) => {
+      if (!d) return false;
+      return new Date(d).toDateString() === new Date().toDateString();
+    };
+    return expenses.reduce(
+      (acc, exp) => {
+        if (!isToday(exp?.date)) return acc;
+        const amount = toNum(exp?.amount);
+        const pm = String(exp?.paymentMethod ?? exp?.payment_method ?? '').trim().toLowerCase();
+        if (pm === 'cash' || pm === 'upi') {
+          acc.cashUpi += amount;
+        } else if (
+          pm === 'bank' ||
+          pm === 'bank_transfer' ||
+          pm === 'bank transfer' ||
+          pm === 'card' ||
+          pm === 'cheque' ||
+          pm === 'check'
+        ) {
+          acc.bankCardCheque += amount;
+        }
+        return acc;
+      },
+      { cashUpi: 0, bankCardCheque: 0 }
+    );
+  }, [expenses]);
+
   // If showAddButtonInHeader is true, only render the button
   if (showAddButtonInHeader) {
     return (
@@ -1208,47 +1720,85 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               </div>
               {/* Budget history */}
               <div className="budget-history-section" style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '12px' }}>
-                <h4 style={{ margin: '0 0 8px 0', fontSize: '14px', color: '#555' }}>Budget history</h4>
+                <div className="budget-history-header">
+                  <h4 className="budget-history-title">Budget history</h4>
+                  <button
+                    type="button"
+                    className="btn btn-secondary budget-history-download-btn"
+                    onClick={downloadBudgetHistoryPdf}
+                    disabled={loadingBudgetHistory || filteredBudgetHistoryRows.length === 0}
+                  >
+                    Download PDF
+                  </button>
+                </div>
+                <div className="budget-history-filters">
+                  <div className="budget-history-filter-item">
+                    <label className="budget-history-filter-label">From</label>
+                    <input
+                      type="date"
+                      value={budgetHistoryDateRange.from}
+                      onChange={(e) => setBudgetHistoryDateRange((p) => ({ ...p, from: e.target.value }))}
+                      className="budget-history-filter-control"
+                    />
+                  </div>
+                  <div className="budget-history-filter-item">
+                    <label className="budget-history-filter-label">To</label>
+                    <input
+                      type="date"
+                      value={budgetHistoryDateRange.to}
+                      onChange={(e) => setBudgetHistoryDateRange((p) => ({ ...p, to: e.target.value }))}
+                      className="budget-history-filter-control"
+                    />
+                  </div>
+                  <div className="budget-history-filter-item budget-history-filter-item-wide">
+                    <label className="budget-history-filter-label">Transaction type</label>
+                    <select
+                      value={budgetHistoryTypeFilter}
+                      onChange={(e) => setBudgetHistoryTypeFilter(e.target.value)}
+                      className="budget-history-filter-control"
+                    >
+                      <option value="ALL">All</option>
+                      <option value="CREDIT">Credit</option>
+                      <option value="DEBIT">Debit</option>
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary budget-history-clear-btn"
+                    onClick={() => { setBudgetHistoryDateRange({ from: '', to: '' }); setBudgetHistoryTypeFilter('ALL'); }}
+                  >
+                    Clear
+                  </button>
+                </div>
+                <p className="budget-history-scope-hint" style={{ margin: '8px 0 10px', fontSize: '12px', color: '#64748b', lineHeight: 1.45 }}>
+                  <strong>{BUDGET_SOURCE_CASH_UPI}</strong> — rows in this table (in-hand ledger).{' '}
+                  <strong>{BUDGET_SOURCE_BANK}</strong> — not listed here; use <strong>Amount in bank</strong> on this page.
+                </p>
                 {loadingBudgetHistory ? (
                   <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>Loading...</p>
-                ) : budgetHistory.length === 0 ? (
+                ) : filteredBudgetHistoryRows.length === 0 ? (
                   <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>No history yet.</p>
                 ) : (
                   <div className="daily-budget-history-table-wrap" style={{ maxHeight: '280px', overflowY: 'auto' }}>
                     <table className="daily-budget-history-table">
                       <thead>
                         <tr>
-                          <th style={{ width: '120px' }}>Date</th>
-                          <th style={{ width: '180px' }}>Opening balance</th>
-                          <th style={{ width: '120px' }}>Type</th>
-                          <th style={{ width: '180px' }}>Transaction amount</th>
-                          <th style={{ width: '180px' }}>Remaining amount</th>
+                          <th style={{ width: '108px' }}>Date</th>
+                          <th style={{ width: '128px' }}>Source</th>
+                          <th style={{ minWidth: '160px' }}>Details</th>
+                          <th style={{ width: '132px' }}>Opening balance</th>
+                          <th style={{ width: '80px' }}>Type</th>
+                          <th style={{ width: '124px' }}>Transaction amount</th>
+                          <th style={{ width: '132px' }}>Remaining amount</th>
                         </tr>
                       </thead>
                       <tbody>
-                    {budgetHistory.map((entry, idx) => {
-                      const opening = Number(
-                        entry.openingBalance ??
-                        entry.amount ??
-                        entry.budgetAmount ??
-                        0
-                      );
-                      const closing = Number(
-                        entry.closingBalance ??
-                        entry.remainingBudget ??
-                        entry.remaining_budget ??
-                        0
-                      );
-
-                      const dateStr = entry.date ?? entry.createdAt ?? entry.updatedAt ?? entry.created_at ?? entry.updated_at ?? '';
-                      const displayDate = dateStr ? (String(dateStr).length >= 10 ? String(dateStr).slice(0, 10) : String(dateStr)) : '—';
+                    {filteredBudgetHistoryRows.map((row) => {
+                      const { entry, idx, opening, closing, txType, txAmount, displayDate, sourceChannel, detailLabel } = row;
                       const location = entry.location || '';
                       const isToday = displayDate === getLocalDateString();
                       const rowKey = entry.id != null ? entry.id : `idx-${idx}`;
                       const isEditingThis = isToday && editingBudgetEntryId === rowKey;
-
-                      const txType = Number.isFinite(opening) && Number.isFinite(closing) && closing >= opening ? 'CREDIT' : 'DEBIT';
-                      const txAmount = Number.isFinite(opening) && Number.isFinite(closing) ? Math.abs(closing - opening) : 0;
                       const handleSaveInlineBudget = async () => {
                         const num = Math.max(0, parseFloat(editingBudgetAmount) || 0);
                         setSavingBudget(true);
@@ -1269,6 +1819,19 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       return (
                         <tr key={entry.id ?? idx}>
                           <td style={{ color: '#666', fontSize: '13px', padding: '10px 10px' }}>{displayDate}</td>
+                          <td
+                            className={
+                              sourceChannel === BUDGET_SOURCE_BANK
+                                ? 'budget-history-source budget-history-source-bank'
+                                : 'budget-history-source budget-history-source-cash'
+                            }
+                            style={{ fontSize: '12px', padding: '10px 8px', fontWeight: 700, lineHeight: 1.3 }}
+                          >
+                            {sourceChannel}
+                          </td>
+                          <td style={{ fontSize: '12px', padding: '10px 10px', color: '#334155', lineHeight: 1.35 }} title={entry.eventType || entry.event_type || ''}>
+                            {detailLabel}
+                          </td>
                           <td style={{ fontWeight: 600, fontSize: '13px', padding: '10px 10px' }}>
                             ₹{Number.isFinite(opening) ? opening.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
                           </td>
@@ -1390,6 +1953,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 <option value="rent">Rent</option>
                 <option value="maintenance">Maintenance</option>
                 <option value="transport">Transport</option>
+                <option value="loan_repayment">Loan Repay</option>
                 <option value="employee">Employee</option>
                 <option value="other">Other</option>
                 {customCategoryOptions.map((c) => (
@@ -1440,6 +2004,81 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 </select>
               </div>
             )}
+            {selectedExpenseCategory === 'loan_repayment' && (
+              <div className="form-group">
+                <label>Lender *</label>
+                <select {...registerExpense('lenderId')}>
+                  <option value="">Select lender</option>
+                  {loanLenders.map((l) => {
+                    const nm = l.displayName || l.display_name || `Lender #${l.id}`;
+                    const out = Number(l.outstanding ?? 0) || 0;
+                    return (
+                      <option key={l.id} value={l.id}>
+                        {nm} ({formatLenderOutstandingLabel(out)})
+                      </option>
+                    );
+                  })}
+                </select>
+                {loanLenders.length === 0 && (
+                  <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#64748b' }}>
+                    No lenders yet — use the <strong>Borrowed cash</strong> tab to record money you borrowed first.
+                  </p>
+                )}
+                {loanRepayLenderSummary && (
+                  <div
+                    style={{
+                      marginTop: '12px',
+                      padding: '12px 14px',
+                      borderRadius: '8px',
+                      background: loanRepayLenderSummary.outstanding < -0.005 ? '#eff6ff' : '#f0fdfa',
+                      border:
+                        loanRepayLenderSummary.outstanding < -0.005 ? '1px solid #bfdbfe' : '1px solid #99f6e4',
+                      fontSize: '13px',
+                      lineHeight: 1.5,
+                      color: loanRepayLenderSummary.outstanding < -0.005 ? '#1e3a5f' : '#134e4a',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: '6px' }}>{loanRepayLenderSummary.name}</div>
+                    <div style={{ display: 'grid', gap: '4px' }}>
+                      <span>
+                        {loanRepayLenderSummary.outstanding < -0.005 ? (
+                          <>
+                            <strong>Credit (overpaid):</strong> ₹
+                            {Math.abs(loanRepayLenderSummary.outstanding).toLocaleString('en-IN', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}{' '}
+                            <span style={{ fontSize: '12px', fontWeight: 500 }}>
+                              — you can record more borrowing later to use this balance.
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <strong>Remaining to repay:</strong> ₹
+                            {loanRepayLenderSummary.outstanding.toLocaleString('en-IN', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </>
+                        )}
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#0f766e' }}>
+                        Total borrowed: ₹
+                        {loanRepayLenderSummary.borrowed.toLocaleString('en-IN', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}{' '}
+                        · Already repaid: ₹
+                        {loanRepayLenderSummary.repaid.toLocaleString('en-IN', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="form-group">
               <label>Description</label>
               <input
@@ -1462,6 +2101,18 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               />
               {expenseErrors.amount && (
                 <span className="error-message">{expenseErrors.amount.message}</span>
+              )}
+              {selectedExpenseCategory === 'loan_repayment' && loanRepayOverpayHint && (
+                <p
+                  style={{
+                    margin: '8px 0 0',
+                    fontSize: '12px',
+                    lineHeight: 1.45,
+                    color: loanRepayOverpayHint.kind === 'overpay' ? '#b45309' : '#1d4ed8',
+                  }}
+                >
+                  {loanRepayOverpayHint.message}
+                </p>
               )}
             </div>
 
@@ -1498,6 +2149,15 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           Daily Expenses
         </button>
         <button
+          className={`expense-tab ${activeTab === 'loan' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('loan');
+            setCurrentPage(1);
+          }}
+        >
+          Borrowed cash
+        </button>
+        <button
           className={`expense-tab ${activeTab === 'employee' ? 'active' : ''}`}
           onClick={() => {
             setActiveTab('employee');
@@ -1527,31 +2187,89 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 💰 Daily available balance
               </span>
             </div>
-            <div className="budget-in-hand-stats">
-              <div className="budget-stat">
-                <span className="budget-stat-label">Today&apos;s expense</span>
-                <span className="budget-stat-value spent">₹{(Number(todayFromEvents.expense || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              </div>
-              <div className="budget-stat">
-                {(() => {
-                  const left = Number(todayFromEvents.remaining || 0) || 0;
-                  if (left >= 0) {
-                    return (
-                      <>
-                        <span className="budget-stat-label">Available balance</span>
-                        <span className="budget-stat-value left">₹{left.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      </>
-                    );
-                  }
-                  return (
-                    <>
-                      <span className="budget-stat-label">Over budget by</span>
-                      <span className="budget-stat-value over">₹{Math.abs(left).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    </>
-                  );
-                })()}
-              </div>
-            </div>
+            {(() => {
+              const left = Number(todayFromEvents.remaining || 0) || 0;
+              const splitCashUpi = Number(todayExpenseSplit.cashUpi || 0) || 0;
+              const splitBank = Number(todayExpenseSplit.bankCardCheque || 0) || 0;
+              const cashUpiDebits =
+                channelBudgetSummary.cashUpiDebits != null
+                  ? channelBudgetSummary.cashUpiDebits
+                  : splitCashUpi;
+              const bankDebits =
+                channelBudgetSummary.bankDebits != null ? channelBudgetSummary.bankDebits : splitBank;
+              const bankCredits =
+                channelBudgetSummary.bankCredits != null ? channelBudgetSummary.bankCredits : 0;
+              /** Today's net bank movement (credits − debits). Full balance adds opening carried from prior days when API sends it. */
+              const bankNetToday = bankCredits - bankDebits;
+              const amountInBankToday =
+                channelBudgetSummary.bankBalanceWithOpening != null &&
+                Number.isFinite(channelBudgetSummary.bankBalanceWithOpening)
+                  ? channelBudgetSummary.bankBalanceWithOpening
+                  : bankNetToday;
+              const bankOpening =
+                channelBudgetSummary.bankOpeningCarried != null &&
+                Number.isFinite(channelBudgetSummary.bankOpeningCarried)
+                  ? channelBudgetSummary.bankOpeningCarried
+                  : null;
+              const cards = [
+                {
+                  label: 'Expenses in Cash + UPI (today)',
+                  value: cashUpiDebits,
+                  color: '#dc2626',
+                  title:
+                    'Cash/UPI paid out today: expenses plus supplier bill payments recorded as cash or UPI (from server when available).',
+                },
+                {
+                  label: 'Expenses in Bank + Cheque + Card (today)',
+                  value: bankDebits,
+                  color: '#dc2626',
+                  title:
+                    'Bank/cheque/card (and similar) paid out today: all expense rows plus bill payments in the financial ledger.',
+                },
+                {
+                  label: 'Amount in bank (today)',
+                  value: Math.max(0, amountInBankToday),
+                  color: '#1d4ed8',
+                  title:
+                    bankOpening != null
+                      ? `Opening carried forward (bank channel): ₹${bankOpening.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. Plus today's credits minus today's debits (same rules as the red bank expenses card). Not your real bank statement.`
+                      : 'Bank-channel credits today minus debits today. After the first overnight rollover, opening from prior days is added automatically (like cash + UPI in hand). Not your real bank statement.',
+                },
+                {
+                  label: left >= 0 ? 'Available cash in hand' : 'Over budget by',
+                  value: left >= 0 ? left : Math.abs(left),
+                  color: left >= 0 ? '#059669' : '#dc2626',
+                },
+              ];
+              return (
+                <div
+                  className="budget-in-hand-stats"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+                    gap: '10px',
+                  }}
+                >
+                  {cards.map((c) => (
+                    <div
+                      key={c.label}
+                      className="budget-stat"
+                      style={{
+                        background: '#ffffff',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '10px',
+                        padding: '10px 12px',
+                      }}
+                    >
+                      <span className="budget-stat-label" title={c.title}>{c.label}</span>
+                      <span className="budget-stat-value" style={{ color: c.color }}>
+                        ₹{c.value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
 
           {/* Budget and Add Expense buttons */}
@@ -1628,6 +2346,369 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           )}
         </div>
       </div>
+        </div>
+      )}
+
+      {/* Borrowed cash (loan / market) — own tab */}
+      {activeTab === 'loan' && (
+        <div className="expenses-tab-content">
+          <form
+            className="loan-receipt-panel"
+            onSubmit={handleRecordLoanReceipt}
+            style={{
+              padding: '16px 18px',
+              borderRadius: '8px',
+              border: '1px solid #e2e8f0',
+              background: '#f8fafc',
+              maxWidth: '800px',
+            }}
+          >
+            <div style={{ fontWeight: 600, fontSize: '15px', marginBottom: '8px', color: '#334155' }}>
+              Record money borrowed from a lender
+            </div>
+            <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#64748b', lineHeight: 1.5 }}>
+              Choose an existing lender to add more borrowing to their running total (outstanding increases by this amount).
+              Or use <strong>+ Add new lender</strong> for a first-time source. <strong>Cash</strong> and <strong>UPI</strong> increase daily in-hand balance; <strong>bank transfer</strong> and <strong>cheque</strong> only update lender totals. To repay, use{' '}
+              <strong>Daily Expenses</strong> → <strong>Add Expense</strong> → <strong>Loan Repay</strong>.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-end' }}>
+                <div className="form-group" style={{ marginBottom: 0, minWidth: '140px' }}>
+                  <label style={{ fontSize: '13px' }}>Amount (₹) *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={loanReceiptAmount}
+                    onChange={(e) => setLoanReceiptAmount(e.target.value)}
+                    placeholder="0.00"
+                    disabled={submittingLoanReceipt}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0, minWidth: '170px' }}>
+                  <label style={{ fontSize: '13px' }}>Payment mode</label>
+                  <select
+                    value={loanReceiptPaymentMode}
+                    onChange={(e) => setLoanReceiptPaymentMode(e.target.value)}
+                    disabled={submittingLoanReceipt}
+                  >
+                    <option value="cash">Cash (in hand)</option>
+                    <option value="upi">UPI (in hand)</option>
+                    <option value="bank_transfer">Bank transfer (not in hand)</option>
+                    <option value="cheque">Cheque (not in hand)</option>
+                  </select>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0, flex: '1 1 240px' }}>
+                  <label style={{ fontSize: '13px' }}>Lender</label>
+                  <select
+                    value={loanReceiptLenderSelect}
+                    onChange={(e) => {
+                      setLoanReceiptLenderSelect(e.target.value);
+                      if (e.target.value !== '__new__') {
+                        setLoanReceiptNewLenderName('');
+                      }
+                    }}
+                    disabled={submittingLoanReceipt}
+                  >
+                    <option value="">Unspecified (no named lender)</option>
+                    {loanLenders.map((l) => {
+                      const nm = l.displayName ?? l.display_name ?? `Lender #${l.id}`;
+                      const out = Number(l.outstanding ?? 0) || 0;
+                      return (
+                        <option key={l.id} value={String(l.id)}>
+                          {nm} ({formatLenderOutstandingLabel(out)})
+                        </option>
+                      );
+                    })}
+                    <option value="__new__">+ Add new lender…</option>
+                  </select>
+                </div>
+                <button type="submit" className="btn btn-primary" disabled={submittingLoanReceipt}>
+                  {submittingLoanReceipt ? 'Saving…' : 'Record loan received'}
+                </button>
+              </div>
+              {loanReceiptLenderSelect === '__new__' && (
+                <div className="form-group" style={{ marginBottom: 0, maxWidth: '420px' }}>
+                  <label style={{ fontSize: '13px' }}>New lender name *</label>
+                  <input
+                    type="text"
+                    value={loanReceiptNewLenderName}
+                    onChange={(e) => setLoanReceiptNewLenderName(e.target.value)}
+                    placeholder="e.g. Name or financier"
+                    disabled={submittingLoanReceipt}
+                  />
+                </div>
+              )}
+            </div>
+          </form>
+
+          <div style={{ marginTop: '20px' }}>
+            <h3 style={{ margin: '0 0 10px', fontSize: '16px', fontWeight: 600, color: '#334155' }}>Lenders</h3>
+            <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#64748b' }}>
+              Click a row to see all borrowings and repayments for that lender.
+            </p>
+            {!loadingLoanLenders && loanLenders.length > 0 && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))',
+                  gap: '10px',
+                  marginBottom: '16px',
+                  maxWidth: '900px',
+                }}
+              >
+                {[
+                  { label: 'Total lenders', value: String(loanLendersTotals.count), accent: '#334155' },
+                  { label: 'Total borrowed', value: formatLoanInr(loanLendersTotals.totalBorrowed), accent: '#1d4ed8' },
+                  { label: 'Total repaid', value: formatLoanInr(loanLendersTotals.totalRepaid), accent: '#0f766e' },
+                  { label: 'Overpay', value: formatLoanInr(loanLendersTotals.totalOverpay), accent: '#1d4ed8' },
+                  loanLendersTotals.totalOutstanding < -0.005
+                    ? {
+                        label: 'Net lender credit',
+                        value: `₹${Math.abs(loanLendersTotals.totalOutstanding).toLocaleString('en-IN', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}`,
+                        accent: '#1d4ed8',
+                      }
+                    : {
+                        label: 'Total outstanding',
+                        value: formatLoanInr(loanLendersTotals.totalOutstanding),
+                        accent: '#b45309',
+                      },
+                ].map((c) => (
+                  <div
+                    key={c.label}
+                    style={{
+                      padding: '12px 14px',
+                      background: '#fff',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '10px',
+                      boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+                    }}
+                  >
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', letterSpacing: '0.02em', marginBottom: '6px' }}>
+                      {c.label}
+                    </div>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: c.accent, lineHeight: 1.25 }}>{c.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {loadingLoanLenders ? (
+              <p style={{ fontSize: '13px', color: '#888' }}>Loading lenders…</p>
+            ) : loanLenders.length === 0 ? (
+              <div className="empty-state-wrapper" style={{ padding: '20px' }}>
+                <span className="empty-icon">🏦</span>
+                <p className="empty-state" style={{ marginBottom: '4px' }}>No lenders for this location</p>
+                <p className="empty-subtitle" style={{ fontSize: '13px', lineHeight: 1.45 }}>
+                  Lenders are created when you use <strong>Record loan received</strong> above (they are not read from other tables).
+                  Loans recorded only as budget credits before this feature will not appear here until you add them again.
+                </p>
+              </div>
+            ) : (
+              <div className="sales-table-wrapper" style={{ maxWidth: '900px' }}>
+                <table className="data-table expenses-table">
+                  <thead>
+                    <tr>
+                      <th>Lender</th>
+                      <th>Total borrowed</th>
+                      <th>Total repaid</th>
+                      <th>Outstanding</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loanLenders.map((l) => {
+                      const name = l.displayName ?? l.display_name ?? `Lender #${l.id}`;
+                      const borrowed = Number(l.totalBorrowed ?? l.total_borrowed ?? 0) || 0;
+                      const repaid = Number(l.totalRepaid ?? l.total_repaid ?? 0) || 0;
+                      const out = Number(l.outstanding ?? 0) || 0;
+                      return (
+                        <tr
+                          key={l.id}
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => openLoanLenderHistory(l)}
+                          title="View full history"
+                        >
+                          <td style={{ fontWeight: 600 }}>{name}</td>
+                          <td>₹{borrowed.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td>₹{repaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td
+                            style={{
+                              fontWeight: 600,
+                              color: out > 0.005 ? '#b45309' : out < -0.005 ? '#1d4ed8' : '#0f766e',
+                            }}
+                          >
+                            {out < -0.005 ? (
+                              <>
+                                Credit ₹
+                                {Math.abs(out).toLocaleString('en-IN', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </>
+                            ) : (
+                              <>
+                                ₹
+                                {out.toLocaleString('en-IN', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginTop: '16px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setActiveTab('all');
+                setCurrentPage(1);
+                handleAddClick();
+              }}
+            >
+              Record a repayment → Add Expense
+            </button>
+          </div>
+
+          {loanHistoryModal.open && loanHistoryModal.lender && (
+            <div className="modal-overlay" onClick={closeLoanHistoryModal} role="presentation">
+              <div
+                className="modal-content"
+                onClick={(e) => e.stopPropagation()}
+                style={{ maxWidth: 'min(740px, 90vw)', width: '90vw' }}
+              >
+                <div className="modal-header">
+                  <h3>
+                    {loanHistoryModal.lender.displayName
+                      || loanHistoryModal.lender.display_name
+                      || `Lender #${loanHistoryModal.lender.id}`}{' '}
+                    — history
+                  </h3>
+                  <button type="button" className="modal-close" onClick={closeLoanHistoryModal} aria-label="Close">
+                    ×
+                  </button>
+                </div>
+                <div className="modal-body">
+                  {loanHistoryModal.loading ? (
+                    <Loading message="Loading transactions…" />
+                  ) : loanHistoryModal.rows.length === 0 ? (
+                    <p style={{ margin: 0, fontSize: '14px', color: '#64748b' }}>No transactions yet.</p>
+                  ) : (
+                    <div
+                      className="sales-table-wrapper"
+                      style={{ maxHeight: '360px', overflowY: 'auto', overflowX: 'auto', width: '100%' }}
+                    >
+                      <table
+                        className="data-table expenses-table"
+                        style={{ width: '100%', tableLayout: 'fixed' }}
+                      >
+                        <thead>
+                          <tr>
+                            <th style={{ width: '16%', paddingLeft: '10px', paddingRight: '14px' }}>Date</th>
+                            <th style={{ width: '14%', paddingLeft: '10px', paddingRight: '14px' }}>Type</th>
+                            <th style={{ width: '20%', paddingLeft: '10px', paddingRight: '14px' }}>Amount</th>
+                            <th style={{ width: '16%', paddingLeft: '10px', paddingRight: '14px' }}>Overpay</th>
+                            <th style={{ width: '34%', paddingLeft: '10px', paddingRight: '10px' }}>Notes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            const toTs = (row) => {
+                              const raw = row?.createdAt || row?.created_at || row?.entryDate || row?.entry_date;
+                              if (!raw) return 0;
+                              const t = new Date(raw).getTime();
+                              return Number.isFinite(t) ? t : 0;
+                            };
+                            const chronological = [...loanHistoryModal.rows].sort((a, b) => {
+                              const ta = toTs(a);
+                              const tb = toTs(b);
+                              if (ta !== tb) return ta - tb;
+                              return (Number(a?.id) || 0) - (Number(b?.id) || 0);
+                            });
+                            let outstanding = 0;
+                            const overpayById = new Map();
+                            chronological.forEach((row) => {
+                              const typ = String(row.entryType || row.entry_type || '').toUpperCase();
+                              const amt = Number(row.amount ?? 0) || 0;
+                              if (typ === 'RECEIPT') outstanding += amt;
+                              if (typ === 'REPAYMENT') outstanding -= amt;
+                              overpayById.set(row.id, outstanding < -0.005 ? Math.abs(outstanding) : 0);
+                            });
+
+                            return loanHistoryModal.rows.map((row) => {
+                            const typ = String(row.entryType || row.entry_type || '').toUpperCase();
+                            const label = typ === 'RECEIPT' ? 'Borrowed' : typ === 'REPAYMENT' ? 'Repaid' : typ || '—';
+                            const dt = row.entryDate || row.entry_date;
+                            const dateStr = dt
+                              ? (String(dt).length >= 10 ? String(dt).slice(0, 10) : String(dt))
+                              : '—';
+                            const amt = Number(row.amount ?? 0) || 0;
+                            const overpay = Number(overpayById.get(row.id) || 0);
+                            return (
+                              <tr key={row.id}>
+                                <td style={{ paddingLeft: '10px', paddingRight: '14px' }}>{dateStr}</td>
+                                <td style={{ paddingLeft: '10px', paddingRight: '14px' }}>
+                                  <span
+                                    style={{
+                                      fontWeight: 600,
+                                      color: typ === 'RECEIPT' ? '#0f766e' : typ === 'REPAYMENT' ? '#b91c1c' : '#334155',
+                                    }}
+                                  >
+                                    {label}
+                                  </span>
+                                </td>
+                                <td style={{ paddingLeft: '10px', paddingRight: '14px' }}>
+                                  ₹{amt.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                                <td
+                                  style={{
+                                    paddingLeft: '10px',
+                                    paddingRight: '14px',
+                                    color: overpay > 0 ? '#1d4ed8' : '#64748b',
+                                    fontWeight: overpay > 0 ? 600 : 400,
+                                  }}
+                                >
+                                  {overpay > 0
+                                    ? `₹${overpay.toLocaleString('en-IN', {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}`
+                                    : '—'}
+                                </td>
+                                <td
+                                  style={{
+                                    fontSize: '12px',
+                                    color: '#64748b',
+                                    wordBreak: 'break-word',
+                                    verticalAlign: 'top',
+                                    paddingLeft: '10px',
+                                    paddingRight: '10px',
+                                  }}
+                                >
+                                  {row.notes || '—'}
+                                </td>
+                              </tr>
+                            );
+                            });
+                          })()}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2095,13 +3176,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             ) : employees.length > 0 ? (
               <div className="expenses-table-container">
                 {/* Desktop Table View */}
-                <div className="sales-table-wrapper">
-                  <table className="data-table expenses-table">
+                <div className="sales-table-wrapper employee-table-scroll-wrap">
+                  <table className="data-table expenses-table employee-payroll-table">
                     <thead>
                       <tr>
                         <th>Name</th>
                         <th>Amount</th>
-                        <th>Joining Date</th>
+                        <th className="employee-col-joining">Joining Date</th>
                         <th title="Advance balance in ledger (given minus applied). Carries to the next month.">Advance balance</th>
                         <th title="Net salary due this month. Negative if advance taken is more than this month’s salary; next month adjusts.">Pending</th>
                         <th>Salary Status</th>
@@ -2122,7 +3203,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           <td className="amount-cell total-col">
                             <span className="expense-amount">₹{safeSalary.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </td>
-                          <td style={{ fontSize: '12px' }}>{employee?.joiningDate ? new Date(employee.joiningDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-'}</td>
+                          <td className="employee-joining-date-cell" style={{ fontSize: '12px' }}>{employee?.joiningDate ? new Date(employee.joiningDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-'}</td>
                           <td className="amount-cell">
                             <span className="expense-amount" style={{ color: '#ffc107' }}>
                               ₹{safeAdvance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -2133,59 +3214,61 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                               ₹{safePending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           </td>
-                          <td>
-                            <span className={`payment-badge ${getSalaryStatusBadgeClass(employee?.id)}`}>
+                          <td className="employee-salary-status-cell">
+                            <span className={`payment-badge employee-salary-status-badge ${getSalaryStatusBadgeClass(employee?.id)}`}>
                               {salaryStatus}
                             </span>
                           </td>
-                          <td className="actions-cell">
-                            <button
-                              className="btn-icon btn-pay-salary"
-                              onClick={() => handlePaySalaryClick(employee)}
-                              title="Pay Salary"
-                            >
-                              💰
-                            </button>
-                            <button
-                              className="btn-icon btn-edit"
-                              onClick={() => openEmployeeLedger(employee)}
-                              title="View Ledger"
-                            >
-                              📒
-                            </button>
-                            <button
-                              className="btn-icon btn-edit"
-                              onClick={() => {
-                                // TODO: Implement edit functionality
-                                console.log('Edit employee', employee);
-                              }}
-                              title="Edit"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              className="btn-icon btn-delete"
-                              onClick={() => {
-                                showConfirm(
-                                  'Delete Employee',
-                                  `Are you sure you want to delete "${employee.employeeName}"? This action cannot be undone.`,
-                                  async () => {
-                                    try {
-                                      await apiDeleteEmployee(employee.id);
-                                      await loadEmployees();
-                                      showToast('Employee deleted successfully!', 'success');
-                                    } catch (error) {
-                                      console.error('Error deleting employee from API:', error);
-                                      showToast('Failed to delete employee. Please check your connection and try again.', 'error');
-                                      // Don't use localStorage fallback - only use API
+                          <td className="actions-cell employee-actions-cell">
+                            <div className="employee-actions-inner">
+                              <button
+                                className="btn-icon btn-pay-salary"
+                                onClick={() => handlePaySalaryClick(employee)}
+                                title="Pay Salary"
+                              >
+                                💰
+                              </button>
+                              <button
+                                className="btn-icon btn-edit"
+                                onClick={() => openEmployeeLedger(employee)}
+                                title="View Ledger"
+                              >
+                                📒
+                              </button>
+                              <button
+                                className="btn-icon btn-edit"
+                                onClick={() => {
+                                  // TODO: Implement edit functionality
+                                  console.log('Edit employee', employee);
+                                }}
+                                title="Edit"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                className="btn-icon btn-delete"
+                                onClick={() => {
+                                  showConfirm(
+                                    'Delete Employee',
+                                    `Are you sure you want to delete "${employee.employeeName}"? This action cannot be undone.`,
+                                    async () => {
+                                      try {
+                                        await apiDeleteEmployee(employee.id);
+                                        await loadEmployees();
+                                        showToast('Employee deleted successfully!', 'success');
+                                      } catch (error) {
+                                        console.error('Error deleting employee from API:', error);
+                                        showToast('Failed to delete employee. Please check your connection and try again.', 'error');
+                                        // Don't use localStorage fallback - only use API
+                                      }
                                     }
-                                  }
-                                );
-                              }}
-                              title="Delete"
-                            >
-                              🗑️
-                            </button>
+                                  );
+                                }}
+                                title="Delete"
+                              >
+                                🗑️
+                              </button>
+                            </div>
                           </td>
                         </tr>
                         );
@@ -2405,12 +3488,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             <div className="modal-overlay" onClick={() => {
               setShowClientPurchaseForm(false);
               setClientPurchaseFormData({
-                clientName: '',
                 purchaseDescription: '',
                 totalAmount: '',
                 purchaseDate: getLocalDateString(),
                 notes: ''
               });
+              setClientPurchaseSupplierSelect('');
+              setClientPurchaseNewSupplierName('');
+              setClientPurchaseSupplierSearchQuery('');
             }}>
               <div className="modal-content" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
@@ -2418,21 +3503,28 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   <button className="modal-close" onClick={() => {
                     setShowClientPurchaseForm(false);
                     setClientPurchaseFormData({
-                      clientName: '',
                       purchaseDescription: '',
                       totalAmount: '',
                       purchaseDate: getLocalDateString(),
                       notes: ''
                     });
+                    setClientPurchaseSupplierSelect('');
+                    setClientPurchaseNewSupplierName('');
+                    setClientPurchaseSupplierSearchQuery('');
                   }}>×</button>
                 </div>
                 <div className="modal-body">
                   <form onSubmit={async (e) => {
                     e.preventDefault();
+                    const resolvedClientName = resolveClientPurchaseClientName();
+                    if (!resolvedClientName) {
+                      showToast('Select a supplier or client from the list, or choose "Add new supplier / client…" and enter the name.', 'error');
+                      return;
+                    }
                     try {
                       // Prepare purchase data for API
                       const purchaseData = {
-                        clientName: clientPurchaseFormData.clientName,
+                        clientName: resolvedClientName,
                         purchaseDescription: clientPurchaseFormData.purchaseDescription,
                         totalAmount: parseFloat(clientPurchaseFormData.totalAmount) || 0,
                         purchaseDate: clientPurchaseFormData.purchaseDate,
@@ -2450,18 +3542,20 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       
                       setShowClientPurchaseForm(false);
                       setClientPurchaseFormData({
-                        clientName: '',
                         purchaseDescription: '',
                         totalAmount: '',
                         purchaseDate: getLocalDateString(),
                         notes: ''
                       });
+                      setClientPurchaseSupplierSelect('');
+                      setClientPurchaseNewSupplierName('');
+                      setClientPurchaseSupplierSearchQuery('');
                     } catch (error) {
                       console.error('Error creating client purchase:', error);
                       // Fallback to localStorage if API fails
                       const newPurchase = {
                         id: Date.now().toString(),
-                        clientName: clientPurchaseFormData.clientName,
+                        clientName: resolvedClientName,
                         purchaseDescription: clientPurchaseFormData.purchaseDescription,
                         totalAmount: parseFloat(clientPurchaseFormData.totalAmount) || 0,
                         purchaseDate: clientPurchaseFormData.purchaseDate,
@@ -2475,23 +3569,71 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       
                       setShowClientPurchaseForm(false);
                       setClientPurchaseFormData({
-                        clientName: '',
                         purchaseDescription: '',
                         totalAmount: '',
                         purchaseDate: getLocalDateString(),
                         notes: ''
                       });
+                      setClientPurchaseSupplierSelect('');
+                      setClientPurchaseNewSupplierName('');
+                      setClientPurchaseSupplierSearchQuery('');
                     }
                   }}>
                     <div className="form-group">
-                      <label>Client Name *</label>
+                      <label>Supplier / Client *</label>
                       <input
-                        type="text"
-                        value={clientPurchaseFormData.clientName}
-                        onChange={(e) => setClientPurchaseFormData({ ...clientPurchaseFormData, clientName: e.target.value })}
-                        placeholder="Enter client name"
-                        required
+                        type="search"
+                        placeholder="Search suppliers or clients…"
+                        value={clientPurchaseSupplierSearchQuery}
+                        onChange={(e) => setClientPurchaseSupplierSearchQuery(e.target.value)}
+                        autoComplete="off"
+                        disabled={loadingSuppliersForPurchase}
+                        style={{ marginBottom: '8px', width: '100%' }}
                       />
+                      <select
+                        value={clientPurchaseSupplierSelect}
+                        onChange={(e) => {
+                          setClientPurchaseSupplierSelect(e.target.value);
+                          if (e.target.value !== '__new__') setClientPurchaseNewSupplierName('');
+                        }}
+                        disabled={loadingSuppliersForPurchase}
+                        style={{ width: '100%' }}
+                      >
+                        <option value="">Select supplier or client…</option>
+                        {clientPurchasePickFiltered.suppliers.length > 0 && (
+                          <optgroup label="Suppliers (master list)">
+                            {clientPurchasePickFiltered.suppliers.map((s) => (
+                              <option key={`s-${s.id}`} value={`s:${s.id}`}>{s.name}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {clientPurchasePickFiltered.prior.length > 0 && (
+                          <optgroup label="From previous purchases">
+                            {clientPurchasePickFiltered.prior.map((n) => (
+                              <option key={`p-${encodeURIComponent(n)}`} value={`p:${encodeURIComponent(n)}`}>{n}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        <option value="__new__">＋ Add new supplier / client…</option>
+                      </select>
+                      {loadingSuppliersForPurchase && (
+                        <p style={{ marginTop: '8px', fontSize: '12px', color: '#64748b' }}>Loading suppliers…</p>
+                      )}
+                      {clientPurchaseSupplierSelect === '__new__' && (
+                        <div style={{ marginTop: '12px' }}>
+                          <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: 600 }}>New name *</label>
+                          <input
+                            type="text"
+                            value={clientPurchaseNewSupplierName}
+                            onChange={(e) => setClientPurchaseNewSupplierName(e.target.value)}
+                            placeholder="Enter supplier or client name"
+                          />
+                        </div>
+                      )}
+                      <p style={{ marginTop: '10px', fontSize: '12px', color: '#64748b', lineHeight: 1.45 }}>
+                        Suggestions include firms from your supplier master list and names from past client purchases.
+                        A new name is stored on this purchase; to add a firm to the master supplier list, use inventory (admin).
+                      </p>
                     </div>
                     <div className="form-group">
                       <label>Purchase Description *</label>
@@ -2542,12 +3684,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       <button type="button" className="btn btn-secondary" onClick={() => {
                         setShowClientPurchaseForm(false);
                         setClientPurchaseFormData({
-                          clientName: '',
                           purchaseDescription: '',
                           totalAmount: '',
                           purchaseDate: getLocalDateString(),
                           notes: ''
                         });
+                        setClientPurchaseSupplierSelect('');
+                        setClientPurchaseNewSupplierName('');
+                        setClientPurchaseSupplierSearchQuery('');
                       }}>
                         Cancel
                       </button>
@@ -2732,30 +3876,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         }
                       }
                       
-                      // Also create this as an expense in the API
-                      try {
-                        const expenseData = {
-                          type: 'client_payment',
-                          date: clientPaymentFormData.date,
-                          category: 'client_payment',
-                          description: `Payment to ${purchase.clientName} - ${purchase.purchaseDescription || 'Purchase'}`,
-                          amount: paymentAmount,
-                          paymentMethod: clientPaymentFormData.paymentMethod
-                        };
-                        
-                        if (clientPaymentFormData.notes) {
-                          expenseData.description += ` - ${clientPaymentFormData.notes}`;
-                        }
-                        
-                        await apiCreateExpense(expenseData);
-                        await loadExpenses();
-                        await loadBudgetState();
-                        
-                        showToast(`Payment of ₹${paymentAmount.toLocaleString('en-IN')} recorded and added to expenses!`, 'success');
-                      } catch (error) {
-                        console.error('Error creating expense for client payment:', error);
-                        showToast(`Payment recorded, but failed to add to expenses: ${error.message}`, 'error');
-                      }
+                      // Backend POST .../payments already mirrors this outflow to expenses via
+                      // ClientTransactionService (one expense). Do not call createExpense here — it double-counts.
+                      await loadExpenses();
+                      await loadBudgetState();
+                      if (onExpenseUpdate) onExpenseUpdate();
+                      showToast(`Payment of ₹${paymentAmount.toLocaleString('en-IN')} recorded.`, 'success');
                       
                       // Only close modal on success
                       setShowClientPaymentForm(false);
@@ -2894,9 +4020,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               <>
                 {/* Purchases Table View */}
                 {!showPaymentsTable && (
-                  <div className="expenses-table-container">
-                    <div className="sales-table-wrapper">
-                      <table className="data-table expenses-table">
+                  <div className="expenses-table-container client-purchases-table-wrap">
+                    <div className="sales-table-wrapper client-purchases-scroll-wrap">
+                      <table className="data-table expenses-table client-purchases-table">
                         <thead>
                           <tr>
                             <th>Client Name</th>
@@ -2926,8 +4052,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         const safePending = isNaN(pendingAmount) ? 0 : pendingAmount;
                         return (
                           <tr key={purchase?.id}>
-                            <td className="date-cell">{purchase?.clientName || '-'}</td>
-                            <td>{purchase?.purchaseDescription || '-'}</td>
+                            <td className="date-cell client-purchase-client-cell">{purchase?.clientName || '-'}</td>
+                            <td className="client-purchase-desc-cell">
+                              <span className="client-purchase-desc-inner">{purchase?.purchaseDescription || '-'}</span>
+                            </td>
                             <td style={{ fontSize: '12px' }}>
                               {purchase?.purchaseDate ? new Date(purchase.purchaseDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-'}
                             </td>
@@ -2942,8 +4070,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                 ₹{safePending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </span>
                             </td>
-                            <td>
-                              <span style={{
+                            <td className="client-purchase-status-cell">
+                              <span className="client-purchase-status-badge" style={{
                                 padding: '4px 8px',
                                 borderRadius: '4px',
                                 fontSize: '12px',
@@ -2954,8 +4082,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                 {isFullyPaid ? 'Paid' : 'Pending'}
                               </span>
                             </td>
-                            <td>
-                              <div className="action-buttons">
+                            <td className="client-purchase-actions-cell">
+                              <div className="action-buttons client-purchase-action-buttons">
                                 <button
                                   className="action-btn"
                                   onClick={() => {
@@ -3133,7 +4261,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           <>
             {/* Desktop Table View */}
             <div className="sales-table-wrapper">
-              <table className="data-table expenses-table">
+              <table className="data-table expenses-table expenses-main-list-table">
                 <thead>
                   <tr>
                     <th className="sortable" onClick={() => handleSort('date')}>
@@ -3168,10 +4296,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           {getTypeIcon(expense.type)} {getTypeLabel(expense.type)}
                         </span>
                       </td>
-                      <td>
-                        <div>
-                          <strong>{expense.category?.charAt(0).toUpperCase() + expense.category?.slice(1)}</strong>
-                          {expense.description && <div className="expense-desc">{expense.description}</div>}
+                      <td className="expense-details-cell">
+                        <div className="expense-details-inner">
+                          <strong>{formatExpenseCategoryLabel(expense.category)}</strong>
+                          {expense.description && (
+                            <div className="expense-desc expense-desc--wrapped">{expense.description}</div>
+                          )}
                         </div>
                       </td>
                       <td className="amount-cell total-col">
@@ -3214,7 +4344,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       </button>
                       <div className="expense-card-title-section">
                         <div className="expense-card-main-info">
-                          <span className="expense-card-category">{expense.category?.charAt(0).toUpperCase() + expense.category?.slice(1)}</span>
+                          <span className="expense-card-category">{formatExpenseCategoryLabel(expense.category)}</span>
                           <span className="expense-card-amount">₹{(Number(parseFloat(expense?.amount || 0) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                         <span className={`expense-type-badge type-${expense.type}`}>
@@ -3229,9 +4359,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           <span className="expense-card-value">{formatDate(expense.date)}</span>
                         </div>
                         {expense.description && (
-                          <div className="expense-card-row">
+                          <div className="expense-card-row expense-card-row--description">
                             <span className="expense-card-label">Description:</span>
-                            <span className="expense-card-value">{expense.description}</span>
+                            <span className="expense-card-value expense-card-value--wrap">{expense.description}</span>
                           </div>
                         )}
                         <div className="expense-card-row">

@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { getCart, saveCart, removeFromCart, updateCartItemQuantity, clearCart, getCartCount, getCartTotal } from '../utils/cart';
+import {
+  getCart,
+  saveCart,
+  removeFromCart,
+  clearCart,
+  getCartCount,
+  getCartItemStockCap,
+  getCartItemMaxQuantity,
+  MIN_CART_QTY
+} from '../utils/cart';
 import { API_BASE_URL } from '../config/api';
 import { handleApiResponse, isAdmin, fetchCustomerByPhone, fetchCustomerAdvanceSummary } from '../utils/api';
 import { Button } from 'primereact/button';
@@ -374,10 +383,18 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
   const loadCart = () => {
     let cartItems = getCart();
-    // Normalize quantity to number so no leading zeros (e.g. "00001" -> 1)
+    // Normalize quantity and clamp to on-hand stock (totalSqft) when known
     cartItems = cartItems.map((item) => {
-      const qty = Number(parseFloat(item.quantity)) || 1;
-      const next = { ...item, quantity: qty };
+      const rawQ = Number(parseFloat(item.quantity));
+      const maxQ = getCartItemMaxQuantity(item);
+      let qty = Number.isFinite(rawQ) ? rawQ : 1;
+      if (maxQ === 0) {
+        qty = 0;
+      } else {
+        qty = Math.min(Math.max(MIN_CART_QTY, qty), maxQ);
+      }
+      qty = Math.round(qty * 100) / 100;
+      const next = { ...item, quantity: qty, sqftOrdered: qty };
       if (!isAdmin()) {
         next.pricePerSqftAfter = 0;
         next.price = 0;
@@ -403,35 +420,43 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   };
 
   const handleUpdateQuantity = (productId, quantity) => {
-    const numQty = Number(parseFloat(quantity));
-    const normalizedQty = isNaN(numQty) || numQty < MIN_QTY ? MIN_QTY : numQty;
-    const updatedCart = cart.map((item) => {
-      if (item.id === productId) {
-        return { ...item, quantity: normalizedQty };
-      }
-      return item;
+    setCart((prev) => {
+      const updatedCart = prev.map((item) => {
+        if (item.id !== productId) return item;
+        const maxQ = getCartItemMaxQuantity(item);
+        const numQty = Number(parseFloat(quantity));
+        if (maxQ === 0) {
+          return { ...item, quantity: 0, sqftOrdered: 0 };
+        }
+        let normalizedQty = isNaN(numQty) || numQty < MIN_CART_QTY ? MIN_CART_QTY : numQty;
+        normalizedQty = Math.min(normalizedQty, maxQ);
+        normalizedQty = Math.round(normalizedQty * 100) / 100;
+        return { ...item, quantity: normalizedQty, sqftOrdered: normalizedQty };
+      });
+      saveCart(updatedCart);
+      return updatedCart;
     });
-    setCart(updatedCart);
-    saveCart(updatedCart);
   };
 
   const STEP = 0.5; // decimal step for +/- buttons (e.g. 0.5 sqft)
-  const MIN_QTY = 0.01;
 
   const handleIncreaseQuantity = (item) => {
-    const maxQuantity = item.totalSqft || 999999;
-    const current = parseFloat(item.quantity) || 1;
-    if (current < maxQuantity) {
+    const maxQuantity = getCartItemMaxQuantity(item);
+    if (maxQuantity === 0) return;
+    const current = parseFloat(item.quantity) || MIN_CART_QTY;
+    if (current < maxQuantity - 1e-9) {
       const next = Math.round((current + STEP) * 100) / 100;
       handleUpdateQuantity(item.id, Math.min(next, maxQuantity));
     }
   };
 
   const handleDecreaseQuantity = (item) => {
-    const current = parseFloat(item.quantity) || 1;
-    if (current > MIN_QTY) {
+    const maxQuantity = getCartItemMaxQuantity(item);
+    if (maxQuantity === 0) return;
+    const current = parseFloat(item.quantity) || MIN_CART_QTY;
+    if (current > MIN_CART_QTY + 1e-9) {
       const next = Math.round((current - STEP) * 100) / 100;
-      handleUpdateQuantity(item.id, Math.max(MIN_QTY, next));
+      handleUpdateQuantity(item.id, Math.max(MIN_CART_QTY, next));
     }
   };
 
@@ -485,12 +510,21 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     return n.toFixed(2);
   };
 
-  // Display quantity with 2 decimal places (default 1.00)
+  // Display quantity with 2 decimal places (default 1.00) — for editing (no grouping)
   const toDisplayQuantity = (num, fallback = '1.00') => {
     if (num === '' || num === null || num === undefined) return fallback;
     const n = Number(parseFloat(num));
     if (isNaN(n)) return fallback;
-    return (Math.max(MIN_QTY, n)).toFixed(2);
+    return (Math.max(MIN_CART_QTY, n)).toFixed(2);
+  };
+
+  /** Quantity shown in cart (grouped), aligned with “In stock” line */
+  const formatQuantityInCart = (num, fallback = '0.00') => {
+    if (num === '' || num === null || num === undefined) return fallback;
+    const n = Number(parseFloat(num));
+    if (isNaN(n)) return fallback;
+    const v = Math.max(0, n);
+    return v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   // Show number without leading zeros (e.g. 1200 not 01200)
@@ -568,6 +602,26 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     // Validate each item has required fields
     for (let i = 0; i < cart.length; i++) {
       const item = cart[i];
+      const itemLabel = item.title || item.name || item.productName || `Item ${i + 1}`;
+      const qOrdered = Number(parseFloat(item.quantity));
+      if (!Number.isFinite(qOrdered) || qOrdered <= 0) {
+        setSubmitError(`${itemLabel}: quantity must be greater than 0 (or remove the line).`);
+        return;
+      }
+      const cap = getCartItemStockCap(item);
+      const maxQ = getCartItemMaxQuantity(item);
+      if (cap !== null) {
+        if (maxQ === 0) {
+          setSubmitError(`${itemLabel} is out of stock — remove it from the cart.`);
+          return;
+        }
+        if (qOrdered > maxQ + 1e-6) {
+          setSubmitError(
+            `${itemLabel}: quantity (${qOrdered.toFixed(2)}) cannot exceed stock (${cap.toFixed(2)} ${item.unit || 'units'}).`
+          );
+          return;
+        }
+      }
       if (!item.title && !item.name && !item.productName) {
         setSubmitError(`Item ${i + 1}: Item name is required`);
         return;
@@ -797,139 +851,203 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
         <div className="cart-modal-content">
           <div className="cart-items-list">
-            {cart.map((item) => (
+            {cart.map((item) => {
+              const maxQty = getCartItemMaxQuantity(item);
+              const stockCap = getCartItemStockCap(item);
+              const unitLabel = item.unit || 'sqft';
+              return (
               <div key={item.id} className="cart-item-card">
                 <button
+                  type="button"
                   className="cart-item-remove"
                   onClick={() => handleRemoveFromCart(item.id)}
-                  title="Remove Item"
+                  title="Remove item"
                 >
                   <i className="pi pi-times"></i>
                 </button>
-                <div className="cart-item-main">
-                {item.img ? (
-                  <img src={item.img} alt={item.title} className="cart-item-image" />
-                ) : (
-                  <div className="cart-item-image-placeholder">
-                    <i className="pi pi-image"></i>
+
+                <div className="cart-item-body">
+                  <div className="cart-item-media">
+                    {item.img ? (
+                      <img src={item.img} alt="" className="cart-item-image" />
+                    ) : (
+                      <div className="cart-item-image-placeholder" aria-hidden>
+                        <i className="pi pi-image"></i>
+                      </div>
+                    )}
                   </div>
-                )}
-                <div className="cart-item-info">
-                  <h3 className="cart-item-name">{item.title}</h3>
-                  {item.type && <p className="cart-item-category">{item.type}</p>}
-                  <div className="cart-item-pricing">
-                    {/* Editable price input - local state while editing so 59.10 → 59.12 works */}
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={editingPriceItemId === item.id
-                        ? editingPriceValue
-                        : ((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''))}
-                      onFocus={() => {
-                        setEditingPriceItemId(item.id);
-                        setEditingPriceValue((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''));
-                      }}
-                      onChange={(e) => {
-                        const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
-                        setEditingPriceValue(raw);
-                        const updatedPrice = parseFloat(raw) || 0;
-                        const updatedCart = cart.map((cartItem) => {
-                          if (cartItem.id === item.id) {
-                            return { ...cartItem, pricePerSqftAfter: updatedPrice, price: updatedPrice };
+
+                  <div className="cart-item-details">
+                    <h3 className="cart-item-name">{item.title}</h3>
+                    {item.type ? <p className="cart-item-category">{item.type}</p> : null}
+                    <div className="cart-item-price-block">
+                      <span className="cart-item-field-label">Unit price</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        aria-label="Unit price"
+                        value={editingPriceItemId === item.id
+                          ? editingPriceValue
+                          : ((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''))}
+                        onFocus={() => {
+                          setEditingPriceItemId(item.id);
+                          setEditingPriceValue((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''));
+                        }}
+                        onChange={(e) => {
+                          const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
+                          setEditingPriceValue(raw);
+                          const updatedPrice = parseFloat(raw) || 0;
+                          const updatedCart = cart.map((cartItem) => {
+                            if (cartItem.id === item.id) {
+                              return { ...cartItem, pricePerSqftAfter: updatedPrice, price: updatedPrice };
+                            }
+                            return cartItem;
+                          });
+                          setCart(updatedCart);
+                          if (!isAdmin()) saveCart(updatedCart);
+                        }}
+                        onBlur={() => {
+                          const parsed = parseFloat(editingPriceValue);
+                          const rounded = isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
+                          const updatedCart = cart.map((cartItem) => {
+                            if (cartItem.id === item.id) {
+                              return { ...cartItem, pricePerSqftAfter: rounded, price: rounded };
+                            }
+                            return cartItem;
+                          });
+                          setCart(updatedCart);
+                          if (!isAdmin()) saveCart(updatedCart);
+                          setEditingPriceItemId(null);
+                          setEditingPriceValue('');
+                        }}
+                        className="price-input styled-input cart-item-price-input"
+                        placeholder="0.00"
+                      />
+                      <span className="cart-item-unit-price">
+                        ₹ {(Number(item.pricePerSqftAfter ?? item.price ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / {unitLabel}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="cart-item-qty-column">
+                    <span className="cart-item-field-label">Quantity</span>
+                    <div className="cart-item-qty">
+                      <button
+                        type="button"
+                        className="qty-btn minus"
+                        onClick={() => handleDecreaseQuantity(item)}
+                        disabled={maxQty === 0 || (parseFloat(item.quantity) || 0) <= MIN_CART_QTY + 1e-9}
+                        aria-label="Decrease quantity"
+                      >
+                        <i className="pi pi-minus"></i>
+                      </button>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        aria-label="Quantity"
+                        min={MIN_CART_QTY}
+                        step="0.01"
+                        max={maxQty}
+                        value={editingQtyItemId === item.id
+                          ? editingQtyValue
+                          : maxQty === 0
+                            ? formatQuantityInCart(0)
+                            : formatQuantityInCart(Number(parseFloat(item.quantity)) || MIN_CART_QTY)}
+                        onFocus={() => {
+                          setEditingQtyItemId(item.id);
+                          setEditingQtyValue(
+                            maxQty === 0
+                              ? '0.00'
+                              : toDisplayQuantity(Number(parseFloat(item.quantity)) || MIN_CART_QTY, '1.00')
+                          );
+                        }}
+                        onChange={(e) => {
+                          const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
+                          setEditingQtyValue(raw === '' ? '' : raw);
+                          if (maxQty === 0) {
+                            handleUpdateQuantity(item.id, 0);
+                            return;
                           }
-                          return cartItem;
-                        });
-                        setCart(updatedCart);
-                        if (!isAdmin()) saveCart(updatedCart);
-                      }}
-                      onBlur={() => {
-                        const parsed = parseFloat(editingPriceValue);
-                        const rounded = isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
-                        const updatedCart = cart.map((cartItem) => {
-                          if (cartItem.id === item.id) {
-                            return { ...cartItem, pricePerSqftAfter: rounded, price: rounded };
+                          if (raw === '' || raw === '0') {
+                            handleUpdateQuantity(item.id, MIN_CART_QTY);
+                            return;
                           }
-                          return cartItem;
-                        });
-                        setCart(updatedCart);
-                        if (!isAdmin()) saveCart(updatedCart);
-                        setEditingPriceItemId(null);
-                        setEditingPriceValue('');
-                      }}
-                      className="price-input styled-input"
-                      placeholder="e.g. 58 or 58.50"
-                    />
-                    <span className="cart-item-unit-price">₹ {(Number(item.pricePerSqftAfter ?? item.price ?? 0)).toFixed(2)} / {item.unit || 'sqft'}</span>
+                          const val = parseFloat(raw);
+                          if (!isNaN(val)) {
+                            const clamped = Math.min(Math.max(MIN_CART_QTY, val), maxQty);
+                            handleUpdateQuantity(item.id, Math.round(clamped * 100) / 100);
+                          }
+                        }}
+                        onBlur={() => {
+                          const raw = editingQtyValue.trim();
+                          if (maxQty === 0) {
+                            handleUpdateQuantity(item.id, 0);
+                          } else if (raw === '' || raw === '0') {
+                            handleUpdateQuantity(item.id, MIN_CART_QTY);
+                          } else {
+                            const parsed = parseFloat(raw);
+                            const rounded = isNaN(parsed)
+                              ? MIN_CART_QTY
+                              : Math.round(Math.min(Math.max(MIN_CART_QTY, parsed), maxQty) * 100) / 100;
+                            handleUpdateQuantity(item.id, rounded);
+                          }
+                          setEditingQtyItemId(null);
+                          setEditingQtyValue('');
+                        }}
+                        className="qty-input"
+                        placeholder="0.00"
+                        disabled={maxQty === 0}
+                      />
+                      <button
+                        type="button"
+                        className="qty-btn plus"
+                        onClick={() => handleIncreaseQuantity(item)}
+                        disabled={maxQty === 0 || (parseFloat(item.quantity) || 0) >= maxQty - 1e-9}
+                        aria-label="Increase quantity"
+                      >
+                        <i className="pi pi-plus"></i>
+                      </button>
+                    </div>
+                    {stockCap !== null && stockCap > 0 ? (
+                      <span className="cart-item-qty-hint">Max {formatQuantityInCart(stockCap)} {unitLabel}</span>
+                    ) : null}
                   </div>
                 </div>
-                <div className="cart-item-qty">
-                  <button
-                    className="qty-btn minus"
-                    onClick={() => handleDecreaseQuantity(item)}
-                    disabled={(parseFloat(item.quantity) || 1) <= MIN_QTY}
-                  >
-                    <i className="pi pi-minus"></i>
-                  </button>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    min={MIN_QTY}
-                    step="0.01"
-                    max={item.totalSqft || 999999}
-                    value={editingQtyItemId === item.id
-                      ? editingQtyValue
-                      : toDisplayQuantity(Number(parseFloat(item.quantity)) || 1, '1.00')}
-                    onFocus={() => {
-                      setEditingQtyItemId(item.id);
-                      setEditingQtyValue(toDisplayQuantity(Number(parseFloat(item.quantity)) || 1, '1.00'));
-                    }}
-                    onChange={(e) => {
-                      const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
-                      setEditingQtyValue(raw === '' ? '' : raw);
-                      if (raw === '' || raw === '0') {
-                        handleUpdateQuantity(item.id, 1); // default 1.00
-                        return;
-                      }
-                      const val = parseFloat(raw);
-                      const maxQty = item.totalSqft || 999999;
-                      if (!isNaN(val)) {
-                        const clamped = Math.min(Math.max(MIN_QTY, val), maxQty);
-                        handleUpdateQuantity(item.id, Math.round(clamped * 100) / 100);
-                      }
-                    }}
-                    onBlur={() => {
-                      const raw = editingQtyValue.trim();
-                      if (raw === '' || raw === '0') {
-                        handleUpdateQuantity(item.id, 1); // default 1.00
-                      } else {
-                        const parsed = parseFloat(raw);
-                        const maxQty = item.totalSqft || 999999;
-                        const rounded = isNaN(parsed) ? 1 : Math.round(Math.min(Math.max(MIN_QTY, parsed), maxQty) * 100) / 100;
-                        handleUpdateQuantity(item.id, rounded);
-                      }
-                      setEditingQtyItemId(null);
-                      setEditingQtyValue('');
-                    }}
-                    className="qty-input"
-                    placeholder="1.00"
-                  />
-                  <button
-                    className="qty-btn plus"
-                    onClick={() => handleIncreaseQuantity(item)}
-                    disabled={(parseFloat(item.quantity) || 0) >= (item.totalSqft || 999999)}
-                  >
-                    <i className="pi pi-plus"></i>
-                  </button>
-                </div>
-                </div>
-                <div className="cart-item-total-box">
-                  <span className="cart-item-total-label">Total</span>
-                  <span className="cart-item-total-value">
-                    ₹ {((Number(item.pricePerSqftAfter ?? item.price ?? 0)) * (Number(parseFloat(item.quantity)) || 1)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
+
+                <div className="cart-item-footer">
+                  <div className="cart-item-stock-pill" role="status">
+                    {stockCap === null ? (
+                      <span className="cart-item-stock cart-item-stock-unknown">
+                        <i className="pi pi-info-circle" aria-hidden /> Stock not on file — check inventory
+                      </span>
+                    ) : stockCap <= 0 ? (
+                      <span className="cart-item-stock cart-item-stock-out">
+                        <i className="pi pi-times-circle" aria-hidden /> Out of stock
+                      </span>
+                    ) : (
+                      <span className="cart-item-stock cart-item-stock-ok">
+                        <span className="cart-item-stock-label">In stock</span>
+                        <span className="cart-item-stock-value">
+                          {stockCap.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
+                          <span className="cart-item-stock-unit">{unitLabel}</span>
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="cart-item-total-box">
+                    <span className="cart-item-total-label">Line total</span>
+                    <span className="cart-item-total-value">
+                      ₹{' '}
+                      {((Number(item.pricePerSqftAfter ?? item.price ?? 0)) * (Number(parseFloat(item.quantity)) || 0)).toLocaleString('en-IN', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2
+                      })}
+                    </span>
+                  </div>
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
 
           {/* Additional Charges Card - under items */}

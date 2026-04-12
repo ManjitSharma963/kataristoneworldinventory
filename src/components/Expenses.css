@@ -463,6 +463,108 @@
   border-bottom: 1px solid rgba(163, 177, 198, 0.18);
 }
 
+.budget-history-source-cash {
+  color: #0f766e;
+}
+
+.budget-history-source-bank {
+  color: #7c3aed;
+}
+
+.budget-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.budget-history-title {
+  margin: 0;
+  font-size: 14px;
+  color: #555;
+}
+
+.budget-history-filters {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.budget-history-filter-item {
+  min-width: 150px;
+  flex: 0 1 180px;
+}
+
+.budget-history-filter-item-wide {
+  min-width: 170px;
+  flex-basis: 200px;
+}
+
+.budget-history-filter-label {
+  font-size: 12px;
+  color: #64748b;
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.budget-history-filter-control {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 10px;
+  background: #e0e5ec;
+  color: #334155;
+  font-size: 14px;
+  box-shadow:
+    inset 2px 2px 4px rgba(163, 177, 198, 0.35),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.5);
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.budget-history-filter-control:focus {
+  border-color: #667eea;
+  box-shadow:
+    0 0 0 2px rgba(102, 126, 234, 0.15),
+    inset 2px 2px 4px rgba(163, 177, 198, 0.35),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.5);
+}
+
+.budget-history-download-btn,
+.budget-history-clear-btn {
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+
+.budget-history-clear-btn {
+  align-self: flex-end;
+}
+
+@media (max-width: 768px) {
+  .budget-history-header {
+    align-items: stretch;
+  }
+
+  .budget-history-download-btn {
+    width: 100%;
+  }
+
+  .budget-history-filter-item,
+  .budget-history-filter-item-wide {
+    min-width: 100%;
+    flex-basis: 100%;
+  }
+
+  .budget-history-clear-btn {
+    width: 100%;
+  }
+}
+
 .budget-tx-credit {
   color: #16a34a;
 }
@@ -829,9 +931,15 @@
   text-align: center;
 }
 
-/* Compact employee table */
+/* Shared typography for expenses + employee tables */
 .expenses-table-container .data-table.expenses-table {
   font-size: 11px;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table,
+.expenses-table-container .data-table.expenses-table.employee-payroll-table {
+  table-layout: fixed;
+  width: 100%;
 }
 
 .expenses-table-container .data-table.expenses-table th {
@@ -846,6 +954,227 @@
 
 .expenses-table-container .data-table.expenses-table .expense-amount {
   font-size: 11px;
+}
+
+/* ——— Main “All expenses” list (6 columns) — was sharing .expenses-table with employee grid — */
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table tbody tr:hover {
+  transform: none;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table thead th,
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table tbody td {
+  box-sizing: border-box;
+  overflow-x: hidden;
+  vertical-align: top;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td.actions-cell {
+  overflow-x: visible;
+  overflow-y: visible;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table th:nth-child(1),
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td:nth-child(1) {
+  width: 10%;
+  min-width: 4.5rem;
+  white-space: nowrap;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table th:nth-child(2),
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td:nth-child(2) {
+  width: 14%;
+  min-width: 7.5rem;
+  white-space: normal !important;
+  word-break: break-word;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td:nth-child(2) .expense-type-badge {
+  max-width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table th:nth-child(3),
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td.expense-details-cell {
+  width: 32%;
+  min-width: 0;
+  white-space: normal !important;
+  text-align: center;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td.expense-details-cell .expense-details-inner {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0 auto;
+  text-align: center;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td.expense-details-cell .expense-details-inner strong {
+  display: block;
+  text-align: center;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table .expense-desc--wrapped {
+  display: block !important;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 6px;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.45;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table th:nth-child(4),
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td:nth-child(4) {
+  width: 12%;
+  min-width: 5.5rem;
+  white-space: nowrap;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table th:nth-child(5),
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td:nth-child(5) {
+  width: 14%;
+  min-width: 5rem;
+  white-space: nowrap;
+}
+
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table th:nth-child(6),
+.expenses-table-container .data-table.expenses-table.expenses-main-list-table td:nth-child(6) {
+  width: 18%;
+  min-width: 5.5rem;
+  white-space: nowrap;
+}
+
+/* ——— Employee tab payroll table (7 columns) — */
+.expenses-table-container .data-table.employee-payroll-table {
+  min-width: 54rem;
+}
+
+.expenses-table-container .sales-table-wrapper.employee-table-scroll-wrap {
+  padding: 2px 4px 10px;
+}
+
+.expenses-table-container .data-table.employee-payroll-table tbody tr:hover {
+  transform: none;
+}
+
+.expenses-table-container .data-table.employee-payroll-table thead th,
+.expenses-table-container .data-table.employee-payroll-table tbody td {
+  box-sizing: border-box;
+  overflow-x: hidden;
+  vertical-align: middle;
+}
+
+.expenses-table-container .data-table.employee-payroll-table thead th {
+  white-space: normal !important;
+  line-height: 1.3;
+  word-break: break-word;
+  hyphens: auto;
+}
+
+.expenses-table-container .data-table.employee-payroll-table th.employee-col-joining,
+.expenses-table-container .data-table.employee-payroll-table td.employee-joining-date-cell {
+  white-space: nowrap !important;
+  width: 6.5rem;
+  max-width: 6.5rem;
+  min-width: 5.5rem;
+  text-align: center;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.expenses-table-container .data-table.employee-payroll-table th:nth-child(1),
+.expenses-table-container .data-table.employee-payroll-table td:nth-child(1) {
+  width: 17%;
+  min-width: 6.5rem;
+  white-space: normal !important;
+  word-break: break-word;
+  text-align: left;
+}
+
+.expenses-table-container .data-table.employee-payroll-table th:nth-child(2),
+.expenses-table-container .data-table.employee-payroll-table td:nth-child(2) {
+  width: 11%;
+  min-width: 5.5rem;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.expenses-table-container .data-table.employee-payroll-table th:nth-child(4),
+.expenses-table-container .data-table.employee-payroll-table td:nth-child(4) {
+  width: 15%;
+  min-width: 6.5rem;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.expenses-table-container .data-table.employee-payroll-table th:nth-child(5),
+.expenses-table-container .data-table.employee-payroll-table td:nth-child(5) {
+  width: 13%;
+  min-width: 6rem;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.expenses-table-container .data-table.employee-payroll-table th:nth-child(6),
+.expenses-table-container .data-table.employee-payroll-table td.employee-salary-status-cell {
+  width: 17%;
+  min-width: 7rem;
+  white-space: normal !important;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.expenses-table-container .data-table.employee-payroll-table .employee-salary-status-badge {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal !important;
+  text-align: center;
+  line-height: 1.35;
+  padding: 6px 10px !important;
+  box-sizing: border-box;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.expenses-table-container .data-table.employee-payroll-table th:nth-child(7),
+.expenses-table-container .data-table.employee-payroll-table td.employee-actions-cell {
+  width: 20%;
+  min-width: 10.5rem;
+  white-space: normal !important;
+  text-align: center;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+  vertical-align: middle;
+}
+
+.expenses-table-container .data-table.employee-payroll-table .employee-actions-inner {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.expenses-table-container .data-table.employee-payroll-table .employee-actions-inner .btn-icon {
+  flex: 0 0 auto;
 }
 
 .expenses-table-container .data-table th:first-child,
@@ -878,6 +1207,159 @@
 
 .expenses-table-container .data-table .expense-desc {
   text-align: center;
+}
+
+/* Extra inset so action buttons / shadows are not clipped at the right edge */
+.expenses-table-container.client-purchases-table-wrap {
+  padding-left: 14px;
+  padding-right: 20px;
+}
+
+.expenses-table-container .sales-table-wrapper.client-purchases-scroll-wrap {
+  padding: 4px 2px 8px;
+}
+
+/* Client purchases: wrap description + stop header/column collapse */
+/* Avoid max-width:0 on cells — it breaks table-layout:fixed and makes headers overlap. */
+/* Dashboard.css sets .data-table td { white-space: nowrap } — keep !important on body cells that wrap */
+.expenses-table-container .data-table.client-purchases-table {
+  table-layout: fixed;
+  width: 100%;
+  /* Room for amount headers + centered status/actions + padded actions column */
+  min-width: 58rem;
+}
+
+.expenses-table-container .data-table.client-purchases-table thead {
+  overflow: visible;
+}
+
+.expenses-table-container .data-table.client-purchases-table th:nth-child(1),
+.expenses-table-container .data-table.client-purchases-table td.client-purchase-client-cell {
+  width: 10%;
+  min-width: 5.25rem;
+  white-space: normal !important;
+  overflow-wrap: break-word;
+  word-break: normal;
+  vertical-align: top;
+  text-align: left;
+  padding-right: 10px;
+}
+
+.expenses-table-container .data-table.client-purchases-table th:nth-child(2) {
+  width: 28%;
+  min-width: 11rem;
+  white-space: normal !important;
+  vertical-align: bottom;
+  text-align: left;
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  padding-right: 12px;
+}
+
+.expenses-table-container .data-table.client-purchases-table td.client-purchase-desc-cell {
+  width: 28%;
+  min-width: 11rem;
+  white-space: normal !important;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  vertical-align: top;
+  text-align: left;
+  line-height: 1.5;
+  hyphens: auto;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  padding-right: 14px;
+}
+
+.expenses-table-container .data-table.client-purchases-table .client-purchase-desc-inner {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  white-space: normal !important;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+
+.expenses-table-container .data-table.client-purchases-table th:nth-child(3),
+.expenses-table-container .data-table.client-purchases-table td:nth-child(3) {
+  width: 9%;
+  min-width: 5.75rem;
+  white-space: normal !important;
+  vertical-align: top;
+  line-height: 1.25;
+  word-break: break-word;
+  hyphens: auto;
+}
+
+.expenses-table-container .data-table.client-purchases-table th:nth-child(4),
+.expenses-table-container .data-table.client-purchases-table td:nth-child(4),
+.expenses-table-container .data-table.client-purchases-table th:nth-child(5),
+.expenses-table-container .data-table.client-purchases-table td:nth-child(5),
+.expenses-table-container .data-table.client-purchases-table th:nth-child(6),
+.expenses-table-container .data-table.client-purchases-table td:nth-child(6) {
+  width: 10%;
+  min-width: 6.5rem;
+  white-space: normal !important;
+  vertical-align: top;
+  line-height: 1.3;
+  word-break: break-word;
+  hyphens: auto;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.expenses-table-container .data-table.client-purchases-table th:nth-child(7),
+.expenses-table-container .data-table.client-purchases-table td.client-purchase-status-cell {
+  width: 9%;
+  min-width: 5.75rem;
+  white-space: normal !important;
+  vertical-align: middle;
+  text-align: center !important;
+  line-height: 1.25;
+  word-break: break-word;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.expenses-table-container .data-table.client-purchases-table .client-purchase-status-badge {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.expenses-table-container .data-table.client-purchases-table th:nth-child(8),
+.expenses-table-container .data-table.client-purchases-table td.client-purchase-actions-cell {
+  width: 12%;
+  /* Wide enough for two icon buttons + gap + padding on one row */
+  min-width: 9.25rem;
+  white-space: nowrap;
+  vertical-align: middle;
+  text-align: center !important;
+  padding: 10px 12px !important;
+  box-sizing: border-box;
+}
+
+/* Override global flex-end + edge hugging from Dashboard .action-buttons */
+.expenses-table-container .data-table.client-purchases-table .client-purchase-action-buttons {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.expenses-table-container .data-table.client-purchases-table .client-purchase-actions-cell .action-btn {
+  flex-shrink: 0;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 6px 9px;
 }
 
 .expenses-table-container .data-table .advance-badge {
@@ -1544,6 +2026,18 @@
     text-align: right;
     flex: 1;
     margin-left: 12px;
+  }
+
+  .expense-card-row--description {
+    align-items: flex-start;
+  }
+
+  .expense-card-value--wrap {
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    line-height: 1.45;
+    min-width: 0;
   }
 
   .expense-card-actions {

@@ -2,26 +2,25 @@
   margin-bottom: 1rem;
 }
 
-/* Center all table content for consistent alignment */
-.website-items-table th,
-.website-items-table td {
-  text-align: center;
+/* Product column: left-aligned so every row starts on the same edge (avoids stagger from centered inline-flex). */
+.website-items-table th:first-child,
+.website-items-table td.product-name-cell {
+  text-align: left;
   vertical-align: middle;
 }
 
-.website-items-table .product-name-cell {
+.website-items-table th:not(:first-child),
+.website-items-table td:not(.product-name-cell) {
   text-align: center;
   vertical-align: middle;
 }
 
 .website-items-table .product-name-cell .product-with-image {
-  display: inline-flex;
-  align-items: flex-start;
-  justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   gap: 10px;
-  min-height: auto;
-  vertical-align: top;
-  max-width: 100%;
+  width: 100%;
   text-align: left;
 }
 
@@ -37,11 +36,11 @@
 
 .website-items-table .product-name-cell .product-name {
   line-height: 1.4;
-  vertical-align: top;
-  flex-shrink: 1;
+  flex: 1;
   min-width: 0;
   white-space: normal;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
   text-align: left;
 }
 

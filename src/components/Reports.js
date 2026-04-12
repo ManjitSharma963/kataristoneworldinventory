@@ -723,14 +723,76 @@ const Reports = () => {
     return billsRows.slice(start, start + PAGE_SIZE);
   }, [billsRows, billsPageSafe]);
 
-  /** Single day: same as GET /budget/daily/summary (Expenses page). Range: opening + net in-hand from closing report. */
+  const paySummary = closingData?.paymentSummary || {};
+  const cashCollected = Number(paySummary.CASH) || 0;
+  const upiCollected = Number(paySummary.UPI) || 0;
+  const bankTransferCollected = Number(paySummary.BANK_TRANSFER) || 0;
+  const chequeCollected = Number(paySummary.CHEQUE) || 0;
+  const otherCollected = Number(paySummary.OTHER) || 0;
+  // Include only real in-hand inflows (bill collections + loan received).
+  // Exclude manual budget edits so report totals match "current remaining in hand".
+  const cashUpiCollectedFromEvents = useMemo(() => {
+    const creditTypes = new Set(['IN_HAND_COLLECTION', 'LOAN_RECEIVED']);
+    return (Array.isArray(budgetEvents) ? budgetEvents : []).reduce((sum, e) => {
+      const typ = String(e?.eventType ?? e?.event_type ?? '').trim().toUpperCase();
+      if (!creditTypes.has(typ)) return sum;
+      const delta = Number(e?.delta);
+      if (!Number.isFinite(delta) || delta <= 0) return sum;
+      return sum + delta;
+    }, 0);
+  }, [budgetEvents]);
+  const cashUpiCollected = cashUpiCollectedFromEvents > 0
+    ? cashUpiCollectedFromEvents
+    : (cashCollected + upiCollected);
+
+  const expenseSplit = useMemo(() => {
+    return (Array.isArray(expenseLines) ? expenseLines : []).reduce(
+      (acc, ex) => {
+        const amt = Number(ex?.amount) || 0;
+        const pm = String(ex?.paymentMethod ?? ex?.payment_method ?? '').trim().toLowerCase();
+        if (pm === 'cash' || pm === 'upi') {
+          acc.cashUpi += amt;
+        } else if (pm === 'bank' || pm === 'bank_transfer' || pm === 'bank transfer') {
+          acc.bankTransfer += amt;
+        } else if (pm === 'card') {
+          acc.card += amt;
+        } else if (pm === 'cheque' || pm === 'check') {
+          acc.cheque += amt;
+        } else {
+          // Unknown/blank mode: treat as non in-hand
+          acc.other += amt;
+        }
+        return acc;
+      },
+      { cashUpi: 0, bankTransfer: 0, card: 0, cheque: 0, other: 0 }
+    );
+  }, [expenseLines]);
+
+  /**
+   * Keep previous behavior for single-day reports (source of truth: daily budget summary API),
+   * so this number matches "current remaining in hand" in Expenses.
+   * For ranges, show computed in-hand trend from opening + in-hand collected - in-hand expenses.
+   */
   const finalBudgetInHand = useMemo(() => {
     if (!isRange && budgetSummarySync != null) {
       const r = Number(budgetSummarySync?.remainingAmount ?? budgetSummarySync?.remaining_amount);
       if (Number.isFinite(r)) return r;
     }
-    return (Number(openingBudget) || 0) + resolveInHand(closingData);
-  }, [isRange, budgetSummarySync, openingBudget, closingData]);
+    return (Number(openingBudget) || 0) + cashUpiCollected - (Number(expenseSplit.cashUpi) || 0);
+  }, [isRange, budgetSummarySync, openingBudget, cashUpiCollected, expenseSplit.cashUpi]);
+
+  // Keep summary arithmetic consistent for single-day:
+  // opening + collected(cash+upi) - expenses(cash+upi) = final.
+  const displayedCashUpiCollected = useMemo(() => {
+    if (!isRange) {
+      const opening = Number(openingBudget) || 0;
+      const expInHand = Number(expenseSplit.cashUpi) || 0;
+      const final = Number(finalBudgetInHand) || 0;
+      const derived = final - opening + expInHand;
+      return Number.isFinite(derived) ? derived : 0;
+    }
+    return cashUpiCollected;
+  }, [isRange, openingBudget, expenseSplit.cashUpi, finalBudgetInHand, cashUpiCollected]);
 
   const onChangeFrom = (e) => {
     const v = e.target.value;
@@ -755,10 +817,6 @@ const Reports = () => {
     if (dateFrom === dateTo) return formatDayLabel(dateFrom);
     return `${formatDayLabel(dateFrom)} – ${formatDayLabel(dateTo)}`;
   }, [dateFrom, dateTo]);
-
-  const paySummary = closingData?.paymentSummary || {};
-  const otherCollected =
-    (Number(paySummary.CHEQUE) || 0) + (Number(paySummary.OTHER) || 0);
 
   const billsHeading = isRange ? 'Bills in this period' : "Today's bills";
   const expensesHeading = isRange ? 'Expenses in this period' : "Today's expenses";
@@ -933,7 +991,11 @@ const Reports = () => {
               <strong>{money(paySummary.BANK_TRANSFER)}</strong>
             </div>
             <div className="daily-paymode other">
-              <span>Other (cheque, etc.)</span>
+              <span>Cheque</span>
+              <strong>{money(paySummary.CHEQUE)}</strong>
+            </div>
+            <div className="daily-paymode other">
+              <span>Other</span>
               <strong>{money(otherCollected)}</strong>
             </div>
           </div>
@@ -1107,17 +1169,21 @@ const Reports = () => {
               <h4 title="Cash + UPI available after expenses">Budget in hand summary</h4>
               <div className="report-row">
                 <span>Cash + UPI collected {isRange ? 'in period' : '(today)'}</span>
-                <span className="report-value positive">
-                  {money((Number(paySummary.CASH) || 0) + (Number(paySummary.UPI) || 0))}
-                </span>
+                <span className="report-value positive">{money(displayedCashUpiCollected)}</span>
               </div>
                 <div className="report-row">
                   <span>Total opening budget {isRange ? '(period start)' : '(today)'}</span>
                   <span className="report-value positive">{money(openingBudget)}</span>
                 </div>
               <div className="report-row">
-                <span>Total expenses {isRange ? 'in period' : '(today)'}</span>
-                <span className="report-value negative">{money(closingData.totalExpenses)}</span>
+                <span>Expenses in Cash + UPI {isRange ? 'in period' : '(today)'}</span>
+                <span className="report-value negative">{money(expenseSplit.cashUpi)}</span>
+              </div>
+              <div className="report-row">
+                <span>Expenses in Bank + Card + Cheque {isRange ? 'in period' : '(today)'}</span>
+                <span className="report-value negative">
+                  {money(expenseSplit.bankTransfer + expenseSplit.card + expenseSplit.cheque + expenseSplit.other)}
+                </span>
               </div>
                 <div
                   className={`report-row report-row-strong cash-final ${
@@ -1130,13 +1196,12 @@ const Reports = () => {
               <p className="report-muted daily-microcopy">
                 {isRange ? (
                   <>
-                    <strong>Cash + UPI collected</strong> in the selected range minus{' '}
-                    <strong>expenses posted</strong> in the same range. Bank/Cheque are not in this number.
+                    Final in-hand uses <strong>opening + (cash + UPI collected) - (cash + UPI expenses)</strong>.{' '}
+                    Bank/Card/Cheque expenses are shown separately and do not reduce this in-hand figure.
                   </>
                 ) : (
                   <>
-                    For a single day, <strong>opening</strong> and <strong>final</strong> match the daily budget ledger (same as the Expenses page).{' '}
-                    Cash + UPI above is for reference; collections also feed the budget through the server.
+                    Final in-hand uses <strong>opening + (cash + UPI collected) - (cash + UPI expenses)</strong> for the day.
                   </>
                 )}
               </p>
@@ -1169,7 +1234,7 @@ const Reports = () => {
               <strong>Bill table</strong>: Each invoice&apos;s bill date and paid split (Cash / UPI / Bank / Other).
             </li>
             <li>
-              <strong>Final budget in hand</strong>: Cash + UPI collected in the period minus expenses in the period.
+              <strong>Final budget in hand</strong>: Opening budget + (Cash + UPI collected) - (Cash + UPI expenses).
             </li>
           </Explainer>
         </>
