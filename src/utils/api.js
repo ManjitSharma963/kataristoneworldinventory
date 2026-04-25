@@ -301,6 +301,35 @@ export const createClientTransaction = async (payload) => {
   });
 };
 
+/** Signed running balance per row (PAYMENT_IN +, OUT/PURCHASE −). */
+export const fetchClientRunningLedger = async (clientId) => {
+  const cid = String(clientId ?? '').trim();
+  const q = new URLSearchParams({ clientId: cid });
+  return await apiCall(`/client-transactions/running-ledger?${q}`, { method: 'GET' });
+};
+
+export const fetchClientDueAlerts = async () => {
+  return await apiCall('/client-purchases/due-alerts', { method: 'GET' });
+};
+
+export const fetchClientSupplierAccounts = async () => {
+  return await apiCall('/client-supplier-accounts', { method: 'GET' });
+};
+
+export const createClientSupplierAccount = async (payload) => {
+  return await apiCall('/client-supplier-accounts', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};
+
+export const updateClientSupplierAccount = async (id, payload) => {
+  return await apiCall(`/client-supplier-accounts/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+};
+
 /**
  * Delete employee
  * @param {string|number} id - Employee ID
@@ -451,13 +480,19 @@ export const recordLoanReceipt = async ({ amount, lenderId, lenderName, notes, p
 /** Lenders with borrowed / repaid / outstanding (location from JWT). */
 export const fetchLoanLenders = async () => {
   const res = await apiCall('/loans/lenders', { method: 'GET' });
-  return Array.isArray(res) ? res : [];
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res?.content)) return res.content;
+  if (Array.isArray(res?.data)) return res.data;
+  return [];
 };
 
 /** Full RECEIPT + REPAYMENT history for one lender. */
 export const fetchLoanLenderLedger = async (lenderId) => {
   const res = await apiCall(`/loans/lenders/${lenderId}/ledger`, { method: 'GET' });
-  return Array.isArray(res) ? res : [];
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res?.content)) return res.content;
+  if (Array.isArray(res?.data)) return res.data;
+  return [];
 };
 
 /**
@@ -465,10 +500,10 @@ export const fetchLoanLenderLedger = async (lenderId) => {
  * @param {number} amount - Budget amount per day
  * @returns {Promise<Object>}
  */
-export const createDailyBudget = async (amount) => {
+export const createDailyBudget = async (amount, fundingSource = 'CASH_UPI') => {
   return await apiCall('/budget/daily', {
     method: 'POST',
-    body: JSON.stringify({ amount: Number(amount) }),
+    body: JSON.stringify({ amount: Number(amount), fundingSource }),
   });
 };
 
@@ -477,10 +512,10 @@ export const createDailyBudget = async (amount) => {
  * @param {number} amount - Budget amount per day
  * @returns {Promise<Object>}
  */
-export const updateDailyBudget = async (amount) => {
+export const updateDailyBudget = async (amount, fundingSource = 'CASH_UPI') => {
   return await apiCall('/budget/daily', {
     method: 'PUT',
-    body: JSON.stringify({ amount: Number(amount) }),
+    body: JSON.stringify({ amount: Number(amount), fundingSource }),
   });
 };
 
@@ -515,6 +550,26 @@ export const getDailyBudgetEvents = async ({ from, to, limit } = {}) => {
   if (limit != null) params.set('limit', String(limit));
   const qs = params.toString();
   return await apiCall(`/budget/daily/history${qs ? `?${qs}` : ''}`, { method: 'GET' });
+};
+
+// ==================== UNIFIED LEDGER (Phase 3–4) ====================
+
+/** Net cash+UPI, bank, total from unified_financial_ledger for current JWT location. */
+export const getBalanceSummary = async () => {
+  return await apiCall('/v1/balance/summary', { method: 'GET' });
+};
+
+/**
+ * Transaction rows from unified_financial_ledger (newest first).
+ * @param {{ from?: string, to?: string, limit?: number }} params - yyyy-MM-dd
+ */
+export const getLedgerTransactions = async ({ from, to, limit = 200 } = {}) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', String(from));
+  if (to) params.set('to', String(to));
+  if (limit != null) params.set('limit', String(limit));
+  const qs = params.toString();
+  return await apiCall(`/v1/balance/transactions${qs ? `?${qs}` : ''}`, { method: 'GET' });
 };
 
 /**
@@ -649,6 +704,15 @@ export const fetchSalesPaymentModeSummary = async ({ date, dateTo }) => {
   return await apiCall(`/reports/payment-mode-summary?${params.toString()}`, { method: 'GET' });
 };
 
+export const fetchSalesChargesSummary = async ({ date, dateTo }) => {
+  const params = new URLSearchParams();
+  params.set('date', date);
+  if (dateTo != null && dateTo !== '') {
+    params.set('dateTo', dateTo);
+  }
+  return await apiCall(`/reports/sales-charges-summary?${params.toString()}`, { method: 'GET' });
+};
+
 // ==================== BILL PDF DOWNLOAD ====================
 
 /**
@@ -711,9 +775,41 @@ export const deleteBill = async (billId, billType) => {
   return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}`, { method: 'DELETE' });
 };
 
+/**
+ * Full bill replace/edit (items + charges + optional payment split).
+ * @param {string|number} billId
+ * @param {string} billType - 'GST' or 'NON-GST' (or NON_GST)
+ * @param {Object} payload - BillRequestDTO-compatible payload
+ */
+export const updateBill = async (billId, billType, payload) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+};
+
+/** Cancelled-bill audit for branch; optional billDateFrom / billDateTo as YYYY-MM-DD (bill date, inclusive). */
+export const getBillCancellations = async (billDateFrom, billDateTo) => {
+  const q = new URLSearchParams();
+  if (billDateFrom) q.set('billDateFrom', billDateFrom);
+  if (billDateTo) q.set('billDateTo', billDateTo);
+  const qs = q.toString();
+  return await apiCall(`/bills/cancellations${qs ? `?${qs}` : ''}`, { method: 'GET' });
+};
+
 // Authentication API functions
-export const login = async (email, password) => {
+export const login = async (emailOrPayload, passwordArg) => {
   try {
+    let email = '';
+    let password = '';
+    if (emailOrPayload && typeof emailOrPayload === 'object') {
+      email = String(emailOrPayload.email || '').trim();
+      password = String(emailOrPayload.password || '').trim();
+    } else {
+      email = String(emailOrPayload || '').trim();
+      password = String(passwordArg || '').trim();
+    }
     const response = await apiCall('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password })
@@ -993,7 +1089,8 @@ export const deleteClientPurchase = async (id) => {
  * @returns {Promise<Object>} Created payment
  */
 export const addClientPayment = async (purchaseId, paymentData) => {
-  return await apiCall(`/client-purchases/${purchaseId}/payments`, {
+  const pid = encodeURIComponent(String(purchaseId ?? '').trim());
+  return await apiCall(`/client-purchases/${pid}/payments`, {
     method: 'POST',
     body: JSON.stringify(paymentData),
   });

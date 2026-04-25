@@ -30,7 +30,12 @@ const WebsiteItemsPage = () => {
       }
       if (response.ok) {
         const data = await response.json();
-        setItems(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
+        setItems(list);
       } else {
         setItems([]);
       }

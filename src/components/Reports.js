@@ -1,5 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { fetchDailyClosingReport, downloadBillPDF, getDailyBudgetEvents, getDailyBudgetCalculatedSummary } from '../utils/api';
+import {
+  fetchDailyClosingReport,
+  fetchSalesChargesSummary,
+  downloadBillPDF,
+  getLedgerTransactions,
+  getDailyBudgetCalculatedSummary,
+  getBalanceSummary,
+} from '../utils/api';
 import Loading from './Loading';
 import './Reports.css';
 import jsPDF from 'jspdf';
@@ -19,6 +26,16 @@ const money = (n) =>
   `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const resolveInHand = (data) => Number(data?.inHandAmount ?? data?.cashInHand ?? 0);
+const unwrapEntity = (value) =>
+  value && typeof value === 'object' && value.data && typeof value.data === 'object'
+    ? value.data
+    : value;
+const unwrapList = (value) =>
+  Array.isArray(value)
+    ? value
+    : Array.isArray(value?.data)
+      ? value.data
+      : [];
 
 let cachedPdfFontsPromise = null;
 let cachedPdfFonts = null;
@@ -57,22 +74,6 @@ function registerPdfFonts(doc, fonts) {
   doc.addFileToVFS('DejaVuSans-Bold.ttf', fonts.boldBase64);
   doc.addFont('DejaVuSans-Bold.ttf', 'DejaVuSans', 'bold');
   doc.setFont('DejaVuSans', 'normal');
-}
-
-function pickOldestEventForDate(events, isoDate) {
-  if (!Array.isArray(events) || !isoDate) return null;
-  const day = String(isoDate).slice(0, 10);
-  const filtered = events
-    .filter((e) => String(e?.date || '').slice(0, 10) === day)
-    .filter((e) => e != null);
-  if (filtered.length === 0) return null;
-  // Oldest first by createdAt (fallback: 0).
-  const sorted = [...filtered].sort((a, b) => {
-    const tA = new Date(a?.createdAt || 0).getTime();
-    const tB = new Date(b?.createdAt || 0).getTime();
-    return tA - tB;
-  });
-  return sorted[0] || null;
 }
 
 function pct(n) {
@@ -424,8 +425,8 @@ function buildDailyClosingPdf({
   });
   y = doc.lastAutoTable.finalY + 14;
 
-  // Budget History
-  sectionTitle('Budget History');
+  // Transaction history (unified ledger)
+  sectionTitle('Transaction history (ledger)');
   const budRows = Array.isArray(budgetEvents) ? budgetEvents : [];
   safeY(240);
   autoTable(doc, {
@@ -451,29 +452,30 @@ function buildDailyClosingPdf({
     },
     alternateRowStyles: { fillColor: [250, 252, 255] },
     columnStyles: {
-      0: { cellWidth: 84 },
-      1: { cellWidth: 132 },
-      2: { halign: 'right', cellWidth: 96 },
-      3: { halign: 'right', cellWidth: 76 },
-      4: { halign: 'right', cellWidth: 96 }
+      0: { cellWidth: 72 },
+      1: { cellWidth: 88 },
+      2: { cellWidth: 56 },
+      3: { cellWidth: 52 },
+      4: { halign: 'right', cellWidth: 72 },
+      5: { cellWidth: 200 }
     },
-    head: [['Date', 'Event', 'Opening', 'Delta', 'Closing']],
+    head: [['Date', 'Source', 'Mode', 'Type', 'Amount', 'Details']],
     body:
       budRows.length === 0
-        ? [['—', 'No budget history available for selected period', '—', '—', '—']]
+        ? [['—', 'No ledger rows for selected period', '—', '—', '—', '—']]
         : budRows.map((e) => {
-            const d = String(e?.date || '').slice(0, 10) || '—';
-            const openingB = moneyPlain(e?.openingBalance);
-            const delta = Number(e?.delta) || 0;
-            const deltaTxt = `${delta >= 0 ? '+' : '-'}${moneyPlain(Math.abs(delta))}`;
-            const closingB = moneyPlain(e?.closingBalance);
-            return [d, e?.eventType ?? '—', openingB, deltaTxt, closingB];
+            const d = String(e?.txnDate ?? e?.txn_date ?? '').slice(0, 10) || '—';
+            const src = e?.source ?? '—';
+            const mode = e?.paymentMode ?? e?.payment_mode ?? '—';
+            const typ = e?.txnType ?? e?.txn_type ?? '—';
+            const det = String(e?.description ?? '').trim() || '—';
+            return [d, src, mode, typ, moneyPlain(e?.amount), det];
           }),
     didParseCell: (data) => {
       if (data.section === 'body' && data.column.index === 3) {
-        const raw = String(data.cell.raw || '');
-        if (raw.startsWith('+')) data.cell.styles.textColor = COLORS.green;
-        if (raw.startsWith('-')) data.cell.styles.textColor = COLORS.red;
+        const raw = String(data.cell.raw || '').toUpperCase();
+        if (raw === 'CREDIT') data.cell.styles.textColor = COLORS.green;
+        if (raw === 'DEBIT') data.cell.styles.textColor = COLORS.red;
         data.cell.styles.fontStyle = 'bold';
       }
     }
@@ -596,9 +598,16 @@ const Reports = () => {
   const [closingErrorRequestId, setClosingErrorRequestId] = useState('');
   const [fetchedRange, setFetchedRange] = useState(null);
   const [openingBudget, setOpeningBudget] = useState(0);
+  const [salesChargesSummary, setSalesChargesSummary] = useState({
+    totalSqftSold: 0,
+    totalLabourCharge: 0,
+    totalOtherExpensesCharge: 0
+  });
   /** Single-day only: GET /budget/daily/summary — aligns Expenses card + report + daily_budget. */
   const [budgetSummarySync, setBudgetSummarySync] = useState(null);
+  /** unified_financial_ledger rows for PDF + in-hand credit roll-up */
   const [budgetEvents, setBudgetEvents] = useState([]);
+  const [ledgerBalanceSummary, setLedgerBalanceSummary] = useState(null);
   const [expensesPage, setExpensesPage] = useState(1);
   const [billsPage, setBillsPage] = useState(1);
 
@@ -614,23 +623,21 @@ const Reports = () => {
         dateTo: to,
         backfillLegacy: false
       });
-      setClosingData(data);
+      setClosingData(unwrapEntity(data));
       setClosingError('');
       setFetchedRange({ from, to });
 
-      // Opening budget for the selected period (start-of-day balance on dateFrom).
-      // Uses daily_budget_events logged by DailyBudgetService.
+      setOpeningBudget(0);
+
       try {
-        const events = await getDailyBudgetEvents({ from, to: from, limit: 200 });
-        const oldest = pickOldestEventForDate(events, from);
-        const ob = Number(oldest?.openingBalance ?? 0);
-        setOpeningBudget(Number.isFinite(ob) ? ob : 0);
-      } catch (e) {
-        // Non-fatal: if events endpoint not ready, keep opening budget as 0.
-        setOpeningBudget(0);
+        const bal = await getBalanceSummary();
+        const unwrap = bal?.data && typeof bal.data === 'object' && !Array.isArray(bal.data) ? bal.data : bal;
+        setLedgerBalanceSummary(unwrap && typeof unwrap === 'object' ? unwrap : null);
+      } catch {
+        setLedgerBalanceSummary(null);
       }
 
-      // Same source of truth as Expenses page (DailyBudgetService summary).
+      // Same source of truth as Expenses optional cap (daily_budget row).
       if (from === to) {
         try {
           const sync = await getDailyBudgetCalculatedSummary({ from, to: from });
@@ -646,12 +653,26 @@ const Reports = () => {
         setBudgetSummarySync(null);
       }
 
-      // Budget history for selected date range (for PDF and quick reconciliation).
       try {
-        const events = await getDailyBudgetEvents({ from, to, limit: 1000 });
-        setBudgetEvents(Array.isArray(events) ? events : []);
+        const rows = await getLedgerTransactions({ from, to, limit: 1500 });
+        setBudgetEvents(unwrapList(rows));
       } catch (e) {
         setBudgetEvents([]);
+      }
+
+      try {
+        const charges = unwrapEntity(await fetchSalesChargesSummary({ date: from, dateTo: to }));
+        setSalesChargesSummary({
+          totalSqftSold: Number(charges?.totalSqftSold) || 0,
+          totalLabourCharge: Number(charges?.totalLabourCharge) || 0,
+          totalOtherExpensesCharge: Number(charges?.totalOtherExpensesCharge) || 0,
+        });
+      } catch {
+        setSalesChargesSummary({
+          totalSqftSold: 0,
+          totalLabourCharge: 0,
+          totalOtherExpensesCharge: 0
+        });
       }
     } catch (e) {
       console.error(e);
@@ -732,13 +753,14 @@ const Reports = () => {
   // Include only real in-hand inflows (bill collections + loan received).
   // Exclude manual budget edits so report totals match "current remaining in hand".
   const cashUpiCollectedFromEvents = useMemo(() => {
-    const creditTypes = new Set(['IN_HAND_COLLECTION', 'LOAN_RECEIVED']);
     return (Array.isArray(budgetEvents) ? budgetEvents : []).reduce((sum, e) => {
-      const typ = String(e?.eventType ?? e?.event_type ?? '').trim().toUpperCase();
-      if (!creditTypes.has(typ)) return sum;
-      const delta = Number(e?.delta);
-      if (!Number.isFinite(delta) || delta <= 0) return sum;
-      return sum + delta;
+      const typ = String(e?.txnType ?? e?.txn_type ?? '').trim().toUpperCase();
+      if (typ !== 'CREDIT') return sum;
+      const pm = String(e?.paymentMode ?? e?.payment_mode ?? '').trim().toUpperCase();
+      if (pm !== 'CASH' && pm !== 'UPI') return sum;
+      const amt = Number(e?.amount);
+      if (!Number.isFinite(amt) || amt <= 0) return sum;
+      return sum + amt;
     }, 0);
   }, [budgetEvents]);
   const cashUpiCollected = cashUpiCollectedFromEvents > 0
@@ -768,18 +790,49 @@ const Reports = () => {
     );
   }, [expenseLines]);
 
+  // Keep rail-wise expense summary aligned with Expenses tab cards:
+  // use unified ledger DEBIT rows so client payment outflows are included.
+  const ledgerDebitSplit = useMemo(() => {
+    return (Array.isArray(budgetEvents) ? budgetEvents : []).reduce(
+      (acc, e) => {
+        const typ = String(e?.txnType ?? e?.txn_type ?? '').trim().toUpperCase();
+        if (typ !== 'DEBIT') return acc;
+        const amt = Number(e?.amount);
+        if (!Number.isFinite(amt) || amt <= 0) return acc;
+        const pm = String(e?.paymentMode ?? e?.payment_mode ?? '').trim().toUpperCase();
+        if (pm === 'CASH' || pm === 'UPI') {
+          acc.cashUpi += amt;
+        } else if (pm === 'BANK') {
+          acc.bankTransfer += amt;
+        } else if (pm === 'CARD') {
+          acc.card += amt;
+        } else if (pm === 'CHEQUE' || pm === 'CHECK') {
+          acc.cheque += amt;
+        } else {
+          acc.other += amt;
+        }
+        return acc;
+      },
+      { cashUpi: 0, bankTransfer: 0, card: 0, cheque: 0, other: 0 }
+    );
+  }, [budgetEvents]);
+
   /**
    * Keep previous behavior for single-day reports (source of truth: daily budget summary API),
    * so this number matches "current remaining in hand" in Expenses.
    * For ranges, show computed in-hand trend from opening + in-hand collected - in-hand expenses.
    */
   const finalBudgetInHand = useMemo(() => {
+    if (!isRange && ledgerBalanceSummary != null) {
+      const inh = Number(ledgerBalanceSummary.inHand ?? ledgerBalanceSummary.in_hand);
+      if (Number.isFinite(inh)) return inh;
+    }
     if (!isRange && budgetSummarySync != null) {
       const r = Number(budgetSummarySync?.remainingAmount ?? budgetSummarySync?.remaining_amount);
       if (Number.isFinite(r)) return r;
     }
     return (Number(openingBudget) || 0) + cashUpiCollected - (Number(expenseSplit.cashUpi) || 0);
-  }, [isRange, budgetSummarySync, openingBudget, cashUpiCollected, expenseSplit.cashUpi]);
+  }, [isRange, ledgerBalanceSummary, budgetSummarySync, openingBudget, cashUpiCollected, expenseSplit.cashUpi]);
 
   // Keep summary arithmetic consistent for single-day:
   // opening + collected(cash+upi) - expenses(cash+upi) = final.
@@ -974,6 +1027,26 @@ const Reports = () => {
               <span className="daily-summary-hint">
                 Recorded {money(closingData.totalAdvanceDeposits)} · Applied to bills {money(closingData.totalAdvanceAppliedOnBills)}
               </span>
+            </div>
+            <div className="daily-summary-card">
+              <span className="daily-summary-label">Sold Sqft</span>
+              <span className="daily-summary-value">
+                {(Number(salesChargesSummary.totalSqftSold) || 0).toLocaleString('en-IN', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
+                })}
+              </span>
+              <span className="daily-summary-hint">Total sold quantity on bill date</span>
+            </div>
+            <div className="daily-summary-card">
+              <span className="daily-summary-label">Labour Charge Collected</span>
+              <span className="daily-summary-value">{money(salesChargesSummary.totalLabourCharge)}</span>
+              <span className="daily-summary-hint">Labour total from billed invoices</span>
+            </div>
+            <div className="daily-summary-card">
+              <span className="daily-summary-label">Other Expense Charge</span>
+              <span className="daily-summary-value">{money(salesChargesSummary.totalOtherExpensesCharge)}</span>
+              <span className="daily-summary-hint">Other-expense total from billed invoices</span>
             </div>
           </div>
 
@@ -1177,12 +1250,17 @@ const Reports = () => {
                 </div>
               <div className="report-row">
                 <span>Expenses in Cash + UPI {isRange ? 'in period' : '(today)'}</span>
-                <span className="report-value negative">{money(expenseSplit.cashUpi)}</span>
+                <span className="report-value negative">{money(ledgerDebitSplit.cashUpi)}</span>
               </div>
               <div className="report-row">
                 <span>Expenses in Bank + Card + Cheque {isRange ? 'in period' : '(today)'}</span>
                 <span className="report-value negative">
-                  {money(expenseSplit.bankTransfer + expenseSplit.card + expenseSplit.cheque + expenseSplit.other)}
+                  {money(
+                    ledgerDebitSplit.bankTransfer +
+                    ledgerDebitSplit.card +
+                    ledgerDebitSplit.cheque +
+                    ledgerDebitSplit.other
+                  )}
                 </span>
               </div>
                 <div

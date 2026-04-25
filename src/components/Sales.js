@@ -1,13 +1,20 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { API_BASE_URL } from '../config/api';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
-  handleApiResponse,
   downloadBillPDF,
-  fetchSalesPaymentModeSummary,
   addBillPayment,
   deleteBillPayment,
-  deleteBill
+  deleteBill,
+  getBillCancellations,
+  updateBill
 } from '../utils/api';
+import { fetchProductsCatalog } from '../api/productsApi';
+import {
+  formatPaymentModeLabel,
+  splitPaymentSummaryLines,
+  normalizePaymentModeKey,
+  getPaymentBand,
+  normalizeSearchText
+} from './sales/salesUtils';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
@@ -16,69 +23,13 @@ import { Calendar } from 'primereact/calendar';
 import { Button } from 'primereact/button';
 import { Tag } from 'primereact/tag';
 import { Dialog } from 'primereact/dialog';
+import { AutoComplete } from 'primereact/autocomplete';
 import InlineToast from './InlineToast';
 import useDebouncedValue from '../utils/useDebouncedValue';
+import { useSalesData } from '../hooks/useSalesData';
 import './Sales.css';
 
-const PAYMENT_MODE_LABELS = {
-  UPI: 'UPI',
-  CASH: 'CASH',
-  BANK_TRANSFER: 'BANK TRANSFER',
-  CHEQUE: 'CHEQUE',
-  NETBANKING: 'BANK TRANSFER',
-  CREDIT: 'CREDIT'
-};
-
-const formatPaymentModeLabel = (mode) => {
-  if (!mode) return '—';
-  const key = String(mode).toUpperCase().replace(/\s+/g, '_');
-  return PAYMENT_MODE_LABELS[key] || mode;
-};
-
-const splitPaymentSummaryLines = (raw) => {
-  const s = String(raw || '').trim();
-  if (!s || s === '-' || s === '—') return [];
-  // Common legacy formats:
-  // - "CASH_₹5000.00, UPI_₹2000.00 | DUE: ₹1500.00"
-  // - "CASH,UPI" (simple)
-  const normalized = s.replace(/_/g, ' ').replace(/\s*\|\s*/g, ' | ');
-  const parts = normalized
-    .split('|')
-    .flatMap((p) => String(p).split(','))
-    .map((p) => p.trim())
-    .filter(Boolean);
-  // Keep "DUE:" or "DUE" at the bottom if present.
-  const due = parts.filter((p) => /^DUE\b/i.test(p));
-  const rest = parts.filter((p) => !/^DUE\b/i.test(p));
-  return [...rest, ...due];
-};
-
-/** Normalize stored/API values for banding (legacy NETBANKING → bank transfer) */
-const normalizePaymentModeKey = (mode) => {
-  const m = String(mode || '').toUpperCase().replace(/\s+/g, '_').trim();
-  if (m === 'NETBANKING' || m === 'NET_BANKING') return 'BANK_TRANSFER';
-  return m;
-};
-
-/** Group payment modes for header totals */
-const getPaymentBand = (mode) => {
-  const m = normalizePaymentModeKey(mode);
-  if (m === 'UPI') return 'UPI';
-  if (m === 'CASH') return 'CASH';
-  if (m === 'BANK_TRANSFER') return 'BANK_TRANSFER';
-  if (m === 'CHEQUE') return 'CHEQUE';
-  return 'OTHER';
-};
-
-const normalizeSearchText = (value) =>
-  String(value ?? '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-
 const Sales = () => {
-  const [sales, setSales] = useState([]);
-  const [loading, setLoading] = useState(true);
   const today = new Date();
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
@@ -87,13 +38,7 @@ const Sales = () => {
   const [billTypeFilter, setBillTypeFilter] = useState('ALL');
   const [paymentModeFilter, setPaymentModeFilter] = useState('ALL');
   const [toast, setToast] = useState({ message: '', type: 'success' });
-  const [paymentBandTotals, setPaymentBandTotals] = useState({
-    upi: 0,
-    cash: 0,
-    bankTransfer: 0,
-    cheque: 0,
-    other: 0
-  });
+  const { sales, loading, paymentBandTotals, refreshSales } = useSalesData(dateFrom, dateTo);
 
   const [isBillPopupVisible, setBillPopupVisible] = useState(false);
   const [selectedBill, setSelectedBill] = useState(null);
@@ -107,76 +52,63 @@ const Sales = () => {
     return `${y}-${m}-${day}`;
   });
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  const [cancellations, setCancellations] = useState([]);
+  const [cancellationsLoading, setCancellationsLoading] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editDraft, setEditDraft] = useState(null);
+  const [productCatalog, setProductCatalog] = useState([]);
+  const [productCatalogLoading, setProductCatalogLoading] = useState(false);
+  const [productSuggestions, setProductSuggestions] = useState([]);
+
+  const toIsoDate = (value) => {
+    const d = value instanceof Date ? value : value ? new Date(value) : null;
+    if (!d || Number.isNaN(d.getTime())) return null;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
 
   useEffect(() => {
-    loadData();
-  }, []);
-
-  useEffect(() => {
-    const toIso = (d) => {
-      const x = d instanceof Date ? d : (d ? new Date(d) : null);
-      if (!x || Number.isNaN(x.getTime())) return null;
-      const y = x.getFullYear();
-      const m = String(x.getMonth() + 1).padStart(2, '0');
-      const day = String(x.getDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
+    let ignore = false;
+    (async () => {
+      try {
+        setCancellationsLoading(true);
+        const todayIso = toIsoDate(new Date());
+        const fromIso = toIsoDate(dateFrom) || todayIso;
+        const toIso = toIsoDate(dateTo) || fromIso;
+        const rows = await getBillCancellations(fromIso, toIso);
+        if (!ignore) setCancellations(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!ignore) setCancellations([]);
+      } finally {
+        if (!ignore) setCancellationsLoading(false);
+      }
+    })();
+    return () => {
+      ignore = true;
     };
-    const today = toIso(new Date());
-    const fromIso = toIso(dateFrom) || today;
-    const toIsoDate = toIso(dateTo) || fromIso;
-    fetchSalesPaymentModeSummary({ date: fromIso, dateTo: toIsoDate })
-      .then((res) => {
-        setPaymentBandTotals({
-          upi: Number(res?.upi) || 0,
-          cash: Number(res?.cash) || 0,
-          bankTransfer: Number(res?.bankTransfer) || 0,
-          cheque: Number(res?.cheque) || 0,
-          other: Number(res?.other) || 0
-        });
-      })
-      .catch((e) => {
-        console.error('Failed to load payment mode totals', e);
-      });
   }, [dateFrom, dateTo]);
 
-  const loadData = async () => {
-    try {
-      setLoading(true);
-      const token = localStorage.getItem('authToken');
-      const headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-      
-      const billsResponse = await fetch(`${API_BASE_URL}/bills`, {
-        method: 'GET',
-        headers: headers
+  useEffect(() => {
+    if (!editMode || productCatalog.length > 0 || productCatalogLoading) return;
+    let cancelled = false;
+    setProductCatalogLoading(true);
+    fetchProductsCatalog()
+      .then((list) => {
+        if (!cancelled) setProductCatalog(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (!cancelled) setProductCatalog([]);
+      })
+      .finally(() => {
+        if (!cancelled) setProductCatalogLoading(false);
       });
-      
-      if (billsResponse.status === 401) {
-        await handleApiResponse(billsResponse);
-        return;
-      }
-      
-      if (billsResponse.ok) {
-        const billsData = await billsResponse.json();
-        const allBills = Array.isArray(billsData) ? billsData : [];
-        setSales(allBills);
-      } else {
-        console.error('Failed to fetch bills:', billsResponse.status);
-        setSales([]);
-      }
-      
-    } catch (error) {
-      console.error('Error loading sales data:', error);
-      setSales([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+    return () => {
+      cancelled = true;
+    };
+  }, [editMode, productCatalog.length, productCatalogLoading]);
 
   // Prepare data for DataTable
   const prepareSalesData = useMemo(() => {
@@ -360,6 +292,17 @@ const Sales = () => {
           }}
           title="Download Bill PDF"
         />
+        <Button
+          icon="pi pi-pencil"
+          rounded
+          outlined
+          severity="warning"
+          onClick={() => {
+            handleViewBillDetails(rowData);
+            setTimeout(() => openEditMode(), 0);
+          }}
+          title="Edit Bill"
+        />
       </div>
     );
   };
@@ -368,12 +311,203 @@ const Sales = () => {
     setSelectedBill(bill);
     setPaymentAddAmount('');
     setPaymentAddMode('CASH');
+    setEditMode(false);
+    setEditDraft(null);
     setBillPopupVisible(true);
   };
 
   const closeBillPopup = () => {
     setBillPopupVisible(false);
     setSelectedBill(null);
+    setEditMode(false);
+    setEditDraft(null);
+  };
+
+  const openEditMode = () => {
+    if (!selectedBill?.originalSale) return;
+    const sale = selectedBill.originalSale;
+    const sourceItems = Array.isArray(sale.items) ? sale.items : [];
+    setEditDraft({
+      customerMobileNumber: String(
+        sale.customerMobileNumber || sale.customerNumber || sale.customerPhone || selectedBill.customerNumber || ''
+      ).trim(),
+      customerName: String(sale.customerName || '').trim(),
+      address: String(sale.address || '').trim(),
+      gstin: String(sale.gstin || '').trim(),
+      customerEmail: String(sale.customerEmail || sale.email || '').trim(),
+      taxPercentage: Number(selectedBill.isGST ? (sale.taxPercentage ?? sale.taxRate ?? selectedBill.gstRate ?? 18) : 0) || 0,
+      discountAmount: Number(sale.discountAmount || 0) || 0,
+      labourCharge: Number(sale.labourCharge || 0) || 0,
+      transportationCharge: Number(sale.transportationCharge || 0) || 0,
+      otherExpenses: Number(sale.otherExpenses ?? sale.otherExpense ?? 0) || 0,
+      billDate: toIsoDate(sale.billDate || selectedBill.billDate),
+      items: sourceItems.map((item, idx) => ({
+        rowId: `${item.itemId || item.id || idx}-${idx}`,
+        itemName: String(item.itemName || item.description || '').trim(),
+        category: String(item.category || item.productType || 'General').trim(),
+        quantity: Number(item.quantity || 0) || 0,
+        pricePerUnit: Number(item.pricePerUnit || item.rate || 0) || 0,
+        unit: String(item.unit || 'sqft').trim(),
+        productId: item.productId ?? item.id ?? null,
+        itemId: item.itemId != null ? Number(item.itemId) : null,
+        purchasePrice: Number(item.purchasePrice) || 0,
+        hsnNumber: String(item.hsnNumber || item.hsnCode || '').trim()
+      }))
+    });
+    setEditMode(true);
+  };
+
+  const handleEditItemChange = (rowId, key, value) => {
+    setEditDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: (prev.items || []).map((it) => (it.rowId === rowId ? { ...it, [key]: value } : it))
+      };
+    });
+  };
+
+  const applyProductToEditRow = (rowId, product) => {
+    if (!product || typeof product !== 'object') return;
+    const salePrice = Number(product.pricePerSqftAfter ?? product.pricePerUnit ?? product.price ?? 0) || 0;
+    const costPrice = Number(product.pricePerUnit ?? 0) || 0;
+    const hsn = String(product.hsnNumber ?? product.hsnCode ?? '').trim();
+    setEditDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: (prev.items || []).map((it) =>
+          it.rowId === rowId
+            ? {
+                ...it,
+                itemName: String(product.name || '').trim(),
+                category: String(product.productType || it.category || 'General').trim(),
+                unit: String(product.unit || 'sqft').trim(),
+                productId: product.id != null ? Number(product.id) : null,
+                pricePerUnit: salePrice,
+                purchasePrice: costPrice,
+                hsnNumber: hsn || it.hsnNumber || ''
+              }
+            : it
+        )
+      };
+    });
+  };
+
+  const handleAddEditItem = () => {
+    setEditDraft((prev) => {
+      if (!prev) return prev;
+      const id = `new-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      return {
+        ...prev,
+        items: [
+          ...(prev.items || []),
+          {
+            rowId: id,
+            itemName: '',
+            category: 'General',
+            quantity: 1,
+            pricePerUnit: 0,
+            unit: 'sqft',
+            productId: null,
+            itemId: null,
+            purchasePrice: 0,
+            hsnNumber: ''
+          }
+        ]
+      };
+    });
+  };
+
+  const handleRemoveEditItem = (rowId) => {
+    setEditDraft((prev) => {
+      if (!prev) return prev;
+      const next = (prev.items || []).filter((it) => it.rowId !== rowId);
+      return { ...prev, items: next };
+    });
+  };
+
+  const previewBillItems = useMemo(() => {
+    if (!selectedBill?.originalSale) return [];
+    if (editMode && editDraft?.items?.length) {
+      return editDraft.items.map((it) => ({
+        itemName: it.itemName || '',
+        quantity: Number(it.quantity) || 0,
+        pricePerUnit: Number(it.pricePerUnit) || 0,
+        purchasePrice: Number(it.purchasePrice) || 0,
+        unit: it.unit || 'sqft'
+      }));
+    }
+    return Array.isArray(selectedBill.originalSale.items) ? selectedBill.originalSale.items : [];
+  }, [selectedBill, editMode, editDraft]);
+
+  const handleSaveBillEdit = async () => {
+    if (!selectedBill?.id || !selectedBill?.billType || !editDraft) return;
+    const items = (editDraft.items || [])
+      .map((it) => {
+        const row = {
+          itemName: String(it.itemName || '').trim(),
+          category: String(it.category || 'General').trim(),
+          quantity: Number(it.quantity),
+          pricePerUnit: Number(it.pricePerUnit),
+          unit: String(it.unit || 'sqft').trim()
+        };
+        if (it.productId != null && it.productId !== '') {
+          const pid = Number(it.productId);
+          if (Number.isFinite(pid) && pid > 0) row.productId = pid;
+        }
+        if (it.itemId != null && it.itemId !== '') {
+          const iid = Number(it.itemId);
+          if (Number.isFinite(iid) && iid > 0) row.itemId = iid;
+        }
+        const pp = Number(it.purchasePrice);
+        if (Number.isFinite(pp) && pp >= 0) row.purchasePrice = pp;
+        const hsn = String(it.hsnNumber || '').trim();
+        if (hsn) row.hsnNumber = hsn;
+        return row;
+      })
+      .filter((it) => it.itemName && Number.isFinite(it.quantity) && it.quantity > 0 && Number.isFinite(it.pricePerUnit) && it.pricePerUnit > 0);
+    if (items.length === 0) {
+      setToast({ message: 'At least one valid item is required.', type: 'error' });
+      return;
+    }
+    const existingPayments = Array.isArray(selectedBill?.originalSale?.payments) ? selectedBill.originalSale.payments : [];
+    const payments = existingPayments
+      .filter((p) => String(p?.paymentMode || '').toUpperCase() !== 'WALLET')
+      .map((p) => ({
+        amount: Number(p.amount || 0) || 0,
+        paymentMode: String(p.paymentMode || '').trim(),
+        paymentDate: p.paymentDate || undefined
+      }))
+      .filter((p) => p.amount > 0 && p.paymentMode);
+
+    const payload = {
+      customerMobileNumber: String(editDraft.customerMobileNumber || '').trim(),
+      customerName: String(editDraft.customerName || '').trim() || undefined,
+      address: String(editDraft.address || '').trim() || undefined,
+      gstin: String(editDraft.gstin || '').trim() || undefined,
+      customerEmail: String(editDraft.customerEmail || '').trim() || undefined,
+      items,
+      taxPercentage: Number(editDraft.taxPercentage || 0),
+      discountAmount: Number(editDraft.discountAmount || 0),
+      labourCharge: Number(editDraft.labourCharge || 0),
+      transportationCharge: Number(editDraft.transportationCharge || 0),
+      otherExpenses: Number(editDraft.otherExpenses || 0),
+      billDate: editDraft.billDate || undefined,
+      payments
+    };
+
+    try {
+      setEditSaving(true);
+      await updateBill(selectedBill.id, selectedBill.billType, payload);
+      await refreshSales();
+      setToast({ message: 'Bill updated successfully.', type: 'success' });
+      closeBillPopup();
+    } catch (e) {
+      setToast({ message: e?.message || 'Bill could not be updated.', type: 'error' });
+    } finally {
+      setEditSaving(false);
+    }
   };
 
   const handleAddPaymentToBill = async () => {
@@ -390,7 +524,7 @@ const Sales = () => {
         paymentMode: paymentAddMode,
         paymentDate: paymentAddDate || undefined
       });
-      await loadData();
+      await refreshSales();
       setToast({ message: 'Payment added successfully.', type: 'success' });
       closeBillPopup();
     } catch (e) {
@@ -407,7 +541,7 @@ const Sales = () => {
     try {
       setPaymentSubmitting(true);
       await deleteBillPayment(selectedBill.id, selectedBill.billType, paymentId);
-      await loadData();
+      await refreshSales();
       setToast({ message: 'Payment deleted successfully.', type: 'success' });
       closeBillPopup();
     } catch (e) {
@@ -431,7 +565,16 @@ const Sales = () => {
     try {
       setPaymentSubmitting(true);
       await deleteBill(selectedBill.id, selectedBill.billType);
-      await loadData();
+      await refreshSales();
+      try {
+        const todayIso = toIsoDate(new Date());
+        const fromIso = toIsoDate(dateFrom) || todayIso;
+        const toIso = toIsoDate(dateTo) || fromIso;
+        const rows = await getBillCancellations(fromIso, toIso);
+        setCancellations(Array.isArray(rows) ? rows : []);
+      } catch {
+        /* audit list refresh is best-effort */
+      }
       setToast({ message: 'Bill deleted; stock and payments were rolled back.', type: 'success' });
       closeBillPopup();
     } catch (e) {
@@ -683,6 +826,75 @@ const Sales = () => {
             />
           </DataTable>
         </div>
+
+        <h3 style={{ marginTop: '1.75rem' }}>Cancelled bills (audit)</h3>
+        <p style={{ color: '#64748b', fontSize: '13px', marginTop: 0, maxWidth: '48rem' }}>
+          Logged when a bill is deleted. Filter uses the same bill date range as above. Totals and payment-mode
+          summaries for the period exclude these bills once cancelled.
+        </p>
+        <div className="sales-table-container">
+          <DataTable
+            value={cancellations}
+            paginator
+            rows={8}
+            rowsPerPageOptions={[8, 15, 25]}
+            loading={cancellationsLoading}
+            dataKey="id"
+            emptyMessage="No cancelled bills in this bill-date range."
+            showGridlines
+            stripedRows
+            tableStyle={{ minWidth: '44rem', width: '100%' }}
+            className="sales-datatable"
+          >
+            <Column
+              field="cancelledAt"
+              header="Cancelled at"
+              style={{ minWidth: '10rem' }}
+              body={(row) => {
+                if (!row.cancelledAt) return '—';
+                try {
+                  const d = new Date(row.cancelledAt);
+                  return Number.isNaN(d.getTime()) ? String(row.cancelledAt) : d.toLocaleString();
+                } catch {
+                  return String(row.cancelledAt);
+                }
+              }}
+            />
+            <Column field="billDate" header="Bill date" style={{ minWidth: '7rem' }} />
+            <Column field="billNumber" header="Bill #" style={{ minWidth: '7rem' }} />
+            <Column
+              field="billKind"
+              header="Type"
+              style={{ minWidth: '5rem' }}
+              body={(row) => (String(row.billKind || '').includes('NON') ? 'NON-GST' : 'GST')}
+            />
+            <Column
+              header="Customer"
+              style={{ minWidth: '9rem' }}
+              body={(row) => [row.customerName, row.customerPhone].filter(Boolean).join(' · ') || '—'}
+            />
+            <Column
+              field="totalAmount"
+              header="Bill total"
+              body={(row) => formatCurrency(Number(row.totalAmount) || 0)}
+            />
+            <Column
+              field="paidFromPayments"
+              header="Paid (excl. advance)"
+              body={(row) => formatCurrency(Number(row.paidFromPayments) || 0)}
+            />
+            <Column
+              field="inHandCollected"
+              header="Cash+UPI reversed"
+              body={(row) => formatCurrency(Number(row.inHandCollected) || 0)}
+            />
+            <Column
+              field="advanceApplied"
+              header="Advance reversed"
+              body={(row) => formatCurrency(Number(row.advanceApplied) || 0)}
+            />
+          </DataTable>
+        </div>
       </div>
 
       {/* Bill Details Popup */}
@@ -725,7 +937,33 @@ const Sales = () => {
             </div>
 
             <div className="bill-summary" style={{ marginBottom: '12px' }}>
-              <p><strong>Add Payment to this Bill</strong></p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                <p><strong>Add Payment to this Bill</strong></p>
+                {!editMode ? (
+                  <button type="button" className="btn btn-primary" onClick={openEditMode}>
+                    Edit bill
+                  </button>
+                ) : (
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={editSaving}
+                      onClick={() => setEditMode(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={editSaving}
+                      onClick={handleSaveBillEdit}
+                    >
+                      {editSaving ? 'Saving...' : 'Save edit'}
+                    </button>
+                  </div>
+                )}
+              </div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <input
                   type="number"
@@ -786,6 +1024,159 @@ const Sales = () => {
               </div>
             </div>
 
+            {editMode && editDraft && (
+              <div className="bill-summary" style={{ marginBottom: '12px', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px' }}>
+                <p><strong>Edit bill details</strong></p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(120px, 1fr))', gap: '8px', marginBottom: '8px' }}>
+                  <input type="text" placeholder="Customer name" value={editDraft.customerName || ''} onChange={(e) => setEditDraft((p) => ({ ...p, customerName: e.target.value }))} />
+                  <input type="text" placeholder="Mobile" value={editDraft.customerMobileNumber || ''} onChange={(e) => setEditDraft((p) => ({ ...p, customerMobileNumber: e.target.value }))} />
+                  <input type="date" value={editDraft.billDate || ''} onChange={(e) => setEditDraft((p) => ({ ...p, billDate: e.target.value }))} />
+                  <input type="number" step="0.01" placeholder="Tax %" value={editDraft.taxPercentage ?? 0} onChange={(e) => setEditDraft((p) => ({ ...p, taxPercentage: Number(e.target.value || 0) }))} />
+                  <input type="number" step="0.01" placeholder="Discount" value={editDraft.discountAmount ?? 0} onChange={(e) => setEditDraft((p) => ({ ...p, discountAmount: Number(e.target.value || 0) }))} />
+                  <input type="number" step="0.01" placeholder="Labour" value={editDraft.labourCharge ?? 0} onChange={(e) => setEditDraft((p) => ({ ...p, labourCharge: Number(e.target.value || 0) }))} />
+                  <input type="number" step="0.01" placeholder="Transport" value={editDraft.transportationCharge ?? 0} onChange={(e) => setEditDraft((p) => ({ ...p, transportationCharge: Number(e.target.value || 0) }))} />
+                  <input type="number" step="0.01" placeholder="Other expense" value={editDraft.otherExpenses ?? 0} onChange={(e) => setEditDraft((p) => ({ ...p, otherExpenses: Number(e.target.value || 0) }))} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>Line items</span>
+                  <button type="button" className="btn btn-secondary" onClick={handleAddEditItem} disabled={editSaving}>
+                    + Add item
+                  </button>
+                </div>
+                <div style={{ display: 'grid', gap: '10px' }}>
+                  {(editDraft.items || []).map((it) => (
+                    <div
+                      key={it.rowId}
+                      style={{
+                        padding: '10px',
+                        background: '#fff',
+                        borderRadius: '8px',
+                        border: '1px solid #e2e8f0'
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'flex-end' }}>
+                        <div className="form-group bill-edit-item-field" style={{ margin: 0, flex: '1 1 200px', minWidth: '160px' }}>
+                          <label style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '4px' }}>Item</label>
+                          <AutoComplete
+                            value={it.itemName || ''}
+                            suggestions={productSuggestions}
+                            completeMethod={(e) => {
+                              if (productCatalogLoading && productCatalog.length === 0) {
+                                setProductSuggestions([]);
+                                return;
+                              }
+                              const q = (e.query || '').trim().toLowerCase();
+                              const max = 50;
+                              const list = !q
+                                ? productCatalog.slice(0, max)
+                                : productCatalog.filter((p) => {
+                                    const name = String(p.name || '').toLowerCase();
+                                    const type = String(p.productType || '').toLowerCase();
+                                    const slug = String(p.slug || '').toLowerCase();
+                                    return name.includes(q) || type.includes(q) || slug.includes(q);
+                                  }).slice(0, max);
+                              setProductSuggestions(list);
+                            }}
+                            onChange={(e) => {
+                              const v = e.value;
+                              if (typeof v === 'string' || v == null) {
+                                handleEditItemChange(it.rowId, 'itemName', v || '');
+                                return;
+                              }
+                              if (typeof v === 'object' && (v.name != null || v.id != null)) {
+                                applyProductToEditRow(it.rowId, v);
+                              }
+                            }}
+                            field="name"
+                            dropdown
+                            forceSelection={false}
+                            minLength={0}
+                            placeholder={
+                              productCatalogLoading && productCatalog.length === 0
+                                ? 'Loading products…'
+                                : 'Search or pick from catalog'
+                            }
+                            loading={productCatalogLoading && productCatalog.length === 0}
+                            inputClassName="p-inputtext-sm"
+                            className="bill-edit-item-autocomplete"
+                            panelClassName="bill-edit-product-panel"
+                            itemTemplate={(p) => (
+                              <div className="bill-edit-product-suggest">
+                                <div className="bill-edit-product-suggest-name">{p.name}</div>
+                                <div className="bill-edit-product-suggest-meta">
+                                  {[
+                                    p.productType,
+                                    p.unit || 'sqft',
+                                    (() => {
+                                      const n = Number(p.pricePerSqftAfter ?? p.pricePerUnit ?? 0);
+                                      if (!Number.isFinite(n) || n === 0) return null;
+                                      return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+                                    })()
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </div>
+                              </div>
+                            )}
+                          />
+                        </div>
+                        <div className="form-group" style={{ margin: 0, flex: '0 1 88px' }}>
+                          <label style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '4px' }}>Qty</label>
+                          <input type="number" step="0.01" value={it.quantity ?? 0} onChange={(e) => handleEditItemChange(it.rowId, 'quantity', Number(e.target.value || 0))} style={{ width: '100%', padding: '6px 8px' }} />
+                        </div>
+                        <div className="form-group" style={{ margin: 0, flex: '0 1 100px' }}>
+                          <label style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '4px' }}>Rate</label>
+                          <input type="number" step="0.01" value={it.pricePerUnit ?? 0} onChange={(e) => handleEditItemChange(it.rowId, 'pricePerUnit', Number(e.target.value || 0))} style={{ width: '100%', padding: '6px 8px' }} />
+                        </div>
+                        <div className="form-group" style={{ margin: 0, flex: '0 1 72px' }}>
+                          <label style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '4px' }}>Unit</label>
+                          <input type="text" value={it.unit || 'sqft'} onChange={(e) => handleEditItemChange(it.rowId, 'unit', e.target.value)} placeholder="sqft" style={{ width: '100%', padding: '6px 8px' }} />
+                        </div>
+                        <div className="form-group" style={{ margin: 0, flex: '0 1 110px' }}>
+                          <label style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '4px' }}>Category</label>
+                          <input type="text" value={it.category || ''} onChange={(e) => handleEditItemChange(it.rowId, 'category', e.target.value)} style={{ width: '100%', padding: '6px 8px' }} />
+                        </div>
+                        <div className="form-group" style={{ margin: 0, flex: '0 1 100px' }}>
+                          <label style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '4px' }}>Purchase</label>
+                          <input type="number" step="0.01" value={it.purchasePrice ?? 0} onChange={(e) => handleEditItemChange(it.rowId, 'purchasePrice', Number(e.target.value || 0))} title="Optional — margin preview" style={{ width: '100%', padding: '6px 8px' }} />
+                        </div>
+                        <div className="form-group" style={{ margin: 0, flex: '0 1 100px' }}>
+                          <label style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '4px' }}>Product ID</label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={it.productId != null && it.productId !== '' ? it.productId : ''}
+                            onChange={(e) => handleEditItemChange(it.rowId, 'productId', e.target.value === '' ? null : Number(e.target.value))}
+                            placeholder="—"
+                            style={{ width: '100%', padding: '6px 8px' }}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}
+                          disabled={editSaving || (editDraft.items || []).length <= 1}
+                          onClick={() => handleRemoveEditItem(it.rowId)}
+                          title={(editDraft.items || []).length <= 1 ? 'Keep at least one line' : 'Remove this line'}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      {selectedBill.isGST && (
+                        <div className="form-group" style={{ margin: '10px 0 0', maxWidth: '220px' }}>
+                          <label style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '4px' }}>HSN (optional)</label>
+                          <input type="text" value={it.hsnNumber || ''} onChange={(e) => handleEditItemChange(it.rowId, 'hsnNumber', e.target.value)} placeholder="HSN" style={{ width: '100%', padding: '6px 8px' }} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p style={{ marginTop: '8px', fontSize: '12px', color: '#64748b' }}>
+                  Add rows with <strong>+ Add item</strong>, edit qty/rate, or remove a line. Save applies changes to the bill (stock is re-checked).
+                </p>
+              </div>
+            )}
+
             <table className="bill-table">
               <thead>
                 <tr>
@@ -800,17 +1191,18 @@ const Sales = () => {
                 </tr>
               </thead>
               <tbody>
-                {selectedBill.originalSale.items.map((item, index) => {
-                  const grossProfit = (item.pricePerUnit - item.purchasePrice) * item.quantity;
+                {previewBillItems.map((item, index) => {
+                  const pp = Number(item.purchasePrice) || 0;
+                  const grossProfit = (Number(item.pricePerUnit) - pp) * Number(item.quantity);
                   return (
                     <tr key={index}>
                       <td>{index + 1}</td>
                       <td>{item.itemName || item.description || 'N/A'}</td>
                       <td>{item.quantity} ({item.unit || 'unit'})</td>
-                      <td>₹ {item.pricePerUnit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-                      <td>₹ {(item.pricePerUnit * item.quantity).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-                      <td>₹ {item.purchasePrice ? item.purchasePrice.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : 'N/A'}</td>
-                      <td>₹ {item.purchasePrice ? (item.purchasePrice * item.quantity).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : 'N/A'}</td>
+                      <td>₹ {Number(item.pricePerUnit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                      <td>₹ {(Number(item.pricePerUnit) * Number(item.quantity)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                      <td>₹ {pp ? pp.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : 'N/A'}</td>
+                      <td>₹ {pp ? (pp * Number(item.quantity)).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : 'N/A'}</td>
                       <td>₹ {grossProfit.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                     </tr>
                   );
@@ -821,8 +1213,8 @@ const Sales = () => {
                   <td colSpan="4" style={{ textAlign: 'right', fontWeight: 'bold' }}>Subtotal for Sale:</td>
                   <td colSpan="3"></td>
                   <td style={{ fontWeight: 'bold', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    ₹ {selectedBill.originalSale.items.reduce((total, item) => {
-                      return total + (item.pricePerUnit * item.quantity);
+                    ₹ {previewBillItems.reduce((total, item) => {
+                      return total + (Number(item.pricePerUnit) * Number(item.quantity));
                     }, 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
                 </tr>
@@ -830,8 +1222,9 @@ const Sales = () => {
                   <td colSpan="4" style={{ textAlign: 'right', fontWeight: 'bold' }}>Total Gross Profit:</td>
                   <td colSpan="3"></td>
                   <td style={{ fontWeight: 'bold', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    ₹ {selectedBill.originalSale.items.reduce((total, item) => {
-                      const grossProfit = (item.pricePerUnit - item.purchasePrice) * item.quantity;
+                    ₹ {previewBillItems.reduce((total, item) => {
+                      const pp = Number(item.purchasePrice) || 0;
+                      const grossProfit = (Number(item.pricePerUnit) - pp) * Number(item.quantity);
                       return total + grossProfit;
                     }, 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
@@ -840,10 +1233,10 @@ const Sales = () => {
             </table>
 
             <div className="bill-summary">
-              <p><strong>Discount Amount:</strong> ₹ {selectedBill.originalSale.discountAmount.toLocaleString('en-IN')}</p>
-              <p><strong>Labour Charge:</strong> ₹ {selectedBill.originalSale.labourCharge.toLocaleString('en-IN')}</p>
-              <p><strong>Transportation Charge:</strong> ₹ {selectedBill.originalSale.transportationCharge.toLocaleString('en-IN')}</p>
-              <p><strong>Other Expense:</strong> ₹ {(selectedBill.originalSale.otherExpenses ?? selectedBill.originalSale.otherExpense ?? 0).toLocaleString('en-IN')}</p>
+              <p><strong>Discount Amount:</strong> ₹ {(editMode && editDraft ? Number(editDraft.discountAmount) : selectedBill.originalSale.discountAmount).toLocaleString('en-IN')}</p>
+              <p><strong>Labour Charge:</strong> ₹ {(editMode && editDraft ? Number(editDraft.labourCharge) : selectedBill.originalSale.labourCharge).toLocaleString('en-IN')}</p>
+              <p><strong>Transportation Charge:</strong> ₹ {(editMode && editDraft ? Number(editDraft.transportationCharge) : selectedBill.originalSale.transportationCharge).toLocaleString('en-IN')}</p>
+              <p><strong>Other Expense:</strong> ₹ {(editMode && editDraft ? (Number(editDraft.otherExpenses) || 0) : (selectedBill.originalSale.otherExpenses ?? selectedBill.originalSale.otherExpense ?? 0)).toLocaleString('en-IN')}</p>
               <p><strong>GST Value:</strong> ₹ {(selectedBill.isGST ? (selectedBill.gstAmount ?? selectedBill.originalSale?.taxAmount ?? 0) : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
               <p><strong>Final Amount:</strong> ₹ {selectedBill.totalAmount.toLocaleString('en-IN')}</p>
               <p>

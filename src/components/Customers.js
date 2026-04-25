@@ -50,6 +50,18 @@ const Customers = () => {
     () => localStorage.getItem('lastAdvancePaymentMode') || 'CASH'
   );
 
+  const unwrapEntity = (value) =>
+    value && typeof value === 'object' && value.data && typeof value.data === 'object'
+      ? value.data
+      : value;
+
+  const unwrapList = (value) =>
+    Array.isArray(value)
+      ? value
+      : Array.isArray(value?.data)
+        ? value.data
+        : [];
+
   // React Hook Form
   const { 
     register, 
@@ -75,6 +87,18 @@ const Customers = () => {
     notes: ''
   });
 
+  const toList = (value) =>
+    Array.isArray(value)
+      ? value
+      : Array.isArray(value?.data)
+        ? value.data
+        : [];
+
+  const toEntity = (value) =>
+    value && typeof value === 'object' && value.data && typeof value.data === 'object'
+      ? value.data
+      : value;
+
   useEffect(() => {
     loadCustomers();
   }, []);
@@ -82,12 +106,14 @@ const Customers = () => {
   const loadAdvanceData = async (customerId) => {
     setAdvanceLoading(true);
     try {
-      const [sum, hist] = await Promise.all([
+      const [sumRaw, histRaw] = await Promise.all([
         fetchCustomerAdvanceSummary(customerId),
         fetchCustomerAdvanceHistory(customerId),
       ]);
-      setAdvanceSummary(sum);
-      setAdvanceHistory(Array.isArray(hist) ? hist : []);
+      const sum = unwrapEntity(sumRaw);
+      const hist = unwrapList(histRaw);
+      setAdvanceSummary(sum || { totalAdvance: 0, totalUsed: 0, remaining: 0 });
+      setAdvanceHistory(hist);
     } catch (e) {
       console.error('Advance load failed:', e);
       setAdvanceSummary(null);
@@ -142,7 +168,7 @@ const Customers = () => {
     try {
       setLoading(true);
       const customersData = await fetchCustomers();
-      const finalCustomers = customersData || [];
+      const finalCustomers = toList(customersData);
       setCustomers(finalCustomers);
       localStorage.setItem('customers', JSON.stringify(finalCustomers));
     } catch (error) {
@@ -151,7 +177,7 @@ const Customers = () => {
       try {
         const stored = localStorage.getItem('customers');
         if (stored) {
-          setCustomers(JSON.parse(stored));
+          setCustomers(toList(JSON.parse(stored)));
         } else {
           setCustomers([]);
         }
@@ -190,14 +216,15 @@ const Customers = () => {
 
       if (editingCustomer) {
         // Update existing customer
-        const updatedCustomer = await updateCustomer(editingCustomer.id, apiData);
-        setCustomers(customers.map(c => 
-          c.id === editingCustomer.id ? updatedCustomer : c
-        ));
+        const updatedCustomer = toEntity(await updateCustomer(editingCustomer.id, apiData));
+        setCustomers((prev) => {
+          const list = toList(prev);
+          return list.map((c) => (c.id === editingCustomer.id ? updatedCustomer : c));
+        });
       } else {
         // Create new customer
-        const newCustomer = await createCustomer(apiData);
-        setCustomers([...customers, newCustomer]);
+        const newCustomer = toEntity(await createCustomer(apiData));
+        setCustomers((prev) => [...toList(prev), newCustomer]);
 
         const tokenRaw =
           data.tokenAmount != null && data.tokenAmount !== undefined ? String(data.tokenAmount).trim() : '';
@@ -258,7 +285,7 @@ const Customers = () => {
       try {
         setLoading(true);
         await deleteCustomer(id);
-        setCustomers(customers.filter(c => c.id !== id));
+        setCustomers((prev) => toList(prev).filter((c) => c.id !== id));
       } catch (error) {
         console.error('Error deleting customer:', error);
         alert(`Error deleting customer: ${error.message || 'Please try again'}`);

@@ -322,7 +322,12 @@ const InventoryItemsPage = () => {
       }
       if (response.ok) {
         const data = await response.json();
-        setInventory(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
+        setInventory(list);
       } else {
         // Do not fall back to local cache for authenticated inventory list;
         // stale local rows can belong to a different location and cause 404 on actions.
@@ -346,12 +351,24 @@ const InventoryItemsPage = () => {
       const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
       const response = await fetch(`${API_BASE_URL}/categories`, { headers });
+      if (response.status === 401) {
+        await handleApiResponse(response);
+        return;
+      }
       if (response.ok) {
         const data = await response.json();
-        setCategories(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
+        setCategories(list);
+      } else {
+        setCategories([]);
       }
     } catch (err) {
       console.error('Error fetching categories:', err);
+      setCategories([]);
     }
   }, []);
 
@@ -362,8 +379,18 @@ const InventoryItemsPage = () => {
   const loadSuppliersDealers = useCallback(async () => {
     try {
       const [s, d] = await Promise.all([fetchSuppliers(), fetchDealers()]);
-      setSuppliers(Array.isArray(s) ? s : []);
-      setDealers(Array.isArray(d) ? d : []);
+      const suppliersList = Array.isArray(s)
+        ? s
+        : Array.isArray(s?.data)
+          ? s.data
+          : [];
+      const dealersList = Array.isArray(d)
+        ? d
+        : Array.isArray(d?.data)
+          ? d.data
+          : [];
+      setSuppliers(suppliersList);
+      setDealers(dealersList);
     } catch (err) {
       console.error(err);
       setSuppliers([]);
@@ -410,7 +437,10 @@ const InventoryItemsPage = () => {
         });
       }
       await loadSuppliersDealers();
-      const newId = created?.id != null ? String(created.id) : '';
+      const createdEntity = (created && typeof created === 'object' && created.data && typeof created.data === 'object')
+        ? created.data
+        : created;
+      const newId = createdEntity?.id != null ? String(createdEntity.id) : '';
       if (newId) {
         if (quickAddEntity.target === 'add') {
           setFormData((prev) =>
@@ -1348,7 +1378,7 @@ const InventoryItemsPage = () => {
                         <option value="">— None —</option>
                         {suppliers.map((s) => (
                           <option key={s.id} value={String(s.id)}>
-                            {s.name}
+                            {s.name || s.displayName || s.firmName || `Supplier #${s.id}`}
                           </option>
                         ))}
                       </select>
@@ -1375,7 +1405,7 @@ const InventoryItemsPage = () => {
                         <option value="">— None —</option>
                         {dealers.map((d) => (
                           <option key={d.id} value={String(d.id)}>
-                            {d.name}
+                            {d.name || d.displayName || d.firmName || `Dealer #${d.id}`}
                           </option>
                         ))}
                       </select>

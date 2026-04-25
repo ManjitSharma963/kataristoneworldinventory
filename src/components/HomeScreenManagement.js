@@ -48,7 +48,12 @@ const HomeScreenManagement = () => {
       });
       if (response.ok) {
         const data = await response.json();
-        setHeroSlides(data || []);
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
+        setHeroSlides(list);
       }
     } catch (error) {
       console.error('Error fetching hero slides:', error);
@@ -75,7 +80,12 @@ const HomeScreenManagement = () => {
       
       if (response.ok) {
         const data = await response.json();
-        setCategories(data || []);
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
+        setCategories(list);
       }
     } catch (error) {
       console.error('Error fetching categories:', error);
@@ -421,8 +431,10 @@ const HomeScreenManagement = () => {
   };
 
   // Sort hero slides by display_order
-  const sortedHeroSlides = [...heroSlides].sort((a, b) => (a.display_order || 0) - (b.display_order || 0));
-  const sortedCategories = [...categories].sort((a, b) => (a.display_order || 0) - (b.display_order || 0));
+  const safeHeroSlides = Array.isArray(heroSlides) ? heroSlides : [];
+  const safeCategories = Array.isArray(categories) ? categories : [];
+  const sortedHeroSlides = [...safeHeroSlides].sort((a, b) => (a.display_order || 0) - (b.display_order || 0));
+  const sortedCategories = [...safeCategories].sort((a, b) => (a.display_order || 0) - (b.display_order || 0));
 
   if (loading) {
     return (

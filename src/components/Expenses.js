@@ -2,37 +2,42 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 // Note: localStorage functions are no longer used - all data comes from API
 // Keeping imports for potential future use or reference, but not actively used
 import { getExpenses, addExpense, updateExpense, deleteExpense, getEmployees, addEmployee, updateEmployee, deleteEmployee } from '../utils/storage';
-import { 
-  fetchExpenses as apiFetchExpenses, 
-  createExpense as apiCreateExpense, 
-  updateExpense as apiUpdateExpense, 
-  deleteExpense as apiDeleteExpense,
-  fetchEmployees as apiFetchEmployees,
+import {
+  apiFetchExpenses,
+  apiCreateExpense,
+  apiUpdateExpense,
+  apiDeleteExpense,
+  apiFetchEmployees,
   fetchEmployeePayrollSummary,
   fetchEmployeePayrollLedger,
   recordEmployeeAdvance,
   settleEmployeeSalaryMonth,
-  createEmployee as apiCreateEmployee,
-  updateEmployee as apiUpdateEmployee,
-  deleteEmployee as apiDeleteEmployee,
+  apiCreateEmployee,
+  apiUpdateEmployee,
+  apiDeleteEmployee,
   fetchClientPurchases,
   createClientPurchase,
   updateClientPurchase,
   deleteClientPurchase,
   addClientPayment,
   fetchAllPayments,
-  getDailyBudget as apiGetDailyBudget,
-  getDailyBudgetByDate as apiGetDailyBudgetByDate,
-  getDailyBudgetCalculatedSummary as apiGetDailyBudgetCalculatedSummary,
-  getDailyBudgetEvents as apiGetDailyBudgetEvents,
-  recordLoanReceipt as apiRecordLoanReceipt,
-  fetchLoanLenders as apiFetchLoanLenders,
-  fetchLoanLenderLedger as apiFetchLoanLenderLedger,
-  createDailyBudget as apiCreateDailyBudget,
-  updateDailyBudget as apiUpdateDailyBudget,
-  deleteDailyBudget as apiDeleteDailyBudget,
-  fetchSuppliers as apiFetchSuppliers
-} from '../utils/api';
+  fetchClientRunningLedger,
+  fetchClientDueAlerts,
+  fetchClientSupplierAccounts,
+  createClientSupplierAccount,
+  updateClientSupplierAccount,
+  apiGetDailyBudget,
+  apiGetDailyBudgetByDate,
+  apiGetBalanceSummary,
+  apiGetLedgerTransactions,
+  apiRecordLoanReceipt,
+  apiFetchLoanLenders,
+  apiFetchLoanLenderLedger,
+  apiCreateDailyBudget,
+  apiUpdateDailyBudget,
+  apiDeleteDailyBudget,
+  apiFetchSuppliers
+} from '../api/expensesFacade';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import { expenseSchema, employeeSchema, salaryPaymentSchema, advancePaymentSchema, clientPurchaseSchema, clientPaymentSchema } from '../utils/validation';
@@ -40,47 +45,35 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Loading from './Loading';
 import ConfirmationModal from './ConfirmationModal';
+import { useExpensesData } from '../hooks/useExpensesData';
+import { useExpensesForms } from '../hooks/useExpensesForms';
+import ExpensesHeader from './expenses/ExpensesHeader';
+import LoanPanel from './expenses/LoanPanel';
+import BudgetHistorySection from './expenses/BudgetHistorySection';
+import EmployeeLedgerModal from './expenses/EmployeeLedgerModal';
 import './Expenses.css';
 
 /** Payment-channel bucket shown in budget history “Source” column. */
 const BUDGET_SOURCE_CASH_UPI = 'Cash + UPI';
 const BUDGET_SOURCE_BANK = 'Bank + card + cheque';
 
-/**
- * Channel for a daily_budget_events row. Today all persisted events are in-hand (cash/UPI).
- * Reserve BANK_* (or similar) for a future split if those ever post here.
- */
-function budgetHistorySourceChannel(entry) {
-  const raw = entry?.eventType ?? entry?.event_type ?? '';
-  const code = String(raw).trim().toUpperCase();
-  if (code.startsWith('BANK_')) return BUDGET_SOURCE_BANK;
-  return BUDGET_SOURCE_CASH_UPI;
-}
-
-/** What happened (detail); channel is shown separately as Source. */
-function formatBudgetHistoryDetail(entry) {
-  const raw = entry?.eventType ?? entry?.event_type ?? '';
-  const code = String(raw).trim().toUpperCase();
-  const labels = {
-    IN_HAND_COLLECTION: 'Bill collection',
-    LOAN_RECEIVED: 'Loan received',
-    EXPENSE_DEBIT: 'Expense paid',
-    EXPENSE_CREDIT: 'Expense reversal / credit',
-    BUDGET_SET: 'Daily budget set',
-    BUDGET_CLEARED: 'Daily budget cleared',
-    BUDGET_UPDATE: 'Budget update',
-    ROLL_OVER: 'New day — carry forward balance',
-    IN_HAND_COLLECTION_ADJUSTMENT: 'Adjustment (bill / payment edit)',
-    IN_HAND_INCREASE: 'In-hand increase',
-    IN_HAND_DECREASE: 'In-hand decrease'
-  };
-  if (code && labels[code]) return labels[code];
-  if (code) return `Other (${code.replace(/_/g, ' ')})`;
-  return '—';
+/** Cash+UPI vs bank rails from unified ledger payment_mode. */
+function ledgerPaymentChannel(paymentMode) {
+  const m = String(paymentMode ?? '').trim().toUpperCase();
+  if (m === 'CASH' || m === 'UPI') return BUDGET_SOURCE_CASH_UPI;
+  return BUDGET_SOURCE_BANK;
 }
 
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
-  const [expenses, setExpenses] = useState([]);
+  const {
+    expenses,
+    setExpenses,
+    loadingExpenses,
+    apiError,
+    setApiError,
+    clientLedgerFeedRows,
+    loadExpenses
+  } = useExpensesData({ apiFetchExpenses, apiGetLedgerTransactions });
   const [employees, setEmployees] = useState([]);
   const [payrollSummaryByEmpId, setPayrollSummaryByEmpId] = useState({});
   const [internalShowForm, setInternalShowForm] = useState(false);
@@ -133,24 +126,32 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [showClientPaymentForm, setShowClientPaymentForm] = useState(false);
   const [selectedClientPurchase, setSelectedClientPurchase] = useState(null);
   const [clientFilter, setClientFilter] = useState(''); // Filter by client name
+  const [clientDueAlerts, setClientDueAlerts] = useState([]);
+  const [clientSupplierAccounts, setClientSupplierAccounts] = useState([]);
+  const [showClientCreditPanel, setShowClientCreditPanel] = useState(false);
+  const [showClientRunningLedgerModal, setShowClientRunningLedgerModal] = useState(false);
+  const [clientRunningLedgerTitle, setClientRunningLedgerTitle] = useState('');
+  const [clientRunningLedgerRows, setClientRunningLedgerRows] = useState([]);
+  const [loadingClientRunningLedger, setLoadingClientRunningLedger] = useState(false);
+  const [supplierAccountForm, setSupplierAccountForm] = useState({
+    clientName: '',
+    creditLimit: '',
+    paymentTermsDays: '',
+    displayName: '',
+  });
+  const [editingSupplierAccountId, setEditingSupplierAccountId] = useState(null);
   const [showPaymentsTable, setShowPaymentsTable] = useState(false); // Toggle between purchases and payments view
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   // Start with 0 so we always show database value after fetch; never show stale localStorage first
   const [budgetInHand, setBudgetInHand] = useState(0);
-  /** Card "Daily available balance": GET /budget/daily/summary (server-computed for the date range). */
+  /** Optional daily cap row (daily_budget); remaining/spent still from that snapshot when set. */
   const [todayFromEvents, setTodayFromEvents] = useState({ expense: 0, remaining: 0 });
-  /**
-   * Channel debit/credit totals from GET …/calculated-summary (full picture: expenses + bills + loans + client/advance).
-   * null field ⇒ fall back to summing today’s expense list only for that slice.
-   */
-  const [channelBudgetSummary, setChannelBudgetSummary] = useState({
-    bankCredits: null,
-    bankDebits: null,
-    cashUpiDebits: null,
-    bankOpeningCarried: null,
-    bankBalanceWithOpening: null,
-  });
+  /** Phase 4: GET /api/v1/balance/summary — net by payment rail from unified_financial_ledger. */
+  const [ledgerBalances, setLedgerBalances] = useState({ inHand: 0, bank: 0, total: 0 });
+  /** Today’s DEBIT totals by rail (same API); includes client/supplier bank payments, not only rows in the expense list. */
+  const [ledgerTodayDebits, setLedgerTodayDebits] = useState({ cashUpi: 0, bank: 0 });
+  /** CLIENT_OUT rows from unified ledger — merged into “Daily Expenses” table (those payments do not create expense rows). */
   const [currentPage, setCurrentPage] = useState(1);
   // Default to sorting by date (newest first) for all tabs
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
@@ -160,14 +161,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, onConfirm: null, title: '', message: '' });
   const [showDailyBudgetModal, setShowDailyBudgetModal] = useState(false);
   const [dailyBudgetModalValue, setDailyBudgetModalValue] = useState('');
+  const [dailyBudgetFundingSource, setDailyBudgetFundingSource] = useState('CASH_UPI');
   const [hasDailyBudgetFromApi, setHasDailyBudgetFromApi] = useState(false);
   const [savingBudget, setSavingBudget] = useState(false);
   const [budgetHistory, setBudgetHistory] = useState([]);
   const [loadingBudgetHistory, setLoadingBudgetHistory] = useState(false);
   const [budgetHistoryDateRange, setBudgetHistoryDateRange] = useState({ from: '', to: '' });
   const [budgetHistoryTypeFilter, setBudgetHistoryTypeFilter] = useState('ALL');
-  const [editingBudgetEntryId, setEditingBudgetEntryId] = useState(null);
-  const [editingBudgetAmount, setEditingBudgetAmount] = useState('');
   const [loanReceiptAmount, setLoanReceiptAmount] = useState('');
   /** '' = unspecified, '__new__' = type new name, else lender id string */
   const [loanReceiptLenderSelect, setLoanReceiptLenderSelect] = useState('');
@@ -270,104 +270,73 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return x;
   };
 
-  /** One backend call: cap (modal), remaining + today's spent (same basis as Reports / Daily Closing). */
+  /** Ledger nets (Phase 4) + optional daily_budget cap for the modal. */
   const loadBudgetState = async () => {
     const todayStr = getLocalDateString();
     try {
-      const raw = await apiGetDailyBudgetCalculatedSummary({ from: todayStr, to: todayStr });
-      const s = unwrapApiPayload(raw);
-      const cap = Number(s?.budgetAmount ?? s?.budget_amount);
-      const spent = Number(s?.spentAmount ?? s?.spent_amount);
-      const rem = Number(s?.remainingAmount ?? s?.remaining_amount);
-      setBudgetInHand(Number.isFinite(cap) ? Math.max(0, cap) : 0);
+      const balRaw = await apiGetBalanceSummary();
+      const bal = unwrapApiPayload(balRaw);
+      const inh = Number(bal?.inHand ?? bal?.in_hand);
+      const bnk = Number(bal?.bank);
+      const tot = Number(bal?.total);
+      setLedgerBalances({
+        inHand: Number.isFinite(inh) ? inh : 0,
+        bank: Number.isFinite(bnk) ? bnk : 0,
+        total: Number.isFinite(tot) ? tot : 0,
+      });
+      const tCu = Number(bal?.todayDebitCashUpi ?? bal?.today_debit_cash_upi);
+      const tBk = Number(bal?.todayDebitBank ?? bal?.today_debit_bank);
+      setLedgerTodayDebits({
+        cashUpi: Number.isFinite(tCu) ? tCu : 0,
+        bank: Number.isFinite(tBk) ? tBk : 0,
+      });
+    } catch (_) {
+      setLedgerBalances({ inHand: 0, bank: 0, total: 0 });
+      setLedgerTodayDebits({ cashUpi: 0, bank: 0 });
+    }
+    try {
+      const resRaw = await apiGetDailyBudgetByDate(todayStr);
+      const res = unwrapApiPayload(resRaw);
+      const amount = getBudgetAmountFromResponse(res);
+      const remFallback = Number(res?.remainingAmount ?? res?.remaining_amount);
+      setBudgetInHand(amount);
       setHasDailyBudgetFromApi(true);
       setTodayFromEvents({
-        remaining: Number.isFinite(rem) ? rem : 0,
-        expense: Number.isFinite(spent) ? Math.max(0, spent) : 0,
-      });
-      const bcPrimary = Number(s?.bankCreditsInRange ?? s?.bank_credits_in_range);
-      const bcFallback = Number(s?.loanReceiptsBankChequeInRange ?? s?.loan_receipts_bank_cheque_in_range);
-      const bankCreditsVal = Number.isFinite(bcPrimary) ? bcPrimary : bcFallback;
-      const bd = Number(s?.bankDebitsInRange ?? s?.bank_debits_in_range);
-      const cud = Number(s?.cashUpiDebitsInRange ?? s?.cash_upi_debits_in_range);
-      const bankOpen = Number(s?.bankOpeningBalanceCarriedForward ?? s?.bank_opening_balance_carried_forward);
-      const bankWithOpen = Number(s?.bankBalanceIncludingOpening ?? s?.bank_balance_including_opening);
-      setChannelBudgetSummary({
-        bankCredits: Number.isFinite(bankCreditsVal) ? Math.max(0, bankCreditsVal) : null,
-        bankDebits: Number.isFinite(bd) ? Math.max(0, bd) : null,
-        cashUpiDebits: Number.isFinite(cud) ? Math.max(0, cud) : null,
-        bankOpeningCarried: Number.isFinite(bankOpen) ? bankOpen : null,
-        bankBalanceWithOpening: Number.isFinite(bankWithOpen) ? bankWithOpen : null,
+        remaining: Number.isFinite(remFallback) ? remFallback : 0,
+        expense: Number.isFinite(Number(res?.spentAmount ?? res?.spent_amount))
+          ? Math.max(0, Number(res.spentAmount ?? res.spent_amount))
+          : 0,
       });
       try {
-        localStorage.setItem('expenses_budget_in_hand', String(Number.isFinite(cap) ? Math.max(0, cap) : 0));
+        localStorage.setItem('expenses_budget_in_hand', String(amount));
       } catch (_) {}
-    } catch (e) {
+    } catch (e2) {
       try {
-        const resRaw = await apiGetDailyBudgetByDate(todayStr);
+        const resRaw = await apiGetDailyBudget();
         const res = unwrapApiPayload(resRaw);
         const amount = getBudgetAmountFromResponse(res);
-        const remFallback = Number(res?.remainingAmount ?? res?.remaining_amount);
+        const remF = Number(res?.remainingAmount ?? res?.remaining_amount);
         setBudgetInHand(amount);
         setHasDailyBudgetFromApi(true);
         setTodayFromEvents({
-          remaining: Number.isFinite(remFallback) ? remFallback : 0,
+          remaining: Number.isFinite(remF) ? remF : 0,
           expense: Number.isFinite(Number(res?.spentAmount ?? res?.spent_amount))
             ? Math.max(0, Number(res.spentAmount ?? res.spent_amount))
             : 0,
         });
-        setChannelBudgetSummary({
-          bankCredits: null,
-          bankDebits: null,
-          cashUpiDebits: null,
-          bankOpeningCarried: null,
-          bankBalanceWithOpening: null,
-        });
         try {
           localStorage.setItem('expenses_budget_in_hand', String(amount));
         } catch (_) {}
-      } catch (e2) {
+      } catch (e3) {
         try {
-          const resRaw = await apiGetDailyBudget();
-          const res = unwrapApiPayload(resRaw);
-          const amount = getBudgetAmountFromResponse(res);
-          const remF = Number(res?.remainingAmount ?? res?.remaining_amount);
-          setBudgetInHand(amount);
-          setHasDailyBudgetFromApi(true);
-          setTodayFromEvents({
-            remaining: Number.isFinite(remF) ? remF : 0,
-            expense: Number.isFinite(Number(res?.spentAmount ?? res?.spent_amount))
-              ? Math.max(0, Number(res.spentAmount ?? res.spent_amount))
-              : 0,
-          });
-          setChannelBudgetSummary({
-            bankCredits: null,
-            bankDebits: null,
-            cashUpiDebits: null,
-            bankOpeningCarried: null,
-            bankBalanceWithOpening: null,
-          });
-          try {
-            localStorage.setItem('expenses_budget_in_hand', String(amount));
-          } catch (_) {}
-        } catch (e3) {
-          try {
-            const saved = localStorage.getItem('expenses_budget_in_hand');
-            const val = saved !== null && saved !== '' ? Math.max(0, parseFloat(saved) || 0) : 0;
-            setBudgetInHand(val);
-          } catch (err) {
-            setBudgetInHand(0);
-          }
-          setHasDailyBudgetFromApi(false);
-          setTodayFromEvents({ expense: 0, remaining: 0 });
-          setChannelBudgetSummary({
-            bankCredits: null,
-            bankDebits: null,
-            cashUpiDebits: null,
-            bankOpeningCarried: null,
-            bankBalanceWithOpening: null,
-          });
+          const saved = localStorage.getItem('expenses_budget_in_hand');
+          const val = saved !== null && saved !== '' ? Math.max(0, parseFloat(saved) || 0) : 0;
+          setBudgetInHand(val);
+        } catch (err) {
+          setBudgetInHand(0);
         }
+        setHasDailyBudgetFromApi(false);
+        setTodayFromEvents({ expense: 0, remaining: 0 });
       }
     }
   };
@@ -480,10 +449,15 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const loadBudgetHistory = async () => {
     setLoadingBudgetHistory(true);
     try {
-      const list = await apiGetDailyBudgetEvents({ limit: 50 });
-      const arr = Array.isArray(list) ? list : [];
-      // Backend already returns newest-first (createdAt DESC).
-      setBudgetHistory(arr.slice(0, 20));
+      const from = budgetHistoryDateRange.from || undefined;
+      const to = budgetHistoryDateRange.to || undefined;
+      const raw = await apiGetLedgerTransactions({ from, to, limit: 500 });
+      const list = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.data)
+          ? raw.data
+          : [];
+      setBudgetHistory(list);
     } catch (_) {
       setBudgetHistory([]);
     } finally {
@@ -493,33 +467,19 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
   useEffect(() => {
     if (showDailyBudgetModal) loadBudgetHistory();
-  }, [showDailyBudgetModal]);
-
-  const budgetTxTypeFromRow = (opening, closing) => (
-    Number.isFinite(opening) && Number.isFinite(closing) && closing >= opening ? 'CREDIT' : 'DEBIT'
-  );
+  }, [showDailyBudgetModal, budgetHistoryDateRange.from, budgetHistoryDateRange.to]);
 
   const budgetHistoryRows = useMemo(() => {
     return (budgetHistory || []).map((entry, idx) => {
-      const opening = Number(
-        entry.openingBalance ??
-        entry.amount ??
-        entry.budgetAmount ??
-        0
-      );
-      const closing = Number(
-        entry.closingBalance ??
-        entry.remainingBudget ??
-        entry.remaining_budget ??
-        0
-      );
-      const txType = budgetTxTypeFromRow(opening, closing);
-      const txAmount = Number.isFinite(opening) && Number.isFinite(closing) ? Math.abs(closing - opening) : 0;
-      const dateStr = entry.date ?? entry.createdAt ?? entry.updatedAt ?? entry.created_at ?? entry.updated_at ?? '';
-      const displayDate = dateStr ? (String(dateStr).length >= 10 ? String(dateStr).slice(0, 10) : String(dateStr)) : '—';
-      const sourceChannel = budgetHistorySourceChannel(entry);
-      const detailLabel = formatBudgetHistoryDetail(entry);
-      return { entry, idx, opening, closing, txType, txAmount, displayDate, sourceChannel, detailLabel };
+      const dateRaw = entry.txnDate ?? entry.txn_date ?? '';
+      const displayDate = dateRaw ? String(dateRaw).slice(0, 10) : '—';
+      const txType = String(entry.txnType ?? entry.txn_type ?? '').toUpperCase() || '—';
+      const txAmount = Number(entry.amount) || 0;
+      const pm = String(entry.paymentMode ?? entry.payment_mode ?? '');
+      const sourceChannel = ledgerPaymentChannel(pm);
+      const source = String(entry.source ?? '');
+      const detailLabel = entry.description && String(entry.description).trim() ? String(entry.description) : '—';
+      return { entry, idx, displayDate, txType, txAmount, sourceChannel, detailLabel, paymentMode: pm, source };
     });
   }, [budgetHistory]);
 
@@ -538,12 +498,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const downloadBudgetHistoryPdf = () => {
     const rows = filteredBudgetHistoryRows;
     if (!rows.length) {
-      showToast('No budget history rows to download for selected filters.', 'error');
+      showToast('No ledger rows to download for selected filters.', 'error');
       return;
     }
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
     doc.setFontSize(14);
-    doc.text('Budget History', 40, 36);
+    doc.text('Transaction history (ledger)', 40, 36);
     doc.setFontSize(10);
     const fromText = budgetHistoryDateRange.from || 'Any';
     const toText = budgetHistoryDateRange.to || 'Any';
@@ -551,38 +511,40 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     doc.text(`Filters: From ${fromText} | To ${toText} | Type ${typeText}`, 40, 54);
     doc.setFontSize(9);
     doc.setTextColor(100, 116, 139);
-    doc.text(`This table: ${BUDGET_SOURCE_CASH_UPI} only.`, 40, 66);
-    doc.text(`${BUDGET_SOURCE_BANK}: see Amount in bank on Expenses.`, 40, 76);
+    doc.text('Source: unified_financial_ledger (all payment rails).', 40, 66);
     doc.setTextColor(0, 0, 0);
     doc.setFontSize(10);
     autoTable(doc, {
-      startY: 86,
-      head: [['Date', 'Source', 'Details', 'Opening balance', 'Type', 'Transaction amount', 'Remaining amount']],
+      startY: 78,
+      head: [['Date', 'Channel', 'Source', 'Mode', 'Type', 'Amount', 'Details']],
       body: rows.map((r) => [
         r.displayDate,
         r.sourceChannel,
-        r.detailLabel,
-        (Number.isFinite(r.opening) ? r.opening : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        r.source || '—',
+        r.paymentMode || '—',
         r.txType,
         (Number.isFinite(r.txAmount) ? r.txAmount : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-        (Number.isFinite(r.closing) ? r.closing : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        r.detailLabel,
       ]),
       styles: { fontSize: 9, cellPadding: 5 },
       headStyles: { fillColor: [79, 70, 229] },
     });
     const today = getLocalDateString();
-    doc.save(`budget-history-${today}.pdf`);
+    doc.save(`ledger-transactions-${today}.pdf`);
   };
 
-  const saveDailyBudgetToApi = async (amount) => {
+  const saveDailyBudgetToApi = async (amount, fundingSource = 'CASH_UPI') => {
     const num = Number.isFinite(amount) ? Math.max(0, amount) : 0;
     if (num > 0) {
       if (hasDailyBudgetFromApi) {
-        await apiUpdateDailyBudget(num);
+        await apiUpdateDailyBudget(num, fundingSource);
       } else {
-        await apiCreateDailyBudget(num);
+        await apiCreateDailyBudget(num, fundingSource);
       }
-      setBudgetInHand(num);
+      const nextInHand = fundingSource === 'CASH_UPI'
+        ? (hasDailyBudgetFromApi ? Number(budgetInHand || 0) + num : num)
+        : Number(budgetInHand || 0);
+      setBudgetInHand(nextInHand);
       setHasDailyBudgetFromApi(true);
     } else {
       await apiDeleteDailyBudget();
@@ -634,34 +596,24 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     }
   });
 
-  // Keep formData for backward compatibility with existing code
-  const [formData, setFormData] = useState({
-    date: getLocalDateString(),
-    category: '',
-    description: '',
-    amount: '',
-    paymentMethod: 'cash',
-    employeeId: ''
-  });
-
-  const [salaryFormData, setSalaryFormData] = useState({
-    employeeName: '',
-    salaryAmount: '',
-    joiningDate: getLocalDateString()
-  });
-
-  const [paySalaryFormData, setPaySalaryFormData] = useState({
-    month: getLocalMonthString(), // YYYY-MM format
-    date: getLocalDateString(),
-    paymentMethod: 'cash',
-    amount: ''
-  });
-
-  const [payAdvanceFormData, setPayAdvanceFormData] = useState({
-    employeeId: '',
-    amount: '',
-    date: getLocalDateString()
-  });
+  const {
+    formData,
+    setFormData,
+    salaryFormData,
+    setSalaryFormData,
+    paySalaryFormData,
+    setPaySalaryFormData,
+    payAdvanceFormData,
+    setPayAdvanceFormData,
+    clientPurchaseFormData,
+    setClientPurchaseFormData,
+    clientPaymentFormData,
+    setClientPaymentFormData,
+    showCustomCategoryInput,
+    setShowCustomCategoryInput,
+    customCategoryDraft,
+    setCustomCategoryDraft
+  } = useExpensesForms({ getLocalDateString, getLocalMonthString });
   const selectedExpenseCategory = String(watchExpense('category') || '').toLowerCase();
   const watchedLenderId = watchExpense('lenderId');
   const watchedExpenseAmount = watchExpense('amount');
@@ -749,8 +701,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     'employee',
     'other',
   ];
-  const [showCustomCategoryInput, setShowCustomCategoryInput] = useState(false);
-  const [customCategoryDraft, setCustomCategoryDraft] = useState('');
 
   const toTitleCase = (s) => String(s || '')
     .trim()
@@ -760,6 +710,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const formatExpenseCategoryLabel = (cat) => {
     const c = String(cat || '').trim().toLowerCase();
     if (c === 'loan_repayment' || c === 'loan_repay') return 'Loan Repay';
+    if (c === 'client_purchase_payment') return 'Client payment';
     if (!cat) return '';
     return String(cat).charAt(0).toUpperCase() + String(cat).slice(1);
   };
@@ -777,12 +728,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return Array.from(map.values()).sort((a, b) => String(a).localeCompare(String(b)));
   }, [expenses]);
 
-  const [clientPurchaseFormData, setClientPurchaseFormData] = useState({
-    purchaseDescription: '',
-    totalAmount: '',
-    purchaseDate: getLocalDateString(),
-    notes: ''
-  });
   /** Suppliers master (GET /suppliers) for client purchase picker. */
   const [suppliersList, setSuppliersList] = useState([]);
   const [loadingSuppliersForPurchase, setLoadingSuppliersForPurchase] = useState(false);
@@ -791,18 +736,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [clientPurchaseNewSupplierName, setClientPurchaseNewSupplierName] = useState('');
   const [clientPurchaseSupplierSearchQuery, setClientPurchaseSupplierSearchQuery] = useState('');
 
-  const [clientPaymentFormData, setClientPaymentFormData] = useState({
-    purchaseId: '',
-    amount: '',
-    date: getLocalDateString(),
-    paymentMethod: 'cash',
-    notes: ''
-  });
   const [submittingPayment, setSubmittingPayment] = useState(false);
 
   const [loadingEmployees, setLoadingEmployees] = useState(false);
-  const [loadingExpenses, setLoadingExpenses] = useState(false);
-  const [apiError, setApiError] = useState(false);
 
   useEffect(() => {
     loadExpenses();
@@ -811,6 +747,25 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     loadClientPayments();
     loadAllPayments();
   }, []);
+
+  const refreshClientAlertsAndSupplierAccounts = useCallback(async () => {
+    try {
+      const [alerts, accounts] = await Promise.all([
+        fetchClientDueAlerts(),
+        fetchClientSupplierAccounts(),
+      ]);
+      setClientDueAlerts(Array.isArray(alerts) ? alerts : []);
+      setClientSupplierAccounts(Array.isArray(accounts) ? accounts : []);
+    } catch (e) {
+      console.error('refreshClientAlertsAndSupplierAccounts', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'client') {
+      refreshClientAlertsAndSupplierAccounts();
+    }
+  }, [activeTab, refreshClientAlertsAndSupplierAccounts]);
 
   const loadClientPayments = async () => {
     try {
@@ -860,6 +815,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         
         // Reload all payments to enrich them with purchase details (for All Payments view)
         await loadAllPayments();
+        await refreshClientAlertsAndSupplierAccounts();
       } else {
         // If API returns invalid data, try localStorage
         const stored = localStorage.getItem('clientPayments');
@@ -1032,7 +988,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       setLoadingEmployees(true);
       setApiError(false);
       const employeesData = await apiFetchEmployees();
-      setEmployees(employeesData || []);
+      const normalizedEmployees = Array.isArray(employeesData)
+        ? employeesData
+        : Array.isArray(employeesData?.content)
+          ? employeesData.content
+          : Array.isArray(employeesData?.data)
+            ? employeesData.data
+            : [];
+      setEmployees(normalizedEmployees);
     } catch (error) {
       console.error('Error loading employees from API:', error);
       setApiError(true);
@@ -1265,22 +1228,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     }
   };
 
-  const loadExpenses = async () => {
-    try {
-      setLoadingExpenses(true);
-      setApiError(false);
-      const allExpenses = await apiFetchExpenses();
-      setExpenses(allExpenses || []);
-    } catch (error) {
-      console.error('Error loading expenses from API:', error);
-      setApiError(true);
-      // Don't use localStorage fallback - only use API data
-      setExpenses([]);
-    } finally {
-      setLoadingExpenses(false);
-    }
-  };
-
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -1468,8 +1415,46 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     setEditingExpense(null);
   };
 
+  const clientLedgerPseudoExpenses = useMemo(() => {
+    const fmtPm = (mode) => {
+      if (mode == null || mode === '') return 'cash';
+      const m = String(mode).trim().toUpperCase().replace(/-/g, '_');
+      if (m === 'BANK_TRANSFER' || m === 'BANK') return 'bank';
+      if (m === 'UPI') return 'upi';
+      if (m === 'CASH') return 'cash';
+      if (m === 'CARD') return 'card';
+      if (m === 'CHEQUE' || m === 'CHECK') return 'cheque';
+      if (m === 'OTHER') return 'bank';
+      return String(mode).toLowerCase().replace(/_/g, ' ');
+    };
+    return (clientLedgerFeedRows || []).map((r) => {
+      const d = r.txnDate ?? r.txn_date;
+      let dateStr = getLocalDateString();
+      if (d != null) {
+        if (typeof d === 'string' && d.length >= 10) dateStr = d.slice(0, 10);
+        else if (typeof d === 'string') dateStr = d;
+      }
+      const ref = r.referenceId ?? r.reference_id;
+      return {
+        id: `ulk-${r.id}`,
+        _ledgerOnly: true,
+        date: dateStr,
+        type: 'client_ledger',
+        category: 'client_purchase_payment',
+        description:
+          r.description ||
+          (ref != null ? `Client / supplier payment (ref ${ref})` : 'Client / supplier payment'),
+        amount: Number(r.amount) || 0,
+        paymentMethod: fmtPm(r.paymentMode ?? r.payment_mode),
+      };
+    });
+  }, [clientLedgerFeedRows]);
+
+  const safeExpenses = Array.isArray(expenses) ? expenses : [];
+  const expenseTableSource = activeTab === 'all' ? [...safeExpenses, ...clientLedgerPseudoExpenses] : safeExpenses;
+
   // Filter expenses based on active tab
-  let filteredExpenses = expenses.filter(expense => {
+  let filteredExpenses = expenseTableSource.filter((expense) => {
     // Tab filter
     if (activeTab === 'all') {
       // Show all expenses (no type filter needed)
@@ -1564,10 +1549,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   };
 
   const getTypeLabel = (type) => {
+    if (type === 'client_ledger') return 'Client payment';
     return 'Daily Expense';
   };
 
   const getTypeIcon = (type) => {
+    if (type === 'client_ledger') return '🏭';
     return '💰';
   };
 
@@ -1576,44 +1563,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return sum + (parseFloat(exp.amount) || 0);
   }, 0);
   
-  const todayExpenses = expenses
-    .filter(exp => {
+  const todayExpenses = expenseTableSource
+    .filter((exp) => {
       const expDate = new Date(exp.date).toDateString();
       const today = new Date().toDateString();
       return expDate === today;
     })
-    .reduce((sum, exp) => {
-      return sum + (parseFloat(exp.amount) || 0);
-    }, 0);
-
-  const todayExpenseSplit = useMemo(() => {
-    const toNum = (v) => Number.parseFloat(v) || 0;
-    const isToday = (d) => {
-      if (!d) return false;
-      return new Date(d).toDateString() === new Date().toDateString();
-    };
-    return expenses.reduce(
-      (acc, exp) => {
-        if (!isToday(exp?.date)) return acc;
-        const amount = toNum(exp?.amount);
-        const pm = String(exp?.paymentMethod ?? exp?.payment_method ?? '').trim().toLowerCase();
-        if (pm === 'cash' || pm === 'upi') {
-          acc.cashUpi += amount;
-        } else if (
-          pm === 'bank' ||
-          pm === 'bank_transfer' ||
-          pm === 'bank transfer' ||
-          pm === 'card' ||
-          pm === 'cheque' ||
-          pm === 'check'
-        ) {
-          acc.bankCardCheque += amount;
-        }
-        return acc;
-      },
-      { cashUpi: 0, bankCardCheque: 0 }
-    );
-  }, [expenses]);
+    .reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
 
   // If showAddButtonInHeader is true, only render the button
   if (showAddButtonInHeader) {
@@ -1627,17 +1583,15 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   return (
     <div className="expenses-container">
       {!hideHeader && (
-        <div className="expenses-header">
-          <h2>Daily Expenses Management</h2>
-          <div className="expenses-header-actions">
-            <button type="button" className="btn btn-secondary" onClick={() => { setDailyBudgetModalValue(budgetInHand === 0 ? '' : String(budgetInHand)); setShowDailyBudgetModal(true); }}>
-              Add daily budget
-            </button>
-            <button className="btn btn-primary" onClick={handleAddClick}>
-              + Add Expense
-            </button>
-          </div>
-        </div>
+        <ExpensesHeader
+          budgetInHand={budgetInHand}
+          onOpenBudgetModal={(value) => {
+            setDailyBudgetModalValue(value === 0 ? '' : String(value));
+            setDailyBudgetFundingSource('CASH_UPI');
+            setShowDailyBudgetModal(true);
+          }}
+          onAddExpense={handleAddClick}
+        />
       )}
 
       {!hideStats && (
@@ -1674,8 +1628,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               <div className="form-group">
                 <label>Daily budget amount (₹)</label>
                 <p style={{ margin: '4px 0 8px', fontSize: '13px', color: '#666' }}>
-                  This is the budget cap stored for today (same field as Reports). Current remaining in hand:{' '}
+                  Optional daily cap (stored in daily_budget). Remaining vs that cap:{' '}
                   <strong>₹{(Number(todayFromEvents.remaining) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                  . Ledger nets are on the main Expenses tab (GET /api/v1/balance/summary).
                 </p>
                 <input
                   type="number"
@@ -1688,6 +1643,25 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   style={{ width: '100%', padding: '8px 12px', marginTop: '4px' }}
                   disabled={savingBudget}
                 />
+                {Number.isFinite(Number(parseFloat(dailyBudgetModalValue)))
+                  && Math.max(0, Number(parseFloat(dailyBudgetModalValue))) > 0
+                  && hasDailyBudgetFromApi && (
+                  <div style={{ marginTop: '10px' }}>
+                    <label style={{ display: 'block', fontSize: '13px', color: '#334155', marginBottom: '6px' }}>
+                      Increase source
+                    </label>
+                    <select
+                      value={dailyBudgetFundingSource}
+                      onChange={(e) => setDailyBudgetFundingSource(e.target.value)}
+                      className="budget-in-hand-input"
+                      style={{ width: '100%', padding: '8px 12px' }}
+                      disabled={savingBudget}
+                    >
+                      <option value="CASH_UPI">Cash + UPI (increase in-hand budget)</option>
+                      <option value="BANK_TRANSFER">Bank transfer (increase amount in bank)</option>
+                    </select>
+                  </div>
+                )}
               </div>
               <div className="form-actions" style={{ marginTop: '16px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
               <button
@@ -1703,10 +1677,19 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   }
                     setSavingBudget(true);
                     try {
-                      await saveDailyBudgetToApi(num);
+                      const source = hasDailyBudgetFromApi && num > 0 ? dailyBudgetFundingSource : 'CASH_UPI';
+                      await saveDailyBudgetToApi(num, source);
                       await loadBudgetState();
                       setShowDailyBudgetModal(false);
-                      showToast(num > 0 ? `Daily budget set to ₹${num.toLocaleString('en-IN')}` : 'Daily budget cleared.');
+                      if (num > 0 && hasDailyBudgetFromApi) {
+                        showToast(
+                          source === 'BANK_TRANSFER'
+                            ? `Added ₹${num.toLocaleString('en-IN')} to bank balance.`
+                            : `Added ₹${num.toLocaleString('en-IN')} to current daily budget.`
+                        );
+                      } else {
+                        showToast(num > 0 ? `Daily budget set to ₹${num.toLocaleString('en-IN')}` : 'Daily budget cleared.');
+                      }
                     } catch (err) {
                       console.error('Error saving daily budget:', err);
                       showToast(err?.message || 'Failed to save budget. Please try again.', 'error');
@@ -1718,171 +1701,16 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   {savingBudget ? 'Saving...' : 'Save'}
                 </button>
               </div>
-              {/* Budget history */}
-              <div className="budget-history-section" style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '12px' }}>
-                <div className="budget-history-header">
-                  <h4 className="budget-history-title">Budget history</h4>
-                  <button
-                    type="button"
-                    className="btn btn-secondary budget-history-download-btn"
-                    onClick={downloadBudgetHistoryPdf}
-                    disabled={loadingBudgetHistory || filteredBudgetHistoryRows.length === 0}
-                  >
-                    Download PDF
-                  </button>
-                </div>
-                <div className="budget-history-filters">
-                  <div className="budget-history-filter-item">
-                    <label className="budget-history-filter-label">From</label>
-                    <input
-                      type="date"
-                      value={budgetHistoryDateRange.from}
-                      onChange={(e) => setBudgetHistoryDateRange((p) => ({ ...p, from: e.target.value }))}
-                      className="budget-history-filter-control"
-                    />
-                  </div>
-                  <div className="budget-history-filter-item">
-                    <label className="budget-history-filter-label">To</label>
-                    <input
-                      type="date"
-                      value={budgetHistoryDateRange.to}
-                      onChange={(e) => setBudgetHistoryDateRange((p) => ({ ...p, to: e.target.value }))}
-                      className="budget-history-filter-control"
-                    />
-                  </div>
-                  <div className="budget-history-filter-item budget-history-filter-item-wide">
-                    <label className="budget-history-filter-label">Transaction type</label>
-                    <select
-                      value={budgetHistoryTypeFilter}
-                      onChange={(e) => setBudgetHistoryTypeFilter(e.target.value)}
-                      className="budget-history-filter-control"
-                    >
-                      <option value="ALL">All</option>
-                      <option value="CREDIT">Credit</option>
-                      <option value="DEBIT">Debit</option>
-                    </select>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-secondary budget-history-clear-btn"
-                    onClick={() => { setBudgetHistoryDateRange({ from: '', to: '' }); setBudgetHistoryTypeFilter('ALL'); }}
-                  >
-                    Clear
-                  </button>
-                </div>
-                <p className="budget-history-scope-hint" style={{ margin: '8px 0 10px', fontSize: '12px', color: '#64748b', lineHeight: 1.45 }}>
-                  <strong>{BUDGET_SOURCE_CASH_UPI}</strong> — rows in this table (in-hand ledger).{' '}
-                  <strong>{BUDGET_SOURCE_BANK}</strong> — not listed here; use <strong>Amount in bank</strong> on this page.
-                </p>
-                {loadingBudgetHistory ? (
-                  <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>Loading...</p>
-                ) : filteredBudgetHistoryRows.length === 0 ? (
-                  <p style={{ margin: 0, fontSize: '13px', color: '#888' }}>No history yet.</p>
-                ) : (
-                  <div className="daily-budget-history-table-wrap" style={{ maxHeight: '280px', overflowY: 'auto' }}>
-                    <table className="daily-budget-history-table">
-                      <thead>
-                        <tr>
-                          <th style={{ width: '108px' }}>Date</th>
-                          <th style={{ width: '128px' }}>Source</th>
-                          <th style={{ minWidth: '160px' }}>Details</th>
-                          <th style={{ width: '132px' }}>Opening balance</th>
-                          <th style={{ width: '80px' }}>Type</th>
-                          <th style={{ width: '124px' }}>Transaction amount</th>
-                          <th style={{ width: '132px' }}>Remaining amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                    {filteredBudgetHistoryRows.map((row) => {
-                      const { entry, idx, opening, closing, txType, txAmount, displayDate, sourceChannel, detailLabel } = row;
-                      const location = entry.location || '';
-                      const isToday = displayDate === getLocalDateString();
-                      const rowKey = entry.id != null ? entry.id : `idx-${idx}`;
-                      const isEditingThis = isToday && editingBudgetEntryId === rowKey;
-                      const handleSaveInlineBudget = async () => {
-                        const num = Math.max(0, parseFloat(editingBudgetAmount) || 0);
-                        setSavingBudget(true);
-                        try {
-                          await saveDailyBudgetToApi(num);
-                          setEditingBudgetEntryId(null);
-                          setEditingBudgetAmount('');
-                          await loadBudgetState();
-                          await loadBudgetHistory();
-                          showToast(num > 0 ? `Budget updated to ₹${num.toLocaleString('en-IN')}` : 'Budget cleared.');
-                        } catch (err) {
-                          console.error('Error updating budget:', err);
-                          showToast(err?.message || 'Failed to update budget.', 'error');
-                        } finally {
-                          setSavingBudget(false);
-                        }
-                      };
-                      return (
-                        <tr key={entry.id ?? idx}>
-                          <td style={{ color: '#666', fontSize: '13px', padding: '10px 10px' }}>{displayDate}</td>
-                          <td
-                            className={
-                              sourceChannel === BUDGET_SOURCE_BANK
-                                ? 'budget-history-source budget-history-source-bank'
-                                : 'budget-history-source budget-history-source-cash'
-                            }
-                            style={{ fontSize: '12px', padding: '10px 8px', fontWeight: 700, lineHeight: 1.3 }}
-                          >
-                            {sourceChannel}
-                          </td>
-                          <td style={{ fontSize: '12px', padding: '10px 10px', color: '#334155', lineHeight: 1.35 }} title={entry.eventType || entry.event_type || ''}>
-                            {detailLabel}
-                          </td>
-                          <td style={{ fontWeight: 600, fontSize: '13px', padding: '10px 10px' }}>
-                            ₹{Number.isFinite(opening) ? opening.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                          </td>
-                          <td style={{ fontWeight: 700, fontSize: '13px', padding: '10px 10px' }}>
-                            <span className={txType === 'CREDIT' ? 'budget-tx-credit' : 'budget-tx-debit'}>
-                              {txType}
-                            </span>
-                          </td>
-                          <td style={{ fontWeight: 600, fontSize: '13px', padding: '10px 10px' }}>
-                            ₹{Number.isFinite(txAmount) ? txAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                          </td>
-                          <td style={{ fontWeight: 600, fontSize: '13px', padding: '10px 10px' }}>
-                            {isToday && isEditingThis ? (
-                              <input
-                                type="number"
-                                min="0"
-                                step="100"
-                                value={editingBudgetAmount}
-                                onChange={(e) => setEditingBudgetAmount(e.target.value)}
-                                onBlur={handleSaveInlineBudget}
-                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSaveInlineBudget(); } }}
-                                autoFocus
-                                disabled={savingBudget}
-                                style={{ width: '140px', padding: '6px 10px', fontSize: '13px', fontWeight: '600' }}
-                              />
-                            ) : (
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                                <span style={{ color: '#0f766e', fontWeight: 700 }}>
-                                  ₹{Number.isFinite(closing) ? closing.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                                </span>
-                                {isToday && (
-                                  <button
-                                    type="button"
-                                    className="btn btn-secondary"
-                                    onClick={() => { setEditingBudgetEntryId(rowKey); setEditingBudgetAmount(String(opening)); }}
-                                    style={{ fontSize: '12px', padding: '4px 10px' }}
-                                  >
-                                    Edit
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+              <BudgetHistorySection
+                loadingBudgetHistory={loadingBudgetHistory}
+                filteredBudgetHistoryRows={filteredBudgetHistoryRows}
+                budgetHistoryDateRange={budgetHistoryDateRange}
+                setBudgetHistoryDateRange={setBudgetHistoryDateRange}
+                budgetHistoryTypeFilter={budgetHistoryTypeFilter}
+                setBudgetHistoryTypeFilter={setBudgetHistoryTypeFilter}
+                onDownloadPdf={downloadBudgetHistoryPdf}
+                bankSourceLabel={BUDGET_SOURCE_BANK}
+              />
             </div>
           </div>
         </div>
@@ -2183,62 +2011,45 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           {/* Budget in hand card – daily / date-wise */}
           <div className="budget-in-hand-card">
             <div className="budget-in-hand-header">
-              <span className="budget-in-hand-title" title="Cash + UPI available after expenses">
-                💰 Daily available balance
+              <span className="budget-in-hand-title" title="Net position from unified_financial_ledger (CREDIT − DEBIT by payment mode).">
+                💰 Ledger balances
               </span>
             </div>
             {(() => {
-              const left = Number(todayFromEvents.remaining || 0) || 0;
-              const splitCashUpi = Number(todayExpenseSplit.cashUpi || 0) || 0;
-              const splitBank = Number(todayExpenseSplit.bankCardCheque || 0) || 0;
-              const cashUpiDebits =
-                channelBudgetSummary.cashUpiDebits != null
-                  ? channelBudgetSummary.cashUpiDebits
-                  : splitCashUpi;
-              const bankDebits =
-                channelBudgetSummary.bankDebits != null ? channelBudgetSummary.bankDebits : splitBank;
-              const bankCredits =
-                channelBudgetSummary.bankCredits != null ? channelBudgetSummary.bankCredits : 0;
-              /** Today's net bank movement (credits − debits). Full balance adds opening carried from prior days when API sends it. */
-              const bankNetToday = bankCredits - bankDebits;
-              const amountInBankToday =
-                channelBudgetSummary.bankBalanceWithOpening != null &&
-                Number.isFinite(channelBudgetSummary.bankBalanceWithOpening)
-                  ? channelBudgetSummary.bankBalanceWithOpening
-                  : bankNetToday;
-              const bankOpening =
-                channelBudgetSummary.bankOpeningCarried != null &&
-                Number.isFinite(channelBudgetSummary.bankOpeningCarried)
-                  ? channelBudgetSummary.bankOpeningCarried
-                  : null;
+              const splitCashUpi = Number(ledgerTodayDebits.cashUpi || 0) || 0;
+              const splitBank = Number(ledgerTodayDebits.bank || 0) || 0;
               const cards = [
                 {
-                  label: 'Expenses in Cash + UPI (today)',
-                  value: cashUpiDebits,
-                  color: '#dc2626',
-                  title:
-                    'Cash/UPI paid out today: expenses plus supplier bill payments recorded as cash or UPI (from server when available).',
+                  label: 'Net cash + UPI (ledger)',
+                  value: ledgerBalances.inHand,
+                  color: '#059669',
+                  title: 'All-time net on CASH and UPI rails in the unified ledger (credits minus debits).',
                 },
                 {
-                  label: 'Expenses in Bank + Cheque + Card (today)',
-                  value: bankDebits,
-                  color: '#dc2626',
-                  title:
-                    'Bank/cheque/card (and similar) paid out today: all expense rows plus bill payments in the financial ledger.',
-                },
-                {
-                  label: 'Amount in bank (today)',
-                  value: Math.max(0, amountInBankToday),
+                  label: 'Net bank + card + cheque (ledger)',
+                  value: ledgerBalances.bank,
                   color: '#1d4ed8',
-                  title:
-                    bankOpening != null
-                      ? `Opening carried forward (bank channel): ₹${bankOpening.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. Plus today's credits minus today's debits (same rules as the red bank expenses card). Not your real bank statement.`
-                      : 'Bank-channel credits today minus debits today. After the first overnight rollover, opening from prior days is added automatically (like cash + UPI in hand). Not your real bank statement.',
+                  title: 'All-time net on BANK, CARD, and CHEQUE rails in the unified ledger.',
                 },
                 {
-                  label: left >= 0 ? 'Available cash in hand' : 'Over budget by',
-                  value: left >= 0 ? left : Math.abs(left),
-                  color: left >= 0 ? '#059669' : '#dc2626',
+                  label: 'Total liquidity (ledger)',
+                  value: ledgerBalances.total,
+                  color: '#0f172a',
+                  title: 'Cash+UPI net plus bank-rail net from the unified ledger.',
+                },
+                {
+                  label: 'Expenses in UPI + cash',
+                  value: splitCashUpi,
+                  color: '#0d9488',
+                  title:
+                    'Today’s money out (DEBIT) on cash/UPI in the unified ledger — daily expenses, client/supplier payments, payroll cash, etc. Not limited to rows in the table below.',
+                },
+                {
+                  label: 'Expenses in card + bank transfer + cheque',
+                  value: splitBank,
+                  color: '#64748b',
+                  title:
+                    'Today’s money out on bank/card/cheque in the unified ledger — includes client purchase payments by bank (they do not appear as lines in the Daily Expenses table).',
                 },
               ];
               return (
@@ -2274,7 +2085,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
           {/* Budget and Add Expense buttons */}
           <div className="expenses-actions">
-            <button type="button" className="btn btn-secondary" onClick={() => { setDailyBudgetModalValue(budgetInHand === 0 ? '' : String(budgetInHand)); setShowDailyBudgetModal(true); }}>
+            <button type="button" className="btn btn-secondary" onClick={() => { setDailyBudgetModalValue(budgetInHand === 0 ? '' : String(budgetInHand)); setDailyBudgetFundingSource('CASH_UPI'); setShowDailyBudgetModal(true); }}>
               Budget
             </button>
             <button className="btn btn-primary" onClick={handleAddClick}>
@@ -2352,233 +2163,27 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       {/* Borrowed cash (loan / market) — own tab */}
       {activeTab === 'loan' && (
         <div className="expenses-tab-content">
-          <form
-            className="loan-receipt-panel"
-            onSubmit={handleRecordLoanReceipt}
-            style={{
-              padding: '16px 18px',
-              borderRadius: '8px',
-              border: '1px solid #e2e8f0',
-              background: '#f8fafc',
-              maxWidth: '800px',
-            }}
-          >
-            <div style={{ fontWeight: 600, fontSize: '15px', marginBottom: '8px', color: '#334155' }}>
-              Record money borrowed from a lender
-            </div>
-            <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#64748b', lineHeight: 1.5 }}>
-              Choose an existing lender to add more borrowing to their running total (outstanding increases by this amount).
-              Or use <strong>+ Add new lender</strong> for a first-time source. <strong>Cash</strong> and <strong>UPI</strong> increase daily in-hand balance; <strong>bank transfer</strong> and <strong>cheque</strong> only update lender totals. To repay, use{' '}
-              <strong>Daily Expenses</strong> → <strong>Add Expense</strong> → <strong>Loan Repay</strong>.
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-end' }}>
-                <div className="form-group" style={{ marginBottom: 0, minWidth: '140px' }}>
-                  <label style={{ fontSize: '13px' }}>Amount (₹) *</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={loanReceiptAmount}
-                    onChange={(e) => setLoanReceiptAmount(e.target.value)}
-                    placeholder="0.00"
-                    disabled={submittingLoanReceipt}
-                  />
-                </div>
-                <div className="form-group" style={{ marginBottom: 0, minWidth: '170px' }}>
-                  <label style={{ fontSize: '13px' }}>Payment mode</label>
-                  <select
-                    value={loanReceiptPaymentMode}
-                    onChange={(e) => setLoanReceiptPaymentMode(e.target.value)}
-                    disabled={submittingLoanReceipt}
-                  >
-                    <option value="cash">Cash (in hand)</option>
-                    <option value="upi">UPI (in hand)</option>
-                    <option value="bank_transfer">Bank transfer (not in hand)</option>
-                    <option value="cheque">Cheque (not in hand)</option>
-                  </select>
-                </div>
-                <div className="form-group" style={{ marginBottom: 0, flex: '1 1 240px' }}>
-                  <label style={{ fontSize: '13px' }}>Lender</label>
-                  <select
-                    value={loanReceiptLenderSelect}
-                    onChange={(e) => {
-                      setLoanReceiptLenderSelect(e.target.value);
-                      if (e.target.value !== '__new__') {
-                        setLoanReceiptNewLenderName('');
-                      }
-                    }}
-                    disabled={submittingLoanReceipt}
-                  >
-                    <option value="">Unspecified (no named lender)</option>
-                    {loanLenders.map((l) => {
-                      const nm = l.displayName ?? l.display_name ?? `Lender #${l.id}`;
-                      const out = Number(l.outstanding ?? 0) || 0;
-                      return (
-                        <option key={l.id} value={String(l.id)}>
-                          {nm} ({formatLenderOutstandingLabel(out)})
-                        </option>
-                      );
-                    })}
-                    <option value="__new__">+ Add new lender…</option>
-                  </select>
-                </div>
-                <button type="submit" className="btn btn-primary" disabled={submittingLoanReceipt}>
-                  {submittingLoanReceipt ? 'Saving…' : 'Record loan received'}
-                </button>
-              </div>
-              {loanReceiptLenderSelect === '__new__' && (
-                <div className="form-group" style={{ marginBottom: 0, maxWidth: '420px' }}>
-                  <label style={{ fontSize: '13px' }}>New lender name *</label>
-                  <input
-                    type="text"
-                    value={loanReceiptNewLenderName}
-                    onChange={(e) => setLoanReceiptNewLenderName(e.target.value)}
-                    placeholder="e.g. Name or financier"
-                    disabled={submittingLoanReceipt}
-                  />
-                </div>
-              )}
-            </div>
-          </form>
-
-          <div style={{ marginTop: '20px' }}>
-            <h3 style={{ margin: '0 0 10px', fontSize: '16px', fontWeight: 600, color: '#334155' }}>Lenders</h3>
-            <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#64748b' }}>
-              Click a row to see all borrowings and repayments for that lender.
-            </p>
-            {!loadingLoanLenders && loanLenders.length > 0 && (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))',
-                  gap: '10px',
-                  marginBottom: '16px',
-                  maxWidth: '900px',
-                }}
-              >
-                {[
-                  { label: 'Total lenders', value: String(loanLendersTotals.count), accent: '#334155' },
-                  { label: 'Total borrowed', value: formatLoanInr(loanLendersTotals.totalBorrowed), accent: '#1d4ed8' },
-                  { label: 'Total repaid', value: formatLoanInr(loanLendersTotals.totalRepaid), accent: '#0f766e' },
-                  { label: 'Overpay', value: formatLoanInr(loanLendersTotals.totalOverpay), accent: '#1d4ed8' },
-                  loanLendersTotals.totalOutstanding < -0.005
-                    ? {
-                        label: 'Net lender credit',
-                        value: `₹${Math.abs(loanLendersTotals.totalOutstanding).toLocaleString('en-IN', {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}`,
-                        accent: '#1d4ed8',
-                      }
-                    : {
-                        label: 'Total outstanding',
-                        value: formatLoanInr(loanLendersTotals.totalOutstanding),
-                        accent: '#b45309',
-                      },
-                ].map((c) => (
-                  <div
-                    key={c.label}
-                    style={{
-                      padding: '12px 14px',
-                      background: '#fff',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '10px',
-                      boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
-                    }}
-                  >
-                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', letterSpacing: '0.02em', marginBottom: '6px' }}>
-                      {c.label}
-                    </div>
-                    <div style={{ fontSize: '15px', fontWeight: 700, color: c.accent, lineHeight: 1.25 }}>{c.value}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {loadingLoanLenders ? (
-              <p style={{ fontSize: '13px', color: '#888' }}>Loading lenders…</p>
-            ) : loanLenders.length === 0 ? (
-              <div className="empty-state-wrapper" style={{ padding: '20px' }}>
-                <span className="empty-icon">🏦</span>
-                <p className="empty-state" style={{ marginBottom: '4px' }}>No lenders for this location</p>
-                <p className="empty-subtitle" style={{ fontSize: '13px', lineHeight: 1.45 }}>
-                  Lenders are created when you use <strong>Record loan received</strong> above (they are not read from other tables).
-                  Loans recorded only as budget credits before this feature will not appear here until you add them again.
-                </p>
-              </div>
-            ) : (
-              <div className="sales-table-wrapper" style={{ maxWidth: '900px' }}>
-                <table className="data-table expenses-table">
-                  <thead>
-                    <tr>
-                      <th>Lender</th>
-                      <th>Total borrowed</th>
-                      <th>Total repaid</th>
-                      <th>Outstanding</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {loanLenders.map((l) => {
-                      const name = l.displayName ?? l.display_name ?? `Lender #${l.id}`;
-                      const borrowed = Number(l.totalBorrowed ?? l.total_borrowed ?? 0) || 0;
-                      const repaid = Number(l.totalRepaid ?? l.total_repaid ?? 0) || 0;
-                      const out = Number(l.outstanding ?? 0) || 0;
-                      return (
-                        <tr
-                          key={l.id}
-                          style={{ cursor: 'pointer' }}
-                          onClick={() => openLoanLenderHistory(l)}
-                          title="View full history"
-                        >
-                          <td style={{ fontWeight: 600 }}>{name}</td>
-                          <td>₹{borrowed.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td>₹{repaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td
-                            style={{
-                              fontWeight: 600,
-                              color: out > 0.005 ? '#b45309' : out < -0.005 ? '#1d4ed8' : '#0f766e',
-                            }}
-                          >
-                            {out < -0.005 ? (
-                              <>
-                                Credit ₹
-                                {Math.abs(out).toLocaleString('en-IN', {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                              </>
-                            ) : (
-                              <>
-                                ₹
-                                {out.toLocaleString('en-IN', {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                              </>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          <div style={{ marginTop: '16px' }}>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                setActiveTab('all');
-                setCurrentPage(1);
-                handleAddClick();
-              }}
-            >
-              Record a repayment → Add Expense
-            </button>
-          </div>
+          <LoanPanel
+            handleRecordLoanReceipt={handleRecordLoanReceipt}
+            loanReceiptAmount={loanReceiptAmount}
+            setLoanReceiptAmount={setLoanReceiptAmount}
+            loanReceiptPaymentMode={loanReceiptPaymentMode}
+            setLoanReceiptPaymentMode={setLoanReceiptPaymentMode}
+            loanReceiptLenderSelect={loanReceiptLenderSelect}
+            setLoanReceiptLenderSelect={setLoanReceiptLenderSelect}
+            loanReceiptNewLenderName={loanReceiptNewLenderName}
+            setLoanReceiptNewLenderName={setLoanReceiptNewLenderName}
+            submittingLoanReceipt={submittingLoanReceipt}
+            loanLenders={loanLenders}
+            formatLenderOutstandingLabel={formatLenderOutstandingLabel}
+            loadingLoanLenders={loadingLoanLenders}
+            loanLendersTotals={loanLendersTotals}
+            formatLoanInr={formatLoanInr}
+            openLoanLenderHistory={openLoanLenderHistory}
+            setActiveTab={setActiveTab}
+            setCurrentPage={setCurrentPage}
+            handleAddClick={handleAddClick}
+          />
 
           {loanHistoryModal.open && loanHistoryModal.lender && (
             <div className="modal-overlay" onClick={closeLoanHistoryModal} role="presentation">
@@ -2919,131 +2524,20 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         </div>
       )}
 
-      {/* Employee Ledger Modal */}
-      {showEmployeeLedgerModal && selectedLedgerEmployee && (
-        <div className="modal-overlay" onClick={() => setShowEmployeeLedgerModal(false)}>
-          <div className="modal-content employee-ledger-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Employee Ledger - {selectedLedgerEmployee.employeeName}</h3>
-              <button className="modal-close" onClick={() => setShowEmployeeLedgerModal(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-row">
-                <div className="form-group">
-                  <label>From</label>
-                  <input
-                    type="date"
-                    value={employeeLedgerRange.from}
-                    onChange={(e) => setEmployeeLedgerRange((prev) => ({ ...prev, from: e.target.value }))}
-                  />
-                </div>
-                <div className="form-group">
-                  <label>To</label>
-                  <input
-                    type="date"
-                    value={employeeLedgerRange.to}
-                    onChange={(e) => setEmployeeLedgerRange((prev) => ({ ...prev, to: e.target.value }))}
-                  />
-                </div>
-                <div className="form-group ledger-filter-actions">
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => loadEmployeeLedger(selectedLedgerEmployee.id, employeeLedgerRange)}
-                    disabled={employeeLedgerLoading}
-                  >
-                    {employeeLedgerLoading ? 'Loading...' : 'Load Ledger'}
-                  </button>
-                </div>
-              </div>
-
-              {(() => {
-                const ledger = computeLedgerView(employeeLedgerRows);
-                const summary = payrollSummaryByEmpId[String(selectedLedgerEmployee.id)] || null;
-                const pending = Number(summary?.salaryRemaining ?? 0) || 0;
-                const currentMonthPending = Math.max(0, pending);
-                const currentMonthOverpaid = Math.max(0, -pending);
-                const monthlySalary = Number(parseFloat(selectedLedgerEmployee?.salaryAmount || 0) || 0) || 0;
-                const rangeMonths = countMonthsInRangeInclusive(employeeLedgerRange.from, employeeLedgerRange.to);
-                const salaryDeservedInRange = monthlySalary * rangeMonths;
-                const salaryCoveredInRange = (Number(ledger.advanceApplied) || 0) + (Number(ledger.salaryPaid) || 0);
-                return (
-                  <>
-                    <div className="employee-ledger-kpis">
-                      <div className="employee-ledger-kpi-card">
-                        <h3>Total Taken (Advance)</h3>
-                        <p className="kpi-value">₹{ledger.advanceGiven.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                      </div>
-                      <div className="employee-ledger-kpi-card">
-                        <h3>Salary Deserved (Range)</h3>
-                        <p className="kpi-value">₹{salaryDeservedInRange.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                        <p className="kpi-hint">{rangeMonths} month(s) × ₹{monthlySalary.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                      </div>
-                      <div className="employee-ledger-kpi-card">
-                        <h3>Covered In Range</h3>
-                        <p className="kpi-value">₹{salaryCoveredInRange.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                        <p className="kpi-hint">Advance applied + salary paid</p>
-                      </div>
-                      <div className="employee-ledger-kpi-card">
-                        <h3>Left (Current Month)</h3>
-                        <p className="kpi-value kpi-danger">₹{currentMonthPending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                      </div>
-                      <div className="employee-ledger-kpi-card">
-                        <h3>Overpaid / Extra Advance</h3>
-                        <p className="kpi-value kpi-warn">₹{currentMonthOverpaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                        <p className="kpi-hint">Carries to next month</p>
-                      </div>
-                      <div className="employee-ledger-kpi-card">
-                        <h3>Advance Balance</h3>
-                        <p className="kpi-value">₹{ledger.netAdvanceBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                        <p className="kpi-hint">Given - applied</p>
-                      </div>
-                    </div>
-
-                    {employeeLedgerLoading ? (
-                      <Loading message="Loading employee ledger..." />
-                    ) : ledger.lines.length === 0 ? (
-                      <div className="empty-state-wrapper">
-                        <span className="empty-icon">📒</span>
-                        <p className="empty-state">No ledger entries found for selected range.</p>
-                      </div>
-                    ) : (
-                      <div className="sales-table-wrapper employee-ledger-table-wrap">
-                        <table className="data-table expenses-table">
-                          <thead>
-                            <tr>
-                              <th>Date</th>
-                              <th>Month</th>
-                              <th>Type</th>
-                              <th>Paid Via</th>
-                              <th>Amount</th>
-                              <th>Running Advance Balance</th>
-                              <th>Notes</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {ledger.lines.map((row) => (
-                              <tr key={row.id}>
-                                <td>{row.eventDate ? new Date(row.eventDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-'}</td>
-                                <td>{row.month || '-'}</td>
-                                <td>{getLedgerEventLabel(row.eventType)}</td>
-                                <td>{row.paymentMode ? String(row.paymentMode).replace('_', ' ') : '-'}</td>
-                                <td>₹{(Number(row._amount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                                <td>₹{(Number(row._runningAdvanceBalance) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                                <td>{row.notes || '-'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
+      <EmployeeLedgerModal
+        open={showEmployeeLedgerModal}
+        selectedEmployee={selectedLedgerEmployee}
+        onClose={() => setShowEmployeeLedgerModal(false)}
+        employeeLedgerRange={employeeLedgerRange}
+        setEmployeeLedgerRange={setEmployeeLedgerRange}
+        loadEmployeeLedger={loadEmployeeLedger}
+        employeeLedgerLoading={employeeLedgerLoading}
+        computeLedgerView={computeLedgerView}
+        employeeLedgerRows={employeeLedgerRows}
+        payrollSummaryByEmpId={payrollSummaryByEmpId}
+        countMonthsInRangeInclusive={countMonthsInRangeInclusive}
+        getLedgerEventLabel={getLedgerEventLabel}
+      />
 
       {/* Add Employee Form Modal */}
       {showSalaryForm && (
@@ -3404,6 +2898,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             <button className="btn btn-primary" onClick={() => setShowClientPurchaseForm(true)}>
               + Add Client Purchase
             </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setShowClientCreditPanel((v) => !v)}
+            >
+              {showClientCreditPanel ? 'Hide credit & terms' : 'Credit & terms'}
+            </button>
             {clientPayments.length > 0 && (
               <button className="btn btn-secondary" onClick={() => {
                 setShowClientPaymentForm(true);
@@ -3445,6 +2946,208 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               </div>
             )}
           </div>
+
+          {Array.isArray(clientDueAlerts) && clientDueAlerts.length > 0 && (
+            <div
+              role="alert"
+              style={{
+                marginTop: '14px',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                border: '1px solid #f59e0b',
+                fontSize: '13px',
+              }}
+            >
+              <strong style={{ display: 'block', marginBottom: '8px' }}>Client / supplier alerts</strong>
+              <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                {clientDueAlerts.map((a, i) => (
+                  <li key={i} style={{ marginBottom: '4px' }}>
+                    <strong>{a.alertType === 'OVER_CREDIT_LIMIT' ? 'Over limit' : 'Overdue'}:</strong>{' '}
+                    {a.clientName || a.clientKey} — {a.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {showClientCreditPanel && (
+            <div
+              style={{
+                marginTop: '16px',
+                padding: '16px 18px',
+                borderRadius: '14px',
+                background: '#e8eef5',
+                border: '1px solid #cbd5e1',
+              }}
+            >
+              <h4 style={{ margin: '0 0 10px', fontSize: '16px' }}>Credit limits &amp; payment terms</h4>
+              <p style={{ fontSize: '12px', color: '#475569', margin: '0 0 14px', lineHeight: 1.45 }}>
+                Match supplier names from purchases (case-insensitive). If a purchase has no due date, the system sets due = purchase date + terms days.
+              </p>
+              {(clientSupplierAccounts || []).length > 0 && (
+                <div style={{ overflowX: 'auto', marginBottom: '16px' }}>
+                  <table className="data-table expenses-table" style={{ fontSize: '13px' }}>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Credit limit ₹</th>
+                        <th>Terms (days)</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(clientSupplierAccounts || []).map((acc) => (
+                        <tr key={acc.id}>
+                          <td>{acc.displayName || acc.clientKey}</td>
+                          <td>{acc.creditLimit != null ? Number(acc.creditLimit).toLocaleString('en-IN') : '—'}</td>
+                          <td>{acc.paymentTermsDays != null ? acc.paymentTermsDays : '—'}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ fontSize: '12px', padding: '4px 10px' }}
+                              onClick={() => {
+                                setEditingSupplierAccountId(acc.id);
+                                setSupplierAccountForm({
+                                  clientName: acc.clientKey || '',
+                                  displayName: acc.displayName || '',
+                                  creditLimit: acc.creditLimit != null ? String(acc.creditLimit) : '',
+                                  paymentTermsDays:
+                                    acc.paymentTermsDays != null ? String(acc.paymentTermsDays) : '',
+                                });
+                              }}
+                            >
+                              Edit
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  try {
+                    if (editingSupplierAccountId) {
+                      await updateClientSupplierAccount(editingSupplierAccountId, {
+                        displayName: supplierAccountForm.displayName?.trim() || undefined,
+                        creditLimit:
+                          supplierAccountForm.creditLimit === ''
+                            ? null
+                            : Number(supplierAccountForm.creditLimit),
+                        paymentTermsDays:
+                          supplierAccountForm.paymentTermsDays === ''
+                            ? null
+                            : parseInt(supplierAccountForm.paymentTermsDays, 10),
+                      });
+                    } else {
+                      await createClientSupplierAccount({
+                        clientName: supplierAccountForm.clientName.trim(),
+                        displayName: supplierAccountForm.displayName?.trim() || undefined,
+                        creditLimit:
+                          supplierAccountForm.creditLimit === ''
+                            ? null
+                            : Number(supplierAccountForm.creditLimit),
+                        paymentTermsDays:
+                          supplierAccountForm.paymentTermsDays === ''
+                            ? null
+                            : parseInt(supplierAccountForm.paymentTermsDays, 10),
+                      });
+                    }
+                    showToast('Supplier account saved', 'success');
+                    setEditingSupplierAccountId(null);
+                    setSupplierAccountForm({
+                      clientName: '',
+                      creditLimit: '',
+                      paymentTermsDays: '',
+                      displayName: '',
+                    });
+                    await refreshClientAlertsAndSupplierAccounts();
+                  } catch (err) {
+                    showToast(err.message || 'Could not save supplier account', 'error');
+                  }
+                }}
+              >
+                {editingSupplierAccountId && (
+                  <p style={{ fontSize: '12px', marginBottom: '8px' }}>
+                    Editing account #{editingSupplierAccountId}{' '}
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: '11px', padding: '2px 8px' }}
+                      onClick={() => {
+                        setEditingSupplierAccountId(null);
+                        setSupplierAccountForm({
+                          clientName: '',
+                          creditLimit: '',
+                          paymentTermsDays: '',
+                          displayName: '',
+                        });
+                      }}
+                    >
+                      Cancel edit
+                    </button>
+                  </p>
+                )}
+                {!editingSupplierAccountId && (
+                  <div className="form-group">
+                    <label>Client / supplier name (as on purchases) *</label>
+                    <input
+                      value={supplierAccountForm.clientName}
+                      onChange={(e) =>
+                        setSupplierAccountForm({ ...supplierAccountForm, clientName: e.target.value })
+                      }
+                      required={!editingSupplierAccountId}
+                    />
+                  </div>
+                )}
+                <div className="form-group">
+                  <label>Display name (optional)</label>
+                  <input
+                    value={supplierAccountForm.displayName}
+                    onChange={(e) =>
+                      setSupplierAccountForm({ ...supplierAccountForm, displayName: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Credit limit ₹</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={supplierAccountForm.creditLimit}
+                      onChange={(e) =>
+                        setSupplierAccountForm({ ...supplierAccountForm, creditLimit: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Payment terms (days)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={supplierAccountForm.paymentTermsDays}
+                      onChange={(e) =>
+                        setSupplierAccountForm({
+                          ...supplierAccountForm,
+                          paymentTermsDays: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+                <button type="submit" className="btn btn-primary">
+                  {editingSupplierAccountId ? 'Update' : 'Add account'}
+                </button>
+              </form>
+            </div>
+          )}
           
           {/* Client Filter */}
           {clientPayments.length > 0 && (
@@ -3491,6 +3194,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 purchaseDescription: '',
                 totalAmount: '',
                 purchaseDate: getLocalDateString(),
+                dueDate: '',
                 notes: ''
               });
               setClientPurchaseSupplierSelect('');
@@ -3506,6 +3210,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       purchaseDescription: '',
                       totalAmount: '',
                       purchaseDate: getLocalDateString(),
+                      dueDate: '',
                       notes: ''
                     });
                     setClientPurchaseSupplierSelect('');
@@ -3530,6 +3235,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         purchaseDate: clientPurchaseFormData.purchaseDate,
                         notes: clientPurchaseFormData.notes || ''
                       };
+                      if (clientPurchaseFormData.dueDate) {
+                        purchaseData.dueDate = clientPurchaseFormData.dueDate;
+                      }
 
                       // Create purchase via API
                       const newPurchase = await createClientPurchase(purchaseData);
@@ -3669,6 +3377,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       </div>
                     </div>
                     <div className="form-group">
+                      <label>Due date (optional)</label>
+                      <input
+                        type="date"
+                        value={clientPurchaseFormData.dueDate}
+                        onChange={(e) => setClientPurchaseFormData({ ...clientPurchaseFormData, dueDate: e.target.value })}
+                      />
+                      <p style={{ marginTop: '6px', fontSize: '12px', color: '#64748b' }}>
+                        Leave blank to use payment terms from Credit &amp; terms (days after purchase date).
+                      </p>
+                    </div>
+                    <div className="form-group">
                       <label>Notes</label>
                       <textarea
                         value={clientPurchaseFormData.notes}
@@ -3687,6 +3406,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           purchaseDescription: '',
                           totalAmount: '',
                           purchaseDate: getLocalDateString(),
+                          dueDate: '',
                           notes: ''
                         });
                         setClientPurchaseSupplierSelect('');
@@ -3876,8 +3596,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         }
                       }
                       
-                      // Backend POST .../payments already mirrors this outflow to expenses via
-                      // ClientTransactionService (one expense). Do not call createExpense here — it double-counts.
+                      // Reload expenses + unified-ledger CLIENT_OUT rows (shown on Daily Expenses tab).
                       await loadExpenses();
                       await loadBudgetState();
                       if (onExpenseUpdate) onExpenseUpdate();
@@ -3895,7 +3614,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       });
                     } catch (error) {
                       console.error('Error adding client payment:', error);
-                      showToast(`Failed to record payment: ${error.message}`, 'error');
+                      let msg = error.message || 'Unknown error';
+                      if (error.status === 404) {
+                        msg +=
+                          ' This purchase may not exist on the server (for example it was saved only in the browser while the API was down), or it belongs to another location. Try refreshing the Client tab or create the purchase again from the server.';
+                      }
+                      showToast(`Failed to record payment: ${msg}`, 'error');
                       // Don't close modal on error - let user try again
                     } finally {
                       setSubmittingPayment(false);
@@ -4028,6 +3752,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                             <th>Client Name</th>
                             <th>Description</th>
                             <th>Purchase Date</th>
+                            <th>Due</th>
                             <th>Total Amount</th>
                             <th>Paid Amount</th>
                             <th>Pending Amount</th>
@@ -4050,6 +3775,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         const safePaid = isNaN(paidAmount) ? 0 : paidAmount;
                         const safeTotal = isNaN(totalAmount) ? 0 : totalAmount;
                         const safePending = isNaN(pendingAmount) ? 0 : pendingAmount;
+                        const dueStr = purchase?.dueDate ? String(purchase.dueDate).slice(0, 10) : '';
+                        const todayStr = getLocalDateString();
+                        const overdue = Boolean(dueStr && safePending > 0 && dueStr < todayStr);
                         return (
                           <tr key={purchase?.id}>
                             <td className="date-cell client-purchase-client-cell">{purchase?.clientName || '-'}</td>
@@ -4058,6 +3786,11 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                             </td>
                             <td style={{ fontSize: '12px' }}>
                               {purchase?.purchaseDate ? new Date(purchase.purchaseDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-'}
+                            </td>
+                            <td style={{ fontSize: '12px', color: overdue ? '#b45309' : undefined, fontWeight: overdue ? 600 : undefined }}>
+                              {dueStr
+                                ? `${new Date(`${dueStr}T12:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })}${overdue ? ' ⚠' : ''}`
+                                : '—'}
                             </td>
                             <td className="amount-cell total-col">
                               <span className="expense-amount">₹{safeTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
@@ -4084,6 +3817,29 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                             </td>
                             <td className="client-purchase-actions-cell">
                               <div className="action-buttons client-purchase-action-buttons">
+                                <button
+                                  className="action-btn"
+                                  type="button"
+                                  title="Running ledger (signed balance)"
+                                  onClick={async () => {
+                                    const cid = String(purchase?.clientName || '').trim();
+                                    if (!cid) return;
+                                    setClientRunningLedgerTitle(cid);
+                                    setShowClientRunningLedgerModal(true);
+                                    setLoadingClientRunningLedger(true);
+                                    setClientRunningLedgerRows([]);
+                                    try {
+                                      const rows = await fetchClientRunningLedger(cid);
+                                      setClientRunningLedgerRows(Array.isArray(rows) ? rows : []);
+                                    } catch (err) {
+                                      showToast(err.message || 'Could not load ledger', 'error');
+                                    } finally {
+                                      setLoadingClientRunningLedger(false);
+                                    }
+                                  }}
+                                >
+                                  📒
+                                </button>
                                 <button
                                   className="action-btn"
                                   onClick={() => {
@@ -4249,6 +4005,53 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               </div>
             )}
           </div>
+
+          {showClientRunningLedgerModal && (
+            <div className="modal-overlay" onClick={() => setShowClientRunningLedgerModal(false)}>
+              <div className="modal-content" style={{ maxWidth: '720px' }} onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>Running balance — {clientRunningLedgerTitle}</h3>
+                  <button type="button" className="modal-close" onClick={() => setShowClientRunningLedgerModal(false)}>×</button>
+                </div>
+                <div className="modal-body">
+                  {loadingClientRunningLedger ? (
+                    <Loading message="Loading ledger…" />
+                  ) : (!clientRunningLedgerRows || clientRunningLedgerRows.length === 0) ? (
+                    <p className="empty-state" style={{ padding: '20px' }}>No transactions for this name yet.</p>
+                  ) : (
+                    <div className="sales-table-wrapper">
+                      <table className="data-table expenses-table" style={{ fontSize: '13px' }}>
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Type</th>
+                            <th>Mode</th>
+                            <th>Amount</th>
+                            <th>Balance</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(clientRunningLedgerRows || []).map((row) => (
+                            <tr key={row.id}>
+                              <td>{row.transactionDate}</td>
+                              <td>{row.transactionType}</td>
+                              <td>{row.paymentMode}</td>
+                              <td>₹{Number(row.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                              <td style={{ fontWeight: 700 }}>
+                                {row.runningBalanceAfter != null
+                                  ? `₹${Number(row.runningBalanceAfter).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                                  : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -4311,20 +4114,32 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         <span className="payment-badge">{expense.paymentMethod}</span>
                       </td>
                       <td className="actions-cell">
-                        <button
-                          className="btn-icon btn-edit"
-                          onClick={() => handleEdit(expense)}
-                          title="Edit"
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          className="btn-icon btn-delete"
-                          onClick={() => handleDelete(expense.id)}
-                          title="Delete"
-                        >
-                          🗑️
-                        </button>
+                        {expense._ledgerOnly ? (
+                          <span
+                            className="ledger-feed-actions-hint"
+                            title="Recorded from Client Transactions (purchase payment). Edit or remove it there."
+                            style={{ fontSize: '12px', color: '#64748b' }}
+                          >
+                            Client module
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              className="btn-icon btn-edit"
+                              onClick={() => handleEdit(expense)}
+                              title="Edit"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              className="btn-icon btn-delete"
+                              onClick={() => handleDelete(expense.id)}
+                              title="Delete"
+                            >
+                              🗑️
+                            </button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -4369,26 +4184,34 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           <span className="payment-badge">{expense.paymentMethod}</span>
                         </div>
                         <div className="expense-card-actions">
-                          <button
-                            className="btn-icon btn-edit"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleEdit(expense);
-                            }}
-                            title="Edit"
-                          >
-                            ✏️
-                          </button>
-                          <button
-                            className="btn-icon btn-delete"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDelete(expense.id);
-                            }}
-                            title="Delete"
-                          >
-                            🗑️
-                          </button>
+                          {expense._ledgerOnly ? (
+                            <span style={{ fontSize: '12px', color: '#64748b' }} title="Manage under Client Transactions">
+                              Client module — use Client tab to adjust
+                            </span>
+                          ) : (
+                            <>
+                              <button
+                                className="btn-icon btn-edit"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEdit(expense);
+                                }}
+                                title="Edit"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                className="btn-icon btn-delete"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDelete(expense.id);
+                                }}
+                                title="Delete"
+                              >
+                                🗑️
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     )}

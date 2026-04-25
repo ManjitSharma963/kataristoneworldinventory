@@ -185,9 +185,25 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
         return;
       }
       try {
-        const cust = await fetchCustomerByPhone(digits);
+        const rawCustomer = await fetchCustomerByPhone(digits);
+        const cust = rawCustomer && typeof rawCustomer === 'object' && rawCustomer.data
+          ? rawCustomer.data
+          : rawCustomer;
         if (cancelled) return;
-        const sum = await fetchCustomerAdvanceSummary(cust.id);
+        if (cust && typeof cust === 'object') {
+          setCustomerName(String(cust.customerName || cust.name || ''));
+          setEmail(String(cust.email || ''));
+          setAddressLine1(String(cust.address || ''));
+          setCity(String(cust.city || cust.location || ''));
+          setState(String(cust.state || ''));
+          setPincode(String(cust.pincode || ''));
+          setGstin(String(cust.gstin || ''));
+        }
+        if (cancelled) return;
+        const rawSummary = await fetchCustomerAdvanceSummary(cust.id);
+        const sum = rawSummary && typeof rawSummary === 'object' && rawSummary.data
+          ? rawSummary.data
+          : rawSummary;
         if (cancelled) return;
         setAdvanceRemaining(Number(sum.remaining) || 0);
       } catch {
@@ -1370,6 +1386,13 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
           <div className="summary-total">
             <span className="total-label">Final Amount (Incl. Labour/Transport/Other)</span>
             <span className="total-value">₹ {fin.grandTotal.toFixed(2)}</span>
+          </div>
+
+          <div className="summary-total" style={{ marginTop: '8px' }}>
+            <span className="total-label">Customer Advance Balance</span>
+            <span className="total-value" style={{ color: '#0d9488' }}>
+              ₹ {Number(advanceRemaining || 0).toFixed(2)}
+            </span>
           </div>
 
           {fin.advanceWillApply > 0 && (

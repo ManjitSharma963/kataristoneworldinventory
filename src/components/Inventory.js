@@ -30,7 +30,14 @@ const Inventory = () => {
       }
       if (response.ok) {
         const data = await response.json();
-        setCategories(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
+        setCategories(list);
+      } else {
+        setCategories([]);
       }
     } catch (error) {
       console.error('Error fetching categories:', error);

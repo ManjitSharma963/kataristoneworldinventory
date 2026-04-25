@@ -1227,3 +1227,32 @@
   color: #333;
 }
 
+/* Bill edit — product name autocomplete */
+.bill-edit-item-field .bill-edit-item-autocomplete {
+  width: 100%;
+}
+
+.bill-edit-item-field .bill-edit-item-autocomplete .p-autocomplete-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.bill-edit-product-panel {
+  max-width: min(420px, 92vw);
+}
+
+.bill-edit-product-suggest {
+  padding: 4px 0;
+  line-height: 1.35;
+}
+
+.bill-edit-product-suggest-name {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.bill-edit-product-suggest-meta {
+  font-size: 11px;
+  color: #64748b;
+}
+

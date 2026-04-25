@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { API_BASE_URL } from '../config/api';
+import { login } from '../utils/api';
 import './Auth.css';
 
 const Login = ({ onLoginSuccess, onSwitchToRegister, initialError = '' }) => {
@@ -32,40 +32,33 @@ const Login = ({ onLoginSuccess, onSwitchToRegister, initialError = '' }) => {
     setLoading(true);
 
     try {
-      // Call backend directly at http://localhost:8080 (no proxy)
-      const response = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({
-          email: formData.email,
-          password: formData.password
-        })
+      const response = await login({
+        email: String(formData.email || '').trim(),
+        password: String(formData.password || '').trim()
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorData;
-        try {
-          errorData = JSON.parse(errorText);
-        } catch {
-          errorData = { message: errorText || 'Login failed' };
-        }
-        throw new Error(errorData.message || `Login failed: ${response.status}`);
-      }
+      // Support both shapes:
+      // 1) { token, user }
+      // 2) { success, data: { token, user } }
+      const auth = response?.data && typeof response.data === 'object' ? response.data : response;
+      const token = auth?.token;
+      const user = auth?.user || {};
 
-      const data = await response.json();
-      if (data && data.token) {
-        localStorage.setItem('authToken', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user || {}));
-        onLoginSuccess(data.user);
+      if (token) {
+        localStorage.setItem('authToken', token);
+        localStorage.setItem('user', JSON.stringify(user));
+        onLoginSuccess(user);
       } else {
         setError('Invalid email or password');
       }
     } catch (err) {
-      setError(err.message || 'Login failed. Please try again.');
+      const fieldErrors = err?.responseBody?.error;
+      if (fieldErrors && typeof fieldErrors === 'object') {
+        const first = Object.values(fieldErrors).find(Boolean);
+        setError(first || err.message || 'Login failed. Please try again.');
+      } else {
+        setError(err.message || 'Login failed. Please try again.');
+      }
     } finally {
       setLoading(false);
     }

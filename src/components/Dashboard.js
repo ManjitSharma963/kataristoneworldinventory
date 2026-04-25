@@ -3,8 +3,9 @@ import { getInventory, getExpenses, getSales } from '../utils/storage';
 import Expenses from './Expenses';
 import Invoice from './Invoice';
 import HomeScreenManagement from './HomeScreenManagement';
-import { downloadBillPDF, handleApiResponse, getInventoryEndpoint } from '../utils/api';
-import { fetchExpenses as apiFetchExpenses } from '../utils/api';
+import { downloadBillPDF, handleApiResponse, getInventoryEndpoint, fetchExpenses as apiFetchExpenses } from '../utils/api';
+import { useLedgerSummary } from '../hooks/useLedgerSummary';
+import DashboardLedgerSummaryCards from './dashboard/DashboardLedgerSummaryCards';
 import { API_BASE_URL } from '../config/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import './Dashboard.css';
@@ -116,6 +117,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     }
   }, [activeNav]);
 
+  const ledgerSummary = useLedgerSummary(activeNav);
+
   // Expenses are now loaded from API only via the Expenses component
   // No need to refresh from localStorage
   const [stats, setStats] = useState({
@@ -156,6 +159,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     stats: false,
     charts: false
   });
+  /** Phase 4: unified_financial_ledger nets (same as Expenses tab). */
   // Statistics Overview date filter: 'all' | 'monthly' | 'range'. Default 'all'.
   const [statsPeriod, setStatsPeriod] = useState('all');
   const [statsMonth, setStatsMonth] = useState(() => {
@@ -185,7 +189,8 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   });
 
   const calculateStats = (billsData) => {
-    if (!billsData || billsData.length === 0) {
+    const list = Array.isArray(billsData) ? billsData : [];
+    if (list.length === 0) {
       return {
         totalSales: 0,
         totalWithGST: 0,
@@ -197,9 +202,9 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       };
     }
 
-    const totalSales = billsData.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0);
-    const salesWithGST = billsData.filter(bill => bill.billType === 'GST');
-    const salesWithoutGST = billsData.filter(bill => bill.billType !== 'GST');
+    const totalSales = list.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0);
+    const salesWithGST = list.filter(bill => bill.billType === 'GST');
+    const salesWithoutGST = list.filter(bill => bill.billType !== 'GST');
     
     const totalWithGST = salesWithGST.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0);
     const totalWithoutGST = salesWithoutGST.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0);
@@ -212,7 +217,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       totalGSTCollected,
       countWithGST: salesWithGST.length,
       countWithoutGST: salesWithoutGST.length,
-      totalCount: billsData.length
+      totalCount: list.length
     };
   };
 
@@ -257,10 +262,15 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       }
       
       const data = await response.json();
-      console.log('Inventory fetched successfully, items count:', data?.length || 0);
-      setInventory(data || []);
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
+      console.log('Inventory fetched successfully, items count:', list.length || 0);
+      setInventory(list);
       setApiConnectionError(false); // Clear error if successful
-      return data || [];
+      return list;
     } catch (error) {
       console.error('Error fetching inventory:', error);
       
@@ -291,8 +301,9 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       // Fallback to localStorage if API fails
       try {
         const localInventory = getInventory();
-        console.log('Using localStorage inventory as fallback, items count:', localInventory.length);
-        setInventory(localInventory);
+        const fallbackList = Array.isArray(localInventory) ? localInventory : [];
+        console.log('Using localStorage inventory as fallback, items count:', fallbackList.length);
+        setInventory(fallbackList);
       } catch (localError) {
         console.error('Error loading from localStorage:', localError);
         setInventory([]);
@@ -306,7 +317,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   const fetchExpenses = useCallback(async () => {
     try {
       const expensesData = await apiFetchExpenses();
-      setExpenses(expensesData || []);
+      const list = Array.isArray(expensesData)
+        ? expensesData
+        : Array.isArray(expensesData?.data)
+          ? expensesData.data
+          : [];
+      setExpenses(list);
     } catch (error) {
       console.error('Error fetching expenses:', error);
       setExpenses([]);
@@ -370,7 +386,11 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       }
       
       const data = await response.json();
-      const billsData = data || [];
+      const billsData = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
       setBills(billsData);
       
       // Calculate stats from API bills data
@@ -382,15 +402,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       
       // Check if it's a network/CORS error (no response received)
       // Only treat as network error if we didn't get a response status
+      const msg = String(error?.message || '');
       const isNetworkError = (
-        error.name === 'TypeError' && 
+        msg.includes('Failed to fetch') &&
         !error.message.includes('Backend server error') &&
         !error.message.includes('Failed to fetch bills:')
-      ) || (
-        error.message.includes('Failed to fetch') && 
-        !error.message.includes('Backend server error') &&
-        !error.message.includes('Failed to fetch bills:')
-      ) || error.message.includes('CORS') || error.message.includes('NetworkError');
+      ) || msg.includes('CORS') || msg.includes('NetworkError');
       
       if (isNetworkError) {
         console.warn('Network error when fetching bills. Backend may not be running or proxy not configured.');
@@ -530,7 +547,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
 
   // Prepare inventory chart data (by category/type)
   const inventoryChartData = useMemo(() => {
-    if (!inventory || inventory.length === 0) return [];
+    if (!Array.isArray(inventory) || inventory.length === 0) return [];
     
     const categoryMap = new Map();
     
@@ -558,7 +575,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
 
   // Prepare expenses chart data (by category) for pie chart
   const expensesChartData = useMemo(() => {
-    if (!expenses || expenses.length === 0) return [];
+    if (!Array.isArray(expenses) || expenses.length === 0) return [];
     
     const categoryMap = new Map();
     
@@ -623,7 +640,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   }, [bills, statsPeriod, statsMonth, statsRangeStart, statsRangeEnd]);
 
   const filteredExpensesForStats = useMemo(() => {
-    if (!expenses || expenses.length === 0) return [];
+    if (!Array.isArray(expenses) || expenses.length === 0) return [];
     if (statsPeriod === 'all') return expenses;
     if (statsPeriod === 'monthly' && statsMonth) {
       const [y, m] = statsMonth.split('-').map(Number);
@@ -1617,6 +1634,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             </h3>
           </div>
           <div className="section-toggle-content">
+            <DashboardLedgerSummaryCards ledgerSummary={ledgerSummary} />
             <div className="stats-period-filter">
               <span className="stats-period-label">Show:</span>
               <div className="stats-period-options">
