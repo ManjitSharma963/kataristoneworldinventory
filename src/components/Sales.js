@@ -117,6 +117,15 @@ const Sales = () => {
       const billNumber = sale.billNumber || sale.billId || billId || '-';
       const billDate = sale.billDate || sale.createdAt || sale.date;
       const customerNumber = sale.customerMobileNumber || sale.customerNumber || sale.customerPhone || '-';
+      const customerName =
+        String(
+          sale.customerName ??
+            sale.customer_name ??
+            sale.name ??
+            sale.customer?.customerName ??
+            sale.customer?.name ??
+            ''
+        ).trim() || '—';
       const items = sale.items || sale.billItems || [];
       
       // Normalize billType
@@ -171,6 +180,7 @@ const Sales = () => {
         billNumber: String(billNumber || '').toUpperCase(),
         billDate: dateObj,
         customerNumber: String(customerNumber || ''),
+        customerName,
         itemsCount: items.length,
         billType: billType,
         isGST: isGST,
@@ -215,11 +225,33 @@ const Sales = () => {
       if (!q) return true;
       const billNo = normalizeSearchText(row.billNumber);
       const cust = normalizeSearchText(row.customerNumber);
+      const custName = normalizeSearchText(
+        row.customerName && row.customerName !== '—' ? row.customerName : ''
+      );
       const pm = normalizeSearchText(formatPaymentModeLabel(row.paymentMode));
       const type = normalizeSearchText(row.billType);
-      return billNo.includes(q) || cust.includes(q) || pm.includes(q) || type.includes(q);
+      return (
+        billNo.includes(q) ||
+        cust.includes(q) ||
+        custName.includes(q) ||
+        pm.includes(q) ||
+        type.includes(q)
+      );
     });
   }, [dateRangeFilteredSales, debouncedSearchQuery, billTypeFilter, paymentModeFilter]);
+
+  const filteredCancellations = useMemo(() => {
+    const q = normalizeSearchText(debouncedSearchQuery);
+    const rows = Array.isArray(cancellations) ? cancellations : [];
+    if (!q) return rows;
+    return rows.filter((row) => {
+      const name = normalizeSearchText(row.customerName || row.customer_name || '');
+      const phone = normalizeSearchText(row.customerPhone || row.customer_phone || '');
+      const billNo = normalizeSearchText(row.billNumber || '');
+      const kind = normalizeSearchText(row.billKind || '');
+      return name.includes(q) || phone.includes(q) || billNo.includes(q) || kind.includes(q);
+    });
+  }, [cancellations, debouncedSearchQuery]);
 
   const formatCurrency = (n) =>
     `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -642,9 +674,9 @@ const Sales = () => {
             <InputText
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by bill #, customer, payment mode, or bill type…"
+              placeholder="Search by bill #, customer name, phone, payment mode, or bill type…"
               className="sales-common-search-input"
-              title="Search bills by number, customer phone, paid via, or bill type"
+              title="Search sales and cancelled bills by number, customer name or phone, paid via, or bill type"
             />
           </div>
           <div className="sales-common-search-right">
@@ -718,7 +750,11 @@ const Sales = () => {
             rowsPerPageOptions={[10, 25, 50]}
             loading={loading}
             dataKey="id"
-            emptyMessage="No bills found for today or selected filters."
+            emptyMessage={
+              debouncedSearchQuery.trim() && commonFilteredSales.length === 0 && dateRangeFilteredSales.length > 0
+                ? 'No bills match your search for this date range.'
+                : 'No bills found for today or selected filters.'
+            }
             showGridlines
             stripedRows
             tableStyle={{ minWidth: '44rem', width: '100%' }}
@@ -740,6 +776,16 @@ const Sales = () => {
               field="customerNumber"
               header="Customer Number"
               style={{ minWidth: '9rem' }}
+            />
+            <Column
+              field="customerName"
+              header="Customer Name"
+              style={{ minWidth: '10rem' }}
+              body={(rowData) => (
+                <span title={rowData.customerName !== '—' ? rowData.customerName : ''}>
+                  {rowData.customerName || '—'}
+                </span>
+              )}
             />
             <Column
               field="itemsCount"
@@ -829,18 +875,26 @@ const Sales = () => {
 
         <h3 style={{ marginTop: '1.75rem' }}>Cancelled bills (audit)</h3>
         <p style={{ color: '#64748b', fontSize: '13px', marginTop: 0, maxWidth: '48rem' }}>
-          Logged when a bill is deleted. Filter uses the same bill date range as above. Totals and payment-mode
-          summaries for the period exclude these bills once cancelled.
+          Logged when a bill is deleted. Filter uses the same bill date range as above. The search box filters this
+          table too (by customer name, phone, or bill #). Totals and payment-mode summaries for the period exclude
+          these bills once cancelled.
         </p>
         <div className="sales-table-container">
           <DataTable
-            value={cancellations}
+            value={filteredCancellations}
             paginator
             rows={8}
             rowsPerPageOptions={[8, 15, 25]}
             loading={cancellationsLoading}
             dataKey="id"
-            emptyMessage="No cancelled bills in this bill-date range."
+            emptyMessage={
+              debouncedSearchQuery.trim() &&
+              filteredCancellations.length === 0 &&
+              Array.isArray(cancellations) &&
+              cancellations.length > 0
+                ? 'No cancelled bills match your search.'
+                : 'No cancelled bills in this bill-date range.'
+            }
             showGridlines
             stripedRows
             tableStyle={{ minWidth: '44rem', width: '100%' }}
@@ -869,9 +923,20 @@ const Sales = () => {
               body={(row) => (String(row.billKind || '').includes('NON') ? 'NON-GST' : 'GST')}
             />
             <Column
-              header="Customer"
-              style={{ minWidth: '9rem' }}
-              body={(row) => [row.customerName, row.customerPhone].filter(Boolean).join(' · ') || '—'}
+              field="customerName"
+              header="Customer name"
+              style={{ minWidth: '10rem' }}
+              body={(row) =>
+                String(row.customerName || row.customer_name || '').trim() || '—'
+              }
+            />
+            <Column
+              field="customerPhone"
+              header="Phone"
+              style={{ minWidth: '8rem' }}
+              body={(row) =>
+                String(row.customerPhone || row.customer_phone || '').trim() || '—'
+              }
             />
             <Column
               field="totalAmount"
@@ -912,7 +977,11 @@ const Sales = () => {
             <div className="bill-customer-details">
               <div className="detail-row">
                 <span className="label">Name:</span>
-                <span className="value">{selectedBill.originalSale.customerName}</span>
+                <span className="value">
+                  {selectedBill.originalSale?.customerName ||
+                    selectedBill.customerName ||
+                    '—'}
+                </span>
               </div>
               <div className="detail-row">
                 <span className="label">Mobile:</span>
