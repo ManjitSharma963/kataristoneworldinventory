@@ -10,6 +10,7 @@ import {
   fetchCustomerAdvanceSummary,
   fetchCustomerAdvanceHistory,
   createCustomerAdvance,
+  createCustomerAdvanceRefund,
 } from '../utils/api';
 import Loading from './Loading';
 import useDebouncedValue from '../utils/useDebouncedValue';
@@ -44,7 +45,9 @@ const Customers = () => {
   const [advanceSummary, setAdvanceSummary] = useState(null);
   const [advanceHistory, setAdvanceHistory] = useState([]);
   const [advanceLoading, setAdvanceLoading] = useState(false);
+  const [remainingAdvanceByCustomerId, setRemainingAdvanceByCustomerId] = useState({});
   const [advanceAmount, setAdvanceAmount] = useState('');
+  const [refundAmount, setRefundAmount] = useState('');
   const [advanceDesc, setAdvanceDesc] = useState('');
   const [advancePaymentMode, setAdvancePaymentMode] = useState(
     () => localStorage.getItem('lastAdvancePaymentMode') || 'CASH'
@@ -114,6 +117,12 @@ const Customers = () => {
       const hist = unwrapList(histRaw);
       setAdvanceSummary(sum || { totalAdvance: 0, totalUsed: 0, remaining: 0 });
       setAdvanceHistory(hist);
+      if (sum && customerId != null) {
+        setRemainingAdvanceByCustomerId((prev) => ({
+          ...prev,
+          [customerId]: Number(sum.remaining) || 0,
+        }));
+      }
     } catch (e) {
       console.error('Advance load failed:', e);
       setAdvanceSummary(null);
@@ -126,6 +135,7 @@ const Customers = () => {
   const openAdvanceModal = (customer) => {
     setAdvanceModalCustomer(customer);
     setAdvanceAmount('');
+    setRefundAmount('');
     setAdvanceDesc('');
     setAdvancePaymentMode('CASH');
     loadAdvanceData(customer.id);
@@ -164,12 +174,38 @@ const Customers = () => {
     }
   };
 
+  const handleRefundAdvance = async (e) => {
+    e.preventDefault();
+    if (!advanceModalCustomer) return;
+    const amt = parseFloat(String(refundAmount).replace(/[^\d.]/g, ''));
+    if (!amt || amt <= 0) {
+      alert('Enter a positive refund amount');
+      return;
+    }
+    try {
+      setAdvanceLoading(true);
+      await createCustomerAdvanceRefund({
+        customerId: advanceModalCustomer.id,
+        amount: amt,
+        paymentMode: advancePaymentMode || 'CASH',
+        description: advanceDesc || undefined,
+      });
+      setRefundAmount('');
+      await loadAdvanceData(advanceModalCustomer.id);
+    } catch (err) {
+      alert(err.message || 'Could not refund advance');
+    } finally {
+      setAdvanceLoading(false);
+    }
+  };
+
   const loadCustomers = async () => {
     try {
       setLoading(true);
       const customersData = await fetchCustomers();
       const finalCustomers = toList(customersData);
       setCustomers(finalCustomers);
+      await loadRemainingAdvances(finalCustomers);
       localStorage.setItem('customers', JSON.stringify(finalCustomers));
     } catch (error) {
       console.error('Error loading customers:', error);
@@ -177,17 +213,44 @@ const Customers = () => {
       try {
         const stored = localStorage.getItem('customers');
         if (stored) {
-          setCustomers(toList(JSON.parse(stored)));
+          const parsed = toList(JSON.parse(stored));
+          setCustomers(parsed);
+          await loadRemainingAdvances(parsed);
         } else {
           setCustomers([]);
+          setRemainingAdvanceByCustomerId({});
         }
       } catch (localError) {
         console.error('Error loading from localStorage:', localError);
         setCustomers([]);
+        setRemainingAdvanceByCustomerId({});
       }
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadRemainingAdvances = async (customerList) => {
+    const list = Array.isArray(customerList) ? customerList : [];
+    if (list.length === 0) {
+      setRemainingAdvanceByCustomerId({});
+      return;
+    }
+    const results = await Promise.allSettled(
+      list.map(async (customer) => {
+        const summaryRaw = await fetchCustomerAdvanceSummary(customer.id);
+        const summary = unwrapEntity(summaryRaw);
+        return [customer.id, Number(summary?.remaining) || 0];
+      })
+    );
+    const map = {};
+    results.forEach((result) => {
+      if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+        const [customerId, remaining] = result.value;
+        map[customerId] = remaining;
+      }
+    });
+    setRemainingAdvanceByCustomerId(map);
   };
 
   const handleInputChange = (e) => {
@@ -381,46 +444,67 @@ const Customers = () => {
                     </div>
                   </div>
 
-                  <form onSubmit={handleAddAdvance} className="advance-add-form">
-                    <h4 className="advance-section-title">Add advance / token</h4>
-                    <div className="form-row">
-                      <div className="form-group">
-                        <label>Amount (₹) *</label>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={advanceAmount}
-                          onChange={(e) => setAdvanceAmount(e.target.value)}
-                          placeholder="e.g. 5000"
-                        />
+                  <div className="advance-actions-grid">
+                    <form onSubmit={handleAddAdvance} className="advance-add-form advance-action-card">
+                      <h4 className="advance-section-title">Add advance / token</h4>
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>Amount (₹) *</label>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={advanceAmount}
+                            onChange={(e) => setAdvanceAmount(e.target.value)}
+                            placeholder="e.g. 5000"
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Paid Via *</label>
+                          <select
+                            value={advancePaymentMode}
+                            onChange={(e) => setAdvancePaymentMode(e.target.value)}
+                            className="form-select"
+                          >
+                            <option value="CASH">Cash</option>
+                            <option value="UPI">UPI</option>
+                            <option value="BANK_TRANSFER">Bank transfer</option>
+                            <option value="CHEQUE">Cheque</option>
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>Description</label>
+                          <input
+                            type="text"
+                            value={advanceDesc}
+                            onChange={(e) => setAdvanceDesc(e.target.value)}
+                            placeholder="Optional note"
+                          />
+                        </div>
                       </div>
-                      <div className="form-group">
-                        <label>Paid Via *</label>
-                        <select
-                          value={advancePaymentMode}
-                          onChange={(e) => setAdvancePaymentMode(e.target.value)}
-                          className="form-select"
-                        >
-                          <option value="CASH">Cash</option>
-                          <option value="UPI">UPI</option>
-                          <option value="BANK_TRANSFER">Bank transfer</option>
-                          <option value="CHEQUE">Cheque</option>
-                        </select>
+                      <button type="submit" className="btn btn-primary" disabled={advanceLoading}>
+                        Record advance
+                      </button>
+                    </form>
+
+                    <form onSubmit={handleRefundAdvance} className="advance-add-form advance-action-card">
+                      <h4 className="advance-section-title">Refund advance</h4>
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>Refund Amount (₹) *</label>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={refundAmount}
+                            onChange={(e) => setRefundAmount(e.target.value)}
+                            placeholder="e.g. 1000"
+                          />
+                        </div>
                       </div>
-                      <div className="form-group">
-                        <label>Description</label>
-                        <input
-                          type="text"
-                          value={advanceDesc}
-                          onChange={(e) => setAdvanceDesc(e.target.value)}
-                          placeholder="Optional note"
-                        />
-                      </div>
-                    </div>
-                    <button type="submit" className="btn btn-primary" disabled={advanceLoading}>
-                      Record advance
-                    </button>
-                  </form>
+                      <button type="submit" className="btn btn-secondary" disabled={advanceLoading}>
+                        Refund
+                      </button>
+                    </form>
+                  </div>
 
                   <h4 className="advance-section-title">History</h4>
                   <div className="advance-history-wrap">
@@ -443,7 +527,17 @@ const Customers = () => {
                         ) : (
                           advanceHistory.map((row, i) => (
                             <tr key={`${row.type}-${row.createdAt}-${i}`}>
-                              <td>{row.type === 'DEPOSIT' ? 'Deposit' : 'Applied to bill'}</td>
+                              <td>
+                                {row.type === 'DEPOSIT'
+                                  ? 'Deposit'
+                                  : row.type === 'USAGE'
+                                    ? 'Applied to bill'
+                                    : row.type === 'REFUND'
+                                      ? 'Refund'
+                                      : row.type === 'REVERSAL_CREDIT'
+                                        ? 'Bill reversal'
+                                        : row.type || 'Entry'}
+                              </td>
                               <td>{row.createdAt ? new Date(row.createdAt).toLocaleString() : '—'}</td>
                               <td>{money(row.amount)}</td>
                               <td>
@@ -686,8 +780,7 @@ const Customers = () => {
                   <tr>
                     <th>Name</th>
                     <th>Phone</th>
-                    <th>Location</th>
-                    <th>GSTIN</th>
+                    <th>Remaining Advance</th>
                     <th>Notes</th>
                     <th>Actions</th>
                   </tr>
@@ -697,8 +790,7 @@ const Customers = () => {
                     <tr key={customer.id}>
                       <td className="date-cell">{customer.customerName || customer.name || '-'}</td>
                       <td>{customer.phone || '-'}</td>
-                      <td>{customer.location || customer.city || '-'}</td>
-                      <td>{customer.gstin || '-'}</td>
+                      <td>₹ {money(remainingAdvanceByCustomerId[customer.id])}</td>
                       <td>{customer.notes || '-'}</td>
                       <td>
                         <div className="action-buttons">

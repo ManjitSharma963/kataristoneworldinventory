@@ -167,6 +167,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [gstDeliveryAddress, setGstDeliveryAddress] = useState(() => localStorage.getItem('cartGstDeliveryAddress') || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [createBillNote, setCreateBillNote] = useState('');
   const [editingPriceItemId, setEditingPriceItemId] = useState(null);
   const [editingPriceValue, setEditingPriceValue] = useState('');
   const [editingQtyItemId, setEditingQtyItemId] = useState(null);
@@ -1405,6 +1406,22 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
           <div className="summary-total" style={{ marginTop: '8px', borderTop: '2px solid #e5e7eb', paddingTop: '8px' }}>
             <span className="total-label">Grand Total (After Advance)</span>
             <span className="total-value" style={{ fontSize: '1.3rem', fontWeight: 'bold', color: '#2563eb' }}>₹ {fin.netDueAfterAdvance.toFixed(2)}</span>
+          </div>
+
+          <div className="form-row" style={{ marginTop: '12px' }}>
+            <label htmlFor="create-bill-note" style={{ display: 'block', marginBottom: '6px', fontWeight: 600 }}>
+              Note (optional)
+            </label>
+            <textarea
+              id="create-bill-note"
+              className="customer-input"
+              rows={2}
+              maxLength={2000}
+              placeholder="Why this bill / internal note — stored on the bill"
+              value={createBillNote}
+              onChange={(e) => setCreateBillNote(e.target.value)}
+              style={{ width: '100%', resize: 'vertical' }}
+            />
           </div>
 
           {/* Checkout Button */}

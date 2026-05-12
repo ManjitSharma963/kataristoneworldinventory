@@ -1,6 +1,21 @@
 import React from 'react';
 import Loading from '../Loading';
 
+function formatEmployeeLedgerPaymentMode(row) {
+  const raw = row?.paymentMode ?? row?.payment_mode;
+  if (raw == null || raw === '') return '—';
+  const m = String(raw).toUpperCase().trim();
+  const labels = {
+    CASH: 'Cash',
+    UPI: 'UPI',
+    BANK_TRANSFER: 'Bank transfer',
+    CHEQUE: 'Cheque',
+    WALLET: 'Wallet',
+    OTHER: 'Other',
+  };
+  return labels[m] || String(raw).replace(/_/g, ' ');
+}
+
 const EmployeeLedgerModal = ({
   open,
   selectedEmployee,
@@ -122,7 +137,7 @@ const EmployeeLedgerModal = ({
                       <td>{row.eventDate ? new Date(row.eventDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-'}</td>
                       <td>{row.month || '-'}</td>
                       <td>{getLedgerEventLabel(row.eventType)}</td>
-                      <td>{row.paymentMode ? String(row.paymentMode).replace('_', ' ') : '-'}</td>
+                      <td>{formatEmployeeLedgerPaymentMode(row)}</td>
                       <td>₹{(Number(row._amount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td>₹{(Number(row._runningAdvanceBalance) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td>{row.notes || '-'}</td>

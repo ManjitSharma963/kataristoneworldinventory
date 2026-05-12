@@ -98,6 +98,13 @@ const apiCall = async (endpoint, options = {}) => {
       if (parsedBody && typeof parsedBody === 'object') {
         if (parsedBody.message) friendly = String(parsedBody.message);
         else if (typeof parsedBody.error === 'string') friendly = parsedBody.error;
+        const fieldMap = parsedBody.data;
+        if (fieldMap && typeof fieldMap === 'object' && !Array.isArray(fieldMap)) {
+          const first = Object.entries(fieldMap).find(([, v]) => v != null && String(v).trim() !== '');
+          if (first) {
+            friendly = `${friendly} (${first[0]}: ${first[1]})`;
+          }
+        }
       }
 
       const err = new Error(friendly);
@@ -495,6 +502,66 @@ export const fetchLoanLenderLedger = async (lenderId) => {
   return [];
 };
 
+/** Borrowers with lent / collected / outstanding (location from JWT). */
+export const fetchLendBorrowers = async () => {
+  const res = await apiCall('/loans/lend/borrowers', { method: 'GET' });
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res?.content)) return res.content;
+  if (Array.isArray(res?.data)) return res.data;
+  return [];
+};
+
+/** Full DISBURSEMENT + REPAYMENT_RECEIVED history for one borrower. */
+export const fetchLendBorrowerLedger = async (borrowerId) => {
+  const res = await apiCall(`/loans/lend/borrowers/${borrowerId}/ledger`, { method: 'GET' });
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res?.content)) return res.content;
+  if (Array.isArray(res?.data)) return res.data;
+  return [];
+};
+
+/** Record money lent out (disbursement): DEBIT, source LOAN_GIVEN. */
+export const recordLoanGiven = async ({ amount, borrowerId, borrowerName, notes, paymentMode } = {}) => {
+  const body = { amount: Number(amount) };
+  if (borrowerId != null && borrowerId !== '' && Number.isFinite(Number(borrowerId))) {
+    body.borrowerId = Number(borrowerId);
+  }
+  if (paymentMode != null && String(paymentMode).trim() !== '') {
+    body.paymentMode = String(paymentMode).trim();
+  }
+  if (borrowerName != null && String(borrowerName).trim() !== '') {
+    body.borrowerName = String(borrowerName).trim();
+  }
+  if (notes != null && String(notes).trim() !== '') {
+    body.notes = String(notes).trim();
+  }
+  return await apiCall('/loans/lend/disbursements', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+};
+
+/** Record collection from borrower: CREDIT, source LOAN_GIVEN_REPAY. */
+export const recordLoanGivenCollection = async ({ amount, borrowerId, borrowerName, notes, paymentMode } = {}) => {
+  const body = { amount: Number(amount) };
+  if (borrowerId != null && borrowerId !== '' && Number.isFinite(Number(borrowerId))) {
+    body.borrowerId = Number(borrowerId);
+  }
+  if (paymentMode != null && String(paymentMode).trim() !== '') {
+    body.paymentMode = String(paymentMode).trim();
+  }
+  if (borrowerName != null && String(borrowerName).trim() !== '') {
+    body.borrowerName = String(borrowerName).trim();
+  }
+  if (notes != null && String(notes).trim() !== '') {
+    body.notes = String(notes).trim();
+  }
+  return await apiCall('/loans/lend/repayments', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+};
+
 /**
  * Create daily budget (POST)
  * @param {number} amount - Budget amount per day
@@ -509,13 +576,13 @@ export const createDailyBudget = async (amount, fundingSource = 'CASH_UPI') => {
 
 /**
  * Update daily budget (PUT)
- * @param {number} amount - Budget amount per day
+ * @param {number} amount - Budget amount to adjust
  * @returns {Promise<Object>}
  */
-export const updateDailyBudget = async (amount, fundingSource = 'CASH_UPI') => {
+export const updateDailyBudget = async (amount, fundingSource = 'CASH_UPI', adjustmentType = 'INCREASE') => {
   return await apiCall('/budget/daily', {
     method: 'PUT',
-    body: JSON.stringify({ amount: Number(amount), fundingSource }),
+    body: JSON.stringify({ amount: Number(amount), fundingSource, adjustmentType }),
   });
 };
 
@@ -586,17 +653,19 @@ export const fetchSuppliers = async () => {
   return await apiCall('/suppliers', { method: 'GET' });
 };
 
-/** Create supplier — admin only. */
+const digitsOnly10 = (v) => String(v ?? '').replace(/\D/g, '').slice(0, 10);
+
+/** Create supplier — admin only. Contact must be exactly 10 digits. */
 export const createSupplier = async ({ name, contactNumber, contact_number, address }) => {
+  const digits = digitsOnly10(contactNumber ?? contact_number);
+  if (digits.length !== 10) {
+    throw new Error('Contact number must be exactly 10 digits');
+  }
   return await apiCall('/suppliers', {
     method: 'POST',
     body: JSON.stringify({
       name: String(name || '').trim(),
-      ...(contactNumber != null && String(contactNumber).trim() !== ''
-        ? { contactNumber: String(contactNumber).trim() }
-        : contact_number != null && String(contact_number).trim() !== ''
-          ? { contactNumber: String(contact_number).trim() }
-          : {}),
+      contactNumber: digits,
       ...(address != null && String(address).trim() !== '' ? { address: String(address).trim() } : {})
     })
   });
@@ -607,17 +676,17 @@ export const fetchDealers = async () => {
   return await apiCall('/dealers', { method: 'GET' });
 };
 
-/** Create dealer — admin only. */
+/** Create dealer — admin only. Contact must be exactly 10 digits. */
 export const createDealer = async ({ name, contactNumber, contact_number, address }) => {
+  const digits = digitsOnly10(contactNumber ?? contact_number);
+  if (digits.length !== 10) {
+    throw new Error('Contact number must be exactly 10 digits');
+  }
   return await apiCall('/dealers', {
     method: 'POST',
     body: JSON.stringify({
       name: String(name || '').trim(),
-      ...(contactNumber != null && String(contactNumber).trim() !== ''
-        ? { contactNumber: String(contactNumber).trim() }
-        : contact_number != null && String(contact_number).trim() !== ''
-          ? { contactNumber: String(contact_number).trim() }
-          : {}),
+      contactNumber: digits,
       ...(address != null && String(address).trim() !== '' ? { address: String(address).trim() } : {})
     })
   });
@@ -770,9 +839,14 @@ export const deleteBillPayment = async (billId, billType, paymentId) => {
  * @param {string|number} billId
  * @param {string} billType - 'GST' or 'NON-GST' (or NON_GST)
  */
-export const deleteBill = async (billId, billType) => {
+export const deleteBill = async (billId, billType, options = {}) => {
   const type = String(billType || '').replace('_', '-');
-  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}`, { method: 'DELETE' });
+  const reason = options?.reason != null ? String(options.reason).trim() : '';
+  const fetchOpts = { method: 'DELETE' };
+  if (reason) {
+    fetchOpts.body = JSON.stringify({ reason });
+  }
+  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}`, fetchOpts);
 };
 
 /**
@@ -787,6 +861,15 @@ export const updateBill = async (billId, billType, payload) => {
     method: 'PUT',
     body: JSON.stringify(payload),
   });
+};
+
+/**
+ * Full bill with line items, charges, payments (GET /api/bills/{billType}/{id}).
+ * List endpoints may omit line items; call this when opening bill details or edit.
+ */
+export const fetchBillByTypeAndId = async (billId, billType) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}`, { method: 'GET' });
 };
 
 /** Cancelled-bill audit for branch; optional billDateFrom / billDateTo as YYYY-MM-DD (bill date, inclusive). */
@@ -957,6 +1040,19 @@ export const fetchCustomerByPhone = async (phone) => {
 /** Record token / advance for a customer (POST /api/customer/advance). */
 export const createCustomerAdvance = async ({ customerId, amount, description, paymentMode }) => {
   return await apiCall('/customer/advance', {
+    method: 'POST',
+    body: JSON.stringify({
+      customerId,
+      amount: Number(amount),
+      paymentMode: paymentMode || 'CASH',
+      description: description || undefined,
+    }),
+  });
+};
+
+/** Refund token / advance for a customer (POST /api/customer/advance/refund). */
+export const createCustomerAdvanceRefund = async ({ customerId, amount, description, paymentMode }) => {
+  return await apiCall('/customer/advance/refund', {
     method: 'POST',
     body: JSON.stringify({
       customerId,

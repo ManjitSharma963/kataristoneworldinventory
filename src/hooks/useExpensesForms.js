@@ -19,14 +19,16 @@ export const useExpensesForms = ({ getLocalDateString, getLocalMonthString }) =>
   const [paySalaryFormData, setPaySalaryFormData] = useState({
     month: getLocalMonthString(),
     date: getLocalDateString(),
-    paymentMethod: 'cash',
+    paymentMethod: 'CASH',
     amount: ''
   });
 
   const [payAdvanceFormData, setPayAdvanceFormData] = useState({
     employeeId: '',
     amount: '',
-    date: getLocalDateString()
+    date: getLocalDateString(),
+    paymentMethod: 'CASH',
+    notes: '',
   });
 
   const [clientPurchaseFormData, setClientPurchaseFormData] = useState({

@@ -460,7 +460,7 @@ function App() {
             ) : activeNav === 'reports' ? (
               <Reports />
             ) : activeNav === 'sales' ? (
-              <Sales />
+              <Sales setActiveNav={setActiveNav} />
             ) : (
               <Dashboard activeNav={activeNav} setActiveNav={setActiveNav} />
             )}

@@ -33,6 +33,10 @@ import {
   apiRecordLoanReceipt,
   apiFetchLoanLenders,
   apiFetchLoanLenderLedger,
+  apiFetchLendBorrowers,
+  apiFetchLendBorrowerLedger,
+  apiRecordLoanGiven,
+  apiRecordLoanGivenCollection,
   apiCreateDailyBudget,
   apiUpdateDailyBudget,
   apiDeleteDailyBudget,
@@ -62,6 +66,71 @@ function ledgerPaymentChannel(paymentMode) {
   const m = String(paymentMode ?? '').trim().toUpperCase();
   if (m === 'CASH' || m === 'UPI') return BUDGET_SOURCE_CASH_UPI;
   return BUDGET_SOURCE_BANK;
+}
+
+/** How salary / advance was paid out — matches backend {@code BillPaymentMode} strings. */
+const EMPLOYEE_PAYMENT_MODE_OPTIONS = [
+  { value: 'CASH', label: 'Cash' },
+  { value: 'UPI', label: 'UPI' },
+  { value: 'BANK_TRANSFER', label: 'Bank transfer' },
+  { value: 'CHEQUE', label: 'Cheque' },
+  { value: 'OTHER', label: 'Other / card' },
+];
+
+function normalizeEmployeePaymentModeForApi(raw) {
+  if (raw == null || raw === '') return 'CASH';
+  const s = String(raw).trim();
+  const u = s.toUpperCase().replace(/-/g, '_');
+  const allowed = new Set(['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'OTHER']);
+  if (allowed.has(u)) return u;
+  const lower = s.toLowerCase();
+  if (lower === 'cash') return 'CASH';
+  if (lower === 'upi') return 'UPI';
+  if (lower === 'bank' || lower === 'banktransfer' || lower === 'bank_transfer') return 'BANK_TRANSFER';
+  if (lower === 'cheque' || lower === 'check') return 'CHEQUE';
+  if (lower === 'other' || lower === 'card') return 'OTHER';
+  return 'CASH';
+}
+
+/** Integer YYYYMMDD for stable newest-first sort without UTC parsing bugs on `YYYY-MM-DD`. */
+function expenseCalendarDayKey(e) {
+  const raw = e?.date;
+  if (raw == null || raw === '') return 0;
+  const s = String(raw).trim().slice(0, 10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) {
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    if (Number.isFinite(y) && Number.isFinite(mo) && Number.isFinite(d)) {
+      return y * 10000 + mo * 100 + d;
+    }
+  }
+  const t = new Date(raw).getTime();
+  if (Number.isNaN(t)) return 0;
+  const dt = new Date(t);
+  return dt.getFullYear() * 10000 + (dt.getMonth() + 1) * 100 + dt.getDate();
+}
+
+function expenseRecencyMs(e) {
+  const ca = e?.createdAt ?? e?.created_at;
+  if (ca) {
+    const t = new Date(ca).getTime();
+    if (!Number.isNaN(t)) return t;
+  }
+  return 0;
+}
+
+function expenseNumericId(e) {
+  const id = e?.id;
+  if (typeof id === 'number' && Number.isFinite(id)) return id;
+  if (typeof id === 'string') {
+    const t = id.trim();
+    if (/^\d+$/.test(t)) return Number(t);
+    const m = t.match(/(\d+)$/);
+    if (m) return Number(m[1]);
+  }
+  return 0;
 }
 
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
@@ -117,6 +186,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [filterType, setFilterType] = useState('all'); // all, daily
   const [activeTab, setActiveTab] = useState('all'); // all | loan | employee | client
   const [showSalaryForm, setShowSalaryForm] = useState(false);
+  const [showEditEmployeeModal, setShowEditEmployeeModal] = useState(false);
+  const [editEmployeeForm, setEditEmployeeForm] = useState({
+    id: null,
+    employeeName: '',
+    salaryAmount: '',
+    joiningDate: '',
+  });
+  const [savingEditEmployee, setSavingEditEmployee] = useState(false);
   const [showPaySalaryForm, setShowPaySalaryForm] = useState(false);
   const [showPayAdvanceForm, setShowPayAdvanceForm] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState(null);
@@ -164,6 +241,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [dailyBudgetFundingSource, setDailyBudgetFundingSource] = useState('CASH_UPI');
   const [hasDailyBudgetFromApi, setHasDailyBudgetFromApi] = useState(false);
   const [savingBudget, setSavingBudget] = useState(false);
+  const [showUpdateBudgetPopup, setShowUpdateBudgetPopup] = useState(false);
+  const [updateBudgetAmount, setUpdateBudgetAmount] = useState('');
+  const [updateBudgetDirection, setUpdateBudgetDirection] = useState('INCREASE');
+  const [updateBudgetMode, setUpdateBudgetMode] = useState('CASH_UPI');
   const [budgetHistory, setBudgetHistory] = useState([]);
   const [loadingBudgetHistory, setLoadingBudgetHistory] = useState(false);
   const [budgetHistoryDateRange, setBudgetHistoryDateRange] = useState({ from: '', to: '' });
@@ -176,9 +257,29 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [submittingLoanReceipt, setSubmittingLoanReceipt] = useState(false);
   const [loanLenders, setLoanLenders] = useState([]);
   const [loadingLoanLenders, setLoadingLoanLenders] = useState(false);
+  const [loanGivenAmount, setLoanGivenAmount] = useState('');
+  const [loanGivenPaymentMode, setLoanGivenPaymentMode] = useState('cash');
+  const [loanGivenBorrowerSelect, setLoanGivenBorrowerSelect] = useState('');
+  const [loanGivenNewBorrowerName, setLoanGivenNewBorrowerName] = useState('');
+  const [submittingLoanGiven, setSubmittingLoanGiven] = useState(false);
+  const [loanCollectionAmount, setLoanCollectionAmount] = useState('');
+  const [loanCollectionPaymentMode, setLoanCollectionPaymentMode] = useState('cash');
+  const [loanCollectionBorrowerSelect, setLoanCollectionBorrowerSelect] = useState('');
+  const [loanCollectionNewBorrowerName, setLoanCollectionNewBorrowerName] = useState('');
+  const [submittingLoanCollection, setSubmittingLoanCollection] = useState(false);
+  const [loanBorrowers, setLoanBorrowers] = useState([]);
+  const [loadingLoanBorrowers, setLoadingLoanBorrowers] = useState(false);
+  const [loanTransactions, setLoanTransactions] = useState([]);
+  const [loadingLoanTransactions, setLoadingLoanTransactions] = useState(false);
   const [loanHistoryModal, setLoanHistoryModal] = useState({
     open: false,
     lender: null,
+    rows: [],
+    loading: false,
+  });
+  const [borrowerHistoryModal, setBorrowerHistoryModal] = useState({
+    open: false,
+    borrower: null,
     rows: [],
     loading: false,
   });
@@ -211,6 +312,44 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     if (date == null) return getLocalDateString();
     const d = date instanceof Date ? date : new Date(date);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  /** Normalize API joining date for `<input type="date">` (handles ISO string, array, Date). */
+  const joiningDateToInputValue = (joiningDate) => {
+    if (joiningDate == null || joiningDate === '') return getLocalDateString();
+    if (Array.isArray(joiningDate) && joiningDate.length >= 3) {
+      const y = Number(joiningDate[0]);
+      const mo = Number(joiningDate[1]);
+      const d = Number(joiningDate[2]);
+      if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return getLocalDateString();
+      return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+    if (typeof joiningDate === 'string') {
+      const t = joiningDate.trim();
+      const m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    }
+    return toLocalDateString(joiningDate);
+  };
+
+  const openEditEmployeeModal = (employee) => {
+    if (!employee?.id) return;
+    const sal =
+      employee.salaryAmount != null && employee.salaryAmount !== ''
+        ? String(Number(employee.salaryAmount))
+        : '';
+    setEditEmployeeForm({
+      id: employee.id,
+      employeeName: String(employee.employeeName || '').trim(),
+      salaryAmount: sal,
+      joiningDate: joiningDateToInputValue(employee.joiningDate),
+    });
+    setShowEditEmployeeModal(true);
+  };
+
+  const closeEditEmployeeModal = () => {
+    setShowEditEmployeeModal(false);
+    setEditEmployeeForm({ id: null, employeeName: '', salaryAmount: '', joiningDate: '' });
   };
 
   // Toast notification helper
@@ -350,21 +489,156 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     setLoadingLoanLenders(true);
     try {
       const list = await apiFetchLoanLenders();
-      setLoanLenders(Array.isArray(list) ? list : []);
+      const safeList = Array.isArray(list) ? list : [];
+      setLoanLenders(safeList);
+      return safeList;
     } catch (e) {
       console.error('loadLoanLenders', e);
       setLoanLenders([]);
       showToast(e?.message || 'Could not load lenders. Check login and try again.', 'error');
+      return [];
     } finally {
       setLoadingLoanLenders(false);
     }
   };
 
+  const loadLoanBorrowers = async () => {
+    setLoadingLoanBorrowers(true);
+    try {
+      const list = await apiFetchLendBorrowers();
+      const safeList = Array.isArray(list) ? list : [];
+      setLoanBorrowers(safeList);
+      return safeList;
+    } catch (e) {
+      console.error('loadLoanBorrowers', e);
+      setLoanBorrowers([]);
+      showToast(e?.message || 'Could not load borrowers. Check login and try again.', 'error');
+      return [];
+    } finally {
+      setLoadingLoanBorrowers(false);
+    }
+  };
+
+  const refreshLoanLedgerData = async () => {
+    const [lenders, borrowers] = await Promise.all([
+      apiFetchLoanLenders(),
+      apiFetchLendBorrowers(),
+    ]);
+    const lenderList = Array.isArray(lenders) ? lenders : [];
+    const borrowerList = Array.isArray(borrowers) ? borrowers : [];
+    setLoanLenders(lenderList);
+    setLoanBorrowers(borrowerList);
+    await loadLoanTransactions(lenderList, borrowerList);
+  };
+
+  const loadLoanTransactions = async (lendersList, borrowersList) => {
+    const lendersSrc = Array.isArray(lendersList) ? lendersList : loanLenders;
+    const borrowersSrc = Array.isArray(borrowersList) ? borrowersList : loanBorrowers;
+    setLoadingLoanTransactions(true);
+    try {
+      const lenderLedgers = await Promise.all(
+        lendersSrc.map(async (l) => {
+          const rows = await apiFetchLoanLenderLedger(l.id);
+          const person = l.displayName ?? l.display_name ?? `Lender #${l.id}`;
+          return (Array.isArray(rows) ? rows : []).map((r) => {
+            const typ = String(r.entryType || r.entry_type || '').toUpperCase();
+            const amt = Number(r.amount ?? 0) || 0;
+            const flow = typ === 'RECEIPT' ? 'TAKEN_IN' : 'PAID_OUT';
+            const giveTake = flow === 'PAID_OUT' ? 'GIVE' : 'TAKE';
+            return {
+              id: `l-${l.id}-${r.id}`,
+              date: r.entryDate || r.entry_date || r.createdAt || r.created_at || '',
+              person,
+              personKey: String(person || '').trim().toLowerCase(),
+              paymentMode: String(r.paymentMode || r.payment_mode || '').toUpperCase(),
+              notes: r.notes || '',
+              status: 'ACTIVE',
+              flow,
+              giveTake,
+              directionLabel: typ === 'RECEIPT' ? 'Take' : 'Give',
+              amount: amt,
+              color: typ === 'RECEIPT' ? '#2563eb' : '#dc2626',
+              description: null,
+              typeLabel: typ === 'RECEIPT' ? 'Take' : 'Give',
+            };
+          });
+        })
+      );
+      const borrowerLedgers = await Promise.all(
+        borrowersSrc.map(async (b) => {
+          const rows = await apiFetchLendBorrowerLedger(b.id);
+          const person = b.displayName ?? b.display_name ?? `Borrower #${b.id}`;
+          return (Array.isArray(rows) ? rows : []).map((r) => {
+            const typ = String(r.entryType || r.entry_type || '').toUpperCase();
+            const amt = Number(r.amount ?? 0) || 0;
+            const flow = typ === 'DISBURSEMENT' ? 'GIVEN_OUT' : 'TAKEN_BACK';
+            const giveTake = flow === 'GIVEN_OUT' ? 'GIVE' : 'TAKE';
+            return {
+              id: `b-${b.id}-${r.id}`,
+              date: r.entryDate || r.entry_date || r.createdAt || r.created_at || '',
+              person,
+              personKey: String(person || '').trim().toLowerCase(),
+              paymentMode: String(r.paymentMode || r.payment_mode || '').toUpperCase(),
+              notes: r.notes || '',
+              status: 'ACTIVE',
+              flow,
+              giveTake,
+              directionLabel: typ === 'DISBURSEMENT' ? 'Give' : 'Take',
+              amount: amt,
+              color: typ === 'DISBURSEMENT' ? '#dc2626' : '#16a34a',
+              description: null,
+              typeLabel: typ === 'DISBURSEMENT' ? 'Give' : 'Take',
+            };
+          });
+        })
+      );
+      const merged = [...lenderLedgers.flat(), ...borrowerLedgers.flat()]
+        .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+      setLoanTransactions(merged);
+    } catch (e) {
+      console.error('loadLoanTransactions', e);
+      setLoanTransactions([]);
+    } finally {
+      setLoadingLoanTransactions(false);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'loan') {
-      loadLoanLenders();
+      (async () => {
+        setLoadingLoanLenders(true);
+        setLoadingLoanBorrowers(true);
+        try {
+          const [lenders, borrowers] = await Promise.all([
+            apiFetchLoanLenders(),
+            apiFetchLendBorrowers(),
+          ]);
+          const lenderList = Array.isArray(lenders) ? lenders : [];
+          const borrowerList = Array.isArray(borrowers) ? borrowers : [];
+          setLoanLenders(lenderList);
+          setLoanBorrowers(borrowerList);
+          await loadLoanTransactions(lenderList, borrowerList);
+        } catch (e) {
+          console.error('loan-tab-load', e);
+        } finally {
+          setLoadingLoanLenders(false);
+          setLoadingLoanBorrowers(false);
+        }
+      })();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'all' && loanTransactions.length === 0) {
+      (async () => {
+        try {
+          await refreshLoanLedgerData();
+        } catch (e) {
+          console.error('all-tab-loan-load', e);
+        }
+      })();
+    }
+  }, [activeTab, loanTransactions.length]);
 
   useEffect(() => {
     if (showForm) {
@@ -412,6 +686,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       setLoanReceiptPaymentMode('cash');
       await loadBudgetState();
       await loadLoanLenders();
+      await loadLoanTransactions();
       showToast(
         toastName
           ? `Loan recorded (${toastName}).`
@@ -422,6 +697,170 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       showToast(err?.message || 'Failed to record loan.', 'error');
     } finally {
       setSubmittingLoanReceipt(false);
+    }
+  };
+
+  const handleRecordLoanGiven = async (e) => {
+    e.preventDefault();
+    const amt = parseFloat(String(loanGivenAmount).replace(/,/g, ''), 10);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      showToast('Enter a valid amount for loan given.', 'error');
+      return;
+    }
+    const sel = String(loanGivenBorrowerSelect || '').trim();
+    if (sel === '__new__') {
+      const nm = String(loanGivenNewBorrowerName || '').trim();
+      if (!nm) {
+        showToast('Enter the borrower name, or pick an existing borrower.', 'error');
+        return;
+      }
+    }
+    setSubmittingLoanGiven(true);
+    try {
+      const payload = { amount: amt, notes: 'Loan Given' };
+      if (loanGivenPaymentMode) payload.paymentMode = String(loanGivenPaymentMode).trim();
+      if (sel === '__new__') {
+        payload.borrowerName = String(loanGivenNewBorrowerName || '').trim();
+      } else if (sel !== '' && /^\d+$/.test(sel)) {
+        payload.borrowerId = parseInt(sel, 10);
+      }
+      await apiRecordLoanGiven(payload);
+      setLoanGivenAmount('');
+      setLoanGivenBorrowerSelect('');
+      setLoanGivenNewBorrowerName('');
+      setLoanGivenPaymentMode('cash');
+      await loadBudgetState();
+      await loadLoanBorrowers();
+      await loadLoanTransactions();
+      showToast('Loan given recorded.');
+    } catch (err) {
+      console.error('recordLoanGiven', err);
+      showToast(err?.message || 'Failed to record loan given.', 'error');
+    } finally {
+      setSubmittingLoanGiven(false);
+    }
+  };
+
+  const handleRecordLoanCollection = async (e) => {
+    e.preventDefault();
+    const amt = parseFloat(String(loanCollectionAmount).replace(/,/g, ''), 10);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      showToast('Enter a valid collection amount.', 'error');
+      return;
+    }
+    const sel = String(loanCollectionBorrowerSelect || '').trim();
+    if (sel === '__new__') {
+      const nm = String(loanCollectionNewBorrowerName || '').trim();
+      if (!nm) {
+        showToast('Enter the borrower name, or pick an existing borrower.', 'error');
+        return;
+      }
+    }
+    setSubmittingLoanCollection(true);
+    try {
+      const payload = { amount: amt, notes: 'Loan Collection' };
+      if (loanCollectionPaymentMode) payload.paymentMode = String(loanCollectionPaymentMode).trim();
+      if (sel === '__new__') {
+        payload.borrowerName = String(loanCollectionNewBorrowerName || '').trim();
+      } else if (sel !== '' && /^\d+$/.test(sel)) {
+        payload.borrowerId = parseInt(sel, 10);
+      }
+      await apiRecordLoanGivenCollection(payload);
+      setLoanCollectionAmount('');
+      setLoanCollectionBorrowerSelect('');
+      setLoanCollectionNewBorrowerName('');
+      setLoanCollectionPaymentMode('cash');
+      await loadBudgetState();
+      await loadLoanBorrowers();
+      await loadLoanTransactions();
+      showToast('Loan collection recorded.');
+    } catch (err) {
+      console.error('recordLoanCollection', err);
+      showToast(err?.message || 'Failed to record collection.', 'error');
+    } finally {
+      setSubmittingLoanCollection(false);
+    }
+  };
+
+  const parseLoanPersonRef = (ref) => {
+    const s = String(ref || '').trim();
+    if (!s.includes(':')) return null;
+    const [k, idStr] = s.split(':');
+    const id = parseInt(idStr, 10);
+    if (!Number.isFinite(id)) return null;
+    if (k === 'l') return { kind: 'lender', id };
+    if (k === 'b') return { kind: 'borrower', id };
+    return null;
+  };
+
+  const handleCreateLoanTransaction = async (payload) => {
+    const amount = Number(payload?.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showToast('Enter a valid amount.', 'error');
+      return;
+    }
+    const rawType = String(payload?.transactionType || payload?.direction || '').trim().toUpperCase();
+    const paymentMode = String(payload?.paymentMode || 'cash').trim().toLowerCase();
+    const personRef = parseLoanPersonRef(payload?.personRef);
+    const personName = String(payload?.personName || '').trim();
+    const notes = String(payload?.notes || '').trim();
+    const date = String(payload?.dateTime || '').slice(0, 10) || toLocalDateString(new Date());
+    const mergedNotes = notes;
+    try {
+      let type = rawType;
+      if (type === 'GIVE' || type === 'TAKE') {
+        /* simple mode — already correct */
+      } else if (type === 'LOAN_GIVEN') type = 'GIVE';
+      else if (type === 'LOAN_REPAID') type = 'GIVE';
+      else if (type === 'LOAN_TAKEN' || type === 'LOAN_COLLECTED') type = 'TAKE';
+
+      if (type === 'GIVE') {
+        if (personRef?.kind === 'borrower') {
+          const req = { amount, paymentMode, notes: mergedNotes || 'Loan given', borrowerId: personRef.id };
+          await apiRecordLoanGiven(req);
+        } else if (personRef?.kind === 'lender') {
+          const req = {
+            type: 'daily',
+            date,
+            category: 'loan_repayment',
+            description: mergedNotes || 'Loan repayment',
+            amount,
+            paymentMethod: paymentMode,
+            lenderId: personRef.id,
+          };
+          await apiCreateExpense(req);
+        } else if (personName) {
+          const req = { amount, paymentMode, notes: mergedNotes || 'Loan given', borrowerName: personName };
+          await apiRecordLoanGiven(req);
+        } else {
+          showToast('Choose a person or enter a name.', 'error');
+          return;
+        }
+      } else if (type === 'TAKE') {
+        if (personRef?.kind === 'borrower') {
+          const req = { amount, paymentMode, notes: mergedNotes || 'Collection', borrowerId: personRef.id };
+          await apiRecordLoanGivenCollection(req);
+        } else if (personRef?.kind === 'lender') {
+          const req = { amount, paymentMode, notes: mergedNotes || 'Borrowed', lenderId: personRef.id };
+          await apiRecordLoanReceipt(req);
+        } else if (personName) {
+          const req = { amount, paymentMode, notes: mergedNotes || 'Borrowed', lenderName: personName };
+          await apiRecordLoanReceipt(req);
+        } else {
+          showToast('Choose a person or enter a name.', 'error');
+          return;
+        }
+      } else {
+        showToast('Choose Give or Take.', 'error');
+        return;
+      }
+      await loadBudgetState();
+      await refreshLoanLedgerData();
+      await loadExpenses();
+      showToast('Loan transaction recorded.');
+    } catch (err) {
+      console.error('handleCreateLoanTransaction', err);
+      showToast(err?.message || 'Failed to record transaction.', 'error');
     }
   };
 
@@ -444,6 +883,27 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
   const closeLoanHistoryModal = () => {
     setLoanHistoryModal({ open: false, lender: null, rows: [], loading: false });
+  };
+
+  const openLoanBorrowerHistory = async (borrower) => {
+    if (!borrower?.id) return;
+    setBorrowerHistoryModal({ open: true, borrower, rows: [], loading: true });
+    try {
+      const rows = await apiFetchLendBorrowerLedger(borrower.id);
+      setBorrowerHistoryModal((m) => ({
+        ...m,
+        rows: Array.isArray(rows) ? rows : [],
+        loading: false,
+      }));
+    } catch (err) {
+      console.error('borrower ledger', err);
+      setBorrowerHistoryModal((m) => ({ ...m, rows: [], loading: false }));
+      showToast(err?.message || 'Failed to load borrower history.', 'error');
+    }
+  };
+
+  const closeBorrowerHistoryModal = () => {
+    setBorrowerHistoryModal({ open: false, borrower: null, rows: [], loading: false });
   };
 
   const loadBudgetHistory = async () => {
@@ -550,6 +1010,71 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       await apiDeleteDailyBudget();
       setBudgetInHand(0);
       setHasDailyBudgetFromApi(false);
+    }
+  };
+
+  const handleSaveDailyBudget = async () => {
+    const val = parseFloat(dailyBudgetModalValue);
+    const num = Number.isFinite(val) ? Math.max(0, val) : 0;
+    if (num === 0) {
+      const confirmed = window.confirm('Reset available balance to ₹0 for today?');
+      if (!confirmed) return;
+    }
+    setSavingBudget(true);
+    try {
+      const source = hasDailyBudgetFromApi && num > 0 ? dailyBudgetFundingSource : 'CASH_UPI';
+      await saveDailyBudgetToApi(num, source);
+      await loadBudgetState();
+      setShowDailyBudgetModal(false);
+      if (num > 0 && hasDailyBudgetFromApi) {
+        showToast(
+          source === 'BANK_TRANSFER'
+            ? `Added ₹${num.toLocaleString('en-IN')} to bank balance.`
+            : `Added ₹${num.toLocaleString('en-IN')} to current daily budget.`
+        );
+      } else {
+        showToast(num > 0 ? `Daily budget set to ₹${num.toLocaleString('en-IN')}` : 'Daily budget cleared.');
+      }
+    } catch (err) {
+      console.error('Error saving daily budget:', err);
+      showToast(err?.message || 'Failed to save budget. Please try again.', 'error');
+    } finally {
+      setSavingBudget(false);
+    }
+  };
+
+  const openUpdateBudgetPopup = () => {
+    setUpdateBudgetAmount('');
+    setUpdateBudgetDirection('INCREASE');
+    setUpdateBudgetMode('CASH_UPI');
+    setShowUpdateBudgetPopup(true);
+  };
+
+  const closeUpdateBudgetPopup = () => {
+    if (savingBudget) return;
+    setShowUpdateBudgetPopup(false);
+  };
+
+  const handleApplyBudgetUpdate = async () => {
+    const val = parseFloat(updateBudgetAmount);
+    const amount = Number.isFinite(val) ? Math.max(0, val) : 0;
+    if (amount <= 0) {
+      showToast('Please enter a valid amount greater than 0.', 'error');
+      return;
+    }
+    setSavingBudget(true);
+    try {
+      await apiUpdateDailyBudget(amount, updateBudgetMode, updateBudgetDirection);
+      await loadBudgetState();
+      setShowUpdateBudgetPopup(false);
+      const verb = updateBudgetDirection === 'DECREASE' ? 'decreased' : 'increased';
+      const rail = updateBudgetMode === 'BANK_TRANSFER' ? 'bank' : 'cash/UPI';
+      showToast(`Budget ${verb} by ₹${amount.toLocaleString('en-IN')} on ${rail}.`);
+    } catch (err) {
+      console.error('Error updating budget:', err);
+      showToast(err?.message || 'Failed to update budget. Please try again.', 'error');
+    } finally {
+      setSavingBudget(false);
     }
   };
 
@@ -684,6 +1209,23 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     };
   }, [loanLenders]);
 
+  const loanBorrowersTotals = useMemo(() => {
+    let totalLent = 0;
+    let totalCollected = 0;
+    let totalOutstanding = 0;
+    for (const b of loanBorrowers) {
+      totalLent += Number(b.totalLent ?? b.total_lent ?? 0) || 0;
+      totalCollected += Number(b.totalCollected ?? b.total_collected ?? 0) || 0;
+      totalOutstanding += Number(b.outstanding ?? 0) || 0;
+    }
+    return {
+      count: loanBorrowers.length,
+      totalLent,
+      totalCollected,
+      totalOutstanding,
+    };
+  }, [loanBorrowers]);
+
   const formatLoanInr = (n) =>
     `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -770,12 +1312,26 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const loadClientPayments = async () => {
     try {
       // Try to fetch from API first
-      const purchases = await fetchClientPurchases();
-      if (purchases && Array.isArray(purchases)) {
+      const rawPurchases = await fetchClientPurchases();
+      const purchases = Array.isArray(rawPurchases)
+        ? rawPurchases
+        : Array.isArray(rawPurchases?.data)
+          ? rawPurchases.data
+          : Array.isArray(rawPurchases?.content)
+            ? rawPurchases.content
+            : [];
+      if (purchases.length > 0) {
         // Fetch all payments and merge them into purchases to ensure paid amounts are accurate
         try {
-          const allPayments = await fetchAllPayments();
-          if (allPayments && Array.isArray(allPayments)) {
+          const rawAllPayments = await fetchAllPayments();
+          const allPayments = Array.isArray(rawAllPayments)
+            ? rawAllPayments
+            : Array.isArray(rawAllPayments?.data)
+              ? rawAllPayments.data
+              : Array.isArray(rawAllPayments?.content)
+                ? rawAllPayments.content
+                : [];
+          if (allPayments.length > 0) {
             // Group payments by purchaseId/clientPurchaseId
             const paymentsByPurchase = {};
             allPayments.forEach(payment => {
@@ -817,30 +1373,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         await loadAllPayments();
         await refreshClientAlertsAndSupplierAccounts();
       } else {
-        // If API returns invalid data, try localStorage
-        const stored = localStorage.getItem('clientPayments');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          setClientPayments(Array.isArray(parsed) ? parsed : []);
-        } else {
-          setClientPayments([]);
-        }
+        // Avoid stale/local IDs that may not exist server-side
+        setClientPayments([]);
       }
     } catch (error) {
       console.error('Error loading client payments from API:', error);
-      // Fallback to localStorage if API fails
-      try {
-        const stored = localStorage.getItem('clientPayments');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          setClientPayments(Array.isArray(parsed) ? parsed : []);
-        } else {
-          setClientPayments([]);
-        }
-      } catch (localError) {
-        console.error('Error loading client payments from localStorage:', localError);
-        setClientPayments([]);
-      }
+      setClientPayments([]);
     }
   };
 
@@ -1008,9 +1546,16 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
   const loadPayrollSummary = async () => {
     try {
-      const rows = await fetchEmployeePayrollSummary(currentMonth);
+      const raw = await fetchEmployeePayrollSummary(currentMonth);
+      const rows = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.data)
+          ? raw.data
+          : Array.isArray(raw?.content)
+            ? raw.content
+            : [];
       const map = {};
-      (Array.isArray(rows) ? rows : []).forEach((r) => {
+      rows.forEach((r) => {
         if (r && r.employeeId != null) map[String(r.employeeId)] = r;
       });
       setPayrollSummaryByEmpId(map);
@@ -1127,7 +1672,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     setPaySalaryFormData({
       month: getLocalMonthString(),
       date: getLocalDateString(),
-      paymentMethod: 'cash',
+      paymentMethod: 'CASH',
       amount: amountToPay.toFixed(2)
     });
     setShowPaySalaryForm(true);
@@ -1168,7 +1713,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       await settleEmployeeSalaryMonth(selectedEmployee.id, {
         month: paySalaryFormData.month,
         date: paySalaryFormData.date,
-        paymentMode: paySalaryFormData.paymentMethod,
+        paymentMode: normalizeEmployeePaymentModeForApi(paySalaryFormData.paymentMethod),
         cashPaidAmount: salaryAmount,
         notes: `Salary settlement for ${selectedEmployee.employeeName}`
       });
@@ -1183,7 +1728,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       setPaySalaryFormData({
         month: getLocalMonthString(),
         date: getLocalDateString(),
-        paymentMethod: 'cash',
+        paymentMethod: 'CASH',
         amount: ''
       });
     } catch (error) {
@@ -1197,34 +1742,41 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   // Matches CURL: curl -X POST http://localhost:8080/api/expenses -H "Content-Type: application/json" -H "Accept: application/json" -d '{...}'
   const handlePayAdvanceSubmit = async (e) => {
     e.preventDefault();
-    if (!payAdvanceFormData.employeeId) return;
+    if (!payAdvanceFormData.employeeId || submittingPayAdvance) return;
 
     const selectedEmp = employees.find(emp => emp.id == payAdvanceFormData.employeeId);
     if (!selectedEmp) return;
 
     try {
+      setSubmittingPayAdvance(true);
       await recordEmployeeAdvance(selectedEmp.id, {
         amount: parseFloat(payAdvanceFormData.amount) || 0,
         date: payAdvanceFormData.date,
-        paymentMode: 'cash',
-        notes: `Employee advance for ${selectedEmp.employeeName}`
+        paymentMode: normalizeEmployeePaymentModeForApi(payAdvanceFormData.paymentMethod),
+        notes: String(payAdvanceFormData.notes || '').trim() || `Employee advance for ${selectedEmp.employeeName}`
       });
       await loadExpenses();
       await loadPayrollSummary();
+      await loadBudgetState();
       // Notify parent component (Dashboard) to refresh expenses for chart
       if (onExpenseUpdate) {
         onExpenseUpdate();
       }
+      showToast('Employee advance recorded.');
       setShowPayAdvanceForm(false);
       setPayAdvanceFormData({
         employeeId: '',
         amount: '',
-        date: getLocalDateString()
+        date: getLocalDateString(),
+        paymentMethod: 'CASH',
+        notes: ''
       });
     } catch (error) {
       console.error('Error saving advance payment to API:', error);
       showToast('Failed to save advance payment. Please check your connection and try again.', 'error');
       // Don't use localStorage fallback - only use API
+    } finally {
+      setSubmittingPayAdvance(false);
     }
   };
 
@@ -1237,6 +1789,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   };
 
   const [submittingExpense, setSubmittingExpense] = useState(false);
+  const [submittingPayAdvance, setSubmittingPayAdvance] = useState(false);
 
   const onSubmitExpense = async (data) => {
     const selectedEmp = employees.find(emp => String(emp.id) === String(data.employeeId || ''));
@@ -1439,6 +1992,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         id: `ulk-${r.id}`,
         _ledgerOnly: true,
         date: dateStr,
+        createdAt: r.createdAt ?? r.created_at ?? r.txnDate ?? r.txn_date ?? null,
         type: 'client_ledger',
         category: 'client_purchase_payment',
         description:
@@ -1450,8 +2004,44 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     });
   }, [clientLedgerFeedRows]);
 
+  const loanOutflowPseudoExpenses = useMemo(() => {
+    const fmtPm = (mode) => {
+      if (mode == null || mode === '') return 'cash';
+      const m = String(mode).trim().toUpperCase().replace(/-/g, '_');
+      if (m === 'BANK_TRANSFER' || m === 'BANK') return 'bank';
+      if (m === 'UPI') return 'upi';
+      if (m === 'CASH') return 'cash';
+      if (m === 'CARD') return 'card';
+      if (m === 'CHEQUE' || m === 'CHECK') return 'cheque';
+      return String(mode).toLowerCase().replace(/_/g, ' ');
+    };
+    return (Array.isArray(loanTransactions) ? loanTransactions : [])
+      .filter((r) => String(r.giveTake || '').toUpperCase() === 'GIVE')
+      .map((r) => {
+        const dateRaw = r.date || '';
+        let dateStr = getLocalDateString();
+        if (typeof dateRaw === 'string' && dateRaw.length >= 10) dateStr = dateRaw.slice(0, 10);
+        else if (typeof dateRaw === 'string' && dateRaw) dateStr = dateRaw;
+        return {
+          id: `loan-out-${r.id}`,
+          _ledgerOnly: true,
+          _ledgerSource: 'loan',
+          date: dateStr,
+          createdAt: r.createdAt ?? r.created_at ?? r.date ?? null,
+          type: 'loan_ledger',
+          category: 'loan_outflow',
+          description: r.person ? `Give to ${r.person}` : 'Loan outflow',
+          amount: Number(r.amount) || 0,
+          paymentMethod: fmtPm(r.paymentMode),
+          notes: r.notes || '',
+        };
+      });
+  }, [loanTransactions]);
+
   const safeExpenses = Array.isArray(expenses) ? expenses : [];
-  const expenseTableSource = activeTab === 'all' ? [...safeExpenses, ...clientLedgerPseudoExpenses] : safeExpenses;
+  const expenseTableSource = activeTab === 'all'
+    ? [...safeExpenses, ...clientLedgerPseudoExpenses, ...loanOutflowPseudoExpenses]
+    : safeExpenses;
 
   // Filter expenses based on active tab
   let filteredExpenses = expenseTableSource.filter((expense) => {
@@ -1490,20 +2080,31 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return true;
   });
 
-  // Sort expenses - always sort by date by default (newest first)
-  // If user clicks another column, sort by that column instead
+  // Sort expenses — default date descending (newest calendar day on top); same day uses createdAt then id.
   filteredExpenses = [...filteredExpenses].sort((a, b) => {
+    if (sortConfig.key === 'date') {
+      const da = expenseCalendarDayKey(a);
+      const db = expenseCalendarDayKey(b);
+      if (da !== db) {
+        return sortConfig.direction === 'desc' ? db - da : da - db;
+      }
+      const ta = expenseRecencyMs(a);
+      const tb = expenseRecencyMs(b);
+      if (ta !== tb) {
+        return sortConfig.direction === 'desc' ? tb - ta : ta - tb;
+      }
+      const ia = expenseNumericId(a);
+      const ib = expenseNumericId(b);
+      if (ia !== ib) {
+        return sortConfig.direction === 'desc' ? ib - ia : ia - ib;
+      }
+      return 0;
+    }
+
     let aValue = a[sortConfig.key];
     let bValue = b[sortConfig.key];
 
-    if (sortConfig.key === 'date') {
-      // Parse dates properly - handle ISO format and other formats
-      const aDate = aValue ? new Date(aValue) : new Date(0);
-      const bDate = bValue ? new Date(bValue) : new Date(0);
-      // Use timestamp for reliable comparison
-      aValue = isNaN(aDate.getTime()) ? 0 : aDate.getTime();
-      bValue = isNaN(bDate.getTime()) ? 0 : bDate.getTime();
-    } else if (sortConfig.key === 'amount') {
+    if (sortConfig.key === 'amount') {
       aValue = parseFloat(aValue) || 0;
       bValue = parseFloat(bValue) || 0;
     } else if (typeof aValue === 'string') {
@@ -1550,11 +2151,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
   const getTypeLabel = (type) => {
     if (type === 'client_ledger') return 'Client payment';
+    if (type === 'loan_ledger') return 'Loan outflow';
+    if (String(type || '').toLowerCase() === 'advance') return 'Employee advance';
+    if (String(type || '').toLowerCase() === 'salary') return 'Salary';
     return 'Daily Expense';
   };
 
   const getTypeIcon = (type) => {
     if (type === 'client_ledger') return '🏭';
+    if (type === 'loan_ledger') return '💸';
+    if (String(type || '').toLowerCase() === 'advance') return '👨‍🏭';
+    if (String(type || '').toLowerCase() === 'salary') return '💼';
     return '💰';
   };
 
@@ -1618,11 +2225,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
       {/* Daily budget modal */}
       {showDailyBudgetModal && (
-        <div className="modal-overlay" onClick={() => !savingBudget && setShowDailyBudgetModal(false)}>
+        <div className="modal-overlay" onClick={() => { if (!savingBudget) { setShowDailyBudgetModal(false); setShowUpdateBudgetPopup(false); } }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '980px' }}>
             <div className="modal-header">
               <h3>{hasDailyBudgetFromApi ? 'Edit daily budget' : 'Add daily budget'}</h3>
-              <button type="button" className="modal-close" onClick={() => !savingBudget && setShowDailyBudgetModal(false)}>×</button>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => { if (!savingBudget) { setShowDailyBudgetModal(false); setShowUpdateBudgetPopup(false); } }}
+              >
+                ×
+              </button>
             </div>
             <div className="modal-body">
               <div className="form-group">
@@ -1632,74 +2245,62 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   <strong>₹{(Number(todayFromEvents.remaining) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                   . Ledger nets are on the main Expenses tab (GET /api/v1/balance/summary).
                 </p>
-                <input
-                  type="number"
-                  min="0"
-                  step="100"
-                  value={dailyBudgetModalValue}
-                  onChange={(e) => setDailyBudgetModalValue(e.target.value)}
-                  placeholder="e.g. 20000"
-                  className="budget-in-hand-input"
-                  style={{ width: '100%', padding: '8px 12px', marginTop: '4px' }}
-                  disabled={savingBudget}
-                />
-                {Number.isFinite(Number(parseFloat(dailyBudgetModalValue)))
-                  && Math.max(0, Number(parseFloat(dailyBudgetModalValue))) > 0
-                  && hasDailyBudgetFromApi && (
-                  <div style={{ marginTop: '10px' }}>
-                    <label style={{ display: 'block', fontSize: '13px', color: '#334155', marginBottom: '6px' }}>
-                      Increase source
-                    </label>
-                    <select
-                      value={dailyBudgetFundingSource}
-                      onChange={(e) => setDailyBudgetFundingSource(e.target.value)}
-                      className="budget-in-hand-input"
-                      style={{ width: '100%', padding: '8px 12px' }}
-                      disabled={savingBudget}
-                    >
-                      <option value="CASH_UPI">Cash + UPI (increase in-hand budget)</option>
-                      <option value="BANK_TRANSFER">Bank transfer (increase amount in bank)</option>
-                    </select>
-                  </div>
-                )}
-              </div>
-              <div className="form-actions" style={{ marginTop: '16px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-              <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={savingBudget}
-                  onClick={async () => {
-                    const val = parseFloat(dailyBudgetModalValue);
-                    const num = Number.isFinite(val) ? Math.max(0, val) : 0;
-                  if (num === 0) {
-                    const confirmed = window.confirm('Reset available balance to ₹0 for today?');
-                    if (!confirmed) return;
-                  }
-                    setSavingBudget(true);
-                    try {
-                      const source = hasDailyBudgetFromApi && num > 0 ? dailyBudgetFundingSource : 'CASH_UPI';
-                      await saveDailyBudgetToApi(num, source);
-                      await loadBudgetState();
-                      setShowDailyBudgetModal(false);
-                      if (num > 0 && hasDailyBudgetFromApi) {
-                        showToast(
-                          source === 'BANK_TRANSFER'
-                            ? `Added ₹${num.toLocaleString('en-IN')} to bank balance.`
-                            : `Added ₹${num.toLocaleString('en-IN')} to current daily budget.`
-                        );
-                      } else {
-                        showToast(num > 0 ? `Daily budget set to ₹${num.toLocaleString('en-IN')}` : 'Daily budget cleared.');
-                      }
-                    } catch (err) {
-                      console.error('Error saving daily budget:', err);
-                      showToast(err?.message || 'Failed to save budget. Please try again.', 'error');
-                    } finally {
-                      setSavingBudget(false);
-                    }
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    flexWrap: 'nowrap',
                   }}
                 >
-                  {savingBudget ? 'Saving...' : 'Save'}
-                </button>
+                  <input
+                    type="number"
+                    min="0"
+                    step="100"
+                    value={dailyBudgetModalValue}
+                    onChange={(e) => setDailyBudgetModalValue(e.target.value)}
+                    placeholder="e.g. 20000"
+                    className="budget-in-hand-input"
+                    style={{ flex: 1, minWidth: 0, padding: '8px 12px', marginTop: 0 }}
+                    disabled={savingBudget}
+                  />
+                  <div
+                    className="form-actions"
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'nowrap',
+                      justifyContent: 'flex-end',
+                      alignItems: 'center',
+                      gap: '8px',
+                      marginTop: 0,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={savingBudget}
+                      onClick={handleSaveDailyBudget}
+                    >
+                      {savingBudget ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={savingBudget}
+                      onClick={openUpdateBudgetPopup}
+                    >
+                      Update budget
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary budget-history-download-btn"
+                      onClick={downloadBudgetHistoryPdf}
+                      disabled={loadingBudgetHistory || filteredBudgetHistoryRows.length === 0}
+                    >
+                      Download PDF
+                    </button>
+                  </div>
+                </div>
               </div>
               <BudgetHistorySection
                 loadingBudgetHistory={loadingBudgetHistory}
@@ -1710,7 +2311,68 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 setBudgetHistoryTypeFilter={setBudgetHistoryTypeFilter}
                 onDownloadPdf={downloadBudgetHistoryPdf}
                 bankSourceLabel={BUDGET_SOURCE_BANK}
+                showDownloadButton={false}
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showUpdateBudgetPopup && (
+        <div className="modal-overlay" onClick={closeUpdateBudgetPopup}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+            <div className="modal-header">
+              <h3>Update budget</h3>
+              <button type="button" className="modal-close" onClick={closeUpdateBudgetPopup}>×</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Amount (₹)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="100"
+                  value={updateBudgetAmount}
+                  onChange={(e) => setUpdateBudgetAmount(e.target.value)}
+                  placeholder="e.g. 5000"
+                  className="budget-in-hand-input"
+                  style={{ width: '100%', padding: '8px 12px' }}
+                  disabled={savingBudget}
+                />
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Action</label>
+                  <select
+                    value={updateBudgetDirection}
+                    onChange={(e) => setUpdateBudgetDirection(e.target.value)}
+                    className="budget-in-hand-input"
+                    style={{ width: '100%', padding: '8px 12px' }}
+                    disabled={savingBudget}
+                  >
+                    <option value="INCREASE">Increase</option>
+                    <option value="DECREASE">Decrease</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Payment mode</label>
+                  <select
+                    value={updateBudgetMode}
+                    onChange={(e) => setUpdateBudgetMode(e.target.value)}
+                    className="budget-in-hand-input"
+                    style={{ width: '100%', padding: '8px 12px' }}
+                    disabled={savingBudget}
+                  >
+                    <option value="CASH_UPI">Cash / UPI</option>
+                    <option value="BANK_TRANSFER">Bank</option>
+                  </select>
+                </div>
+              </div>
+              <div className="form-actions" style={{ marginTop: '14px' }}>
+                <button type="button" className="btn btn-primary" disabled={savingBudget} onClick={handleApplyBudgetUpdate}>
+                  {savingBudget ? 'Updating...' : 'Update'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1849,7 +2511,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 </select>
                 {loanLenders.length === 0 && (
                   <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#64748b' }}>
-                    No lenders yet — use the <strong>Borrowed cash</strong> tab to record money you borrowed first.
+                    No lenders yet — use the <strong>Loan</strong> tab to record money you borrowed first.
                   </p>
                 )}
                 {loanRepayLenderSummary && (
@@ -1983,7 +2645,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             setCurrentPage(1);
           }}
         >
-          Borrowed cash
+          Loan
         </button>
         <button
           className={`expense-tab ${activeTab === 'employee' ? 'active' : ''}`}
@@ -2053,24 +2715,11 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 },
               ];
               return (
-                <div
-                  className="budget-in-hand-stats"
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-                    gap: '10px',
-                  }}
-                >
+                <div className="budget-in-hand-stats ledger-balances-row">
                   {cards.map((c) => (
                     <div
                       key={c.label}
-                      className="budget-stat"
-                      style={{
-                        background: '#ffffff',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '10px',
-                        padding: '10px 12px',
-                      }}
+                      className="budget-stat ledger-balance-card"
                     >
                       <span className="budget-stat-label" title={c.title}>{c.label}</span>
                       <span className="budget-stat-value" style={{ color: c.color }}>
@@ -2160,11 +2809,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         </div>
       )}
 
-      {/* Borrowed cash (loan / market) — own tab */}
+      {/* Loan — own tab */}
       {activeTab === 'loan' && (
         <div className="expenses-tab-content">
           <LoanPanel
+            handleCreateLoanTransaction={handleCreateLoanTransaction}
             handleRecordLoanReceipt={handleRecordLoanReceipt}
+            handleRecordLoanGiven={handleRecordLoanGiven}
+            handleRecordLoanCollection={handleRecordLoanCollection}
             loanReceiptAmount={loanReceiptAmount}
             setLoanReceiptAmount={setLoanReceiptAmount}
             loanReceiptPaymentMode={loanReceiptPaymentMode}
@@ -2180,6 +2832,30 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             loanLendersTotals={loanLendersTotals}
             formatLoanInr={formatLoanInr}
             openLoanLenderHistory={openLoanLenderHistory}
+            loanGivenAmount={loanGivenAmount}
+            setLoanGivenAmount={setLoanGivenAmount}
+            loanGivenPaymentMode={loanGivenPaymentMode}
+            setLoanGivenPaymentMode={setLoanGivenPaymentMode}
+            loanGivenBorrowerSelect={loanGivenBorrowerSelect}
+            setLoanGivenBorrowerSelect={setLoanGivenBorrowerSelect}
+            loanGivenNewBorrowerName={loanGivenNewBorrowerName}
+            setLoanGivenNewBorrowerName={setLoanGivenNewBorrowerName}
+            submittingLoanGiven={submittingLoanGiven}
+            loanCollectionAmount={loanCollectionAmount}
+            setLoanCollectionAmount={setLoanCollectionAmount}
+            loanCollectionPaymentMode={loanCollectionPaymentMode}
+            setLoanCollectionPaymentMode={setLoanCollectionPaymentMode}
+            loanCollectionBorrowerSelect={loanCollectionBorrowerSelect}
+            setLoanCollectionBorrowerSelect={setLoanCollectionBorrowerSelect}
+            loanCollectionNewBorrowerName={loanCollectionNewBorrowerName}
+            setLoanCollectionNewBorrowerName={setLoanCollectionNewBorrowerName}
+            submittingLoanCollection={submittingLoanCollection}
+            loanBorrowers={loanBorrowers}
+            loadingLoanBorrowers={loadingLoanBorrowers}
+            loanBorrowersTotals={loanBorrowersTotals}
+            loanTransactions={loanTransactions}
+            loadingLoanTransactions={loadingLoanTransactions}
+            openLoanBorrowerHistory={openLoanBorrowerHistory}
             setActiveTab={setActiveTab}
             setCurrentPage={setCurrentPage}
             handleAddClick={handleAddClick}
@@ -2314,6 +2990,88 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               </div>
             </div>
           )}
+
+          {borrowerHistoryModal.open && borrowerHistoryModal.borrower && (
+            <div className="modal-overlay" onClick={closeBorrowerHistoryModal} role="presentation">
+              <div
+                className="modal-content"
+                onClick={(e) => e.stopPropagation()}
+                style={{ maxWidth: 'min(740px, 90vw)', width: '90vw' }}
+              >
+                <div className="modal-header">
+                  <h3>
+                    {borrowerHistoryModal.borrower.displayName
+                      || borrowerHistoryModal.borrower.display_name
+                      || `Borrower #${borrowerHistoryModal.borrower.id}`}{' '}
+                    — lent history
+                  </h3>
+                  <button type="button" className="modal-close" onClick={closeBorrowerHistoryModal} aria-label="Close">
+                    ×
+                  </button>
+                </div>
+                <div className="modal-body">
+                  {borrowerHistoryModal.loading ? (
+                    <Loading message="Loading transactions…" />
+                  ) : borrowerHistoryModal.rows.length === 0 ? (
+                    <p style={{ margin: 0, fontSize: '14px', color: '#64748b' }}>No transactions yet.</p>
+                  ) : (
+                    <div className="sales-table-wrapper" style={{ maxHeight: '360px', overflowY: 'auto', overflowX: 'auto', width: '100%' }}>
+                      <table className="data-table expenses-table" style={{ width: '100%', tableLayout: 'fixed' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ width: '18%' }}>Date</th>
+                            <th style={{ width: '18%' }}>Type</th>
+                            <th style={{ width: '22%' }}>Amount</th>
+                            <th style={{ width: '22%' }}>Outstanding</th>
+                            <th style={{ width: '20%' }}>Notes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            const chronological = [...borrowerHistoryModal.rows].sort((a, b) => {
+                              const ta = new Date(a?.createdAt || a?.entryDate || 0).getTime() || 0;
+                              const tb = new Date(b?.createdAt || b?.entryDate || 0).getTime() || 0;
+                              if (ta !== tb) return ta - tb;
+                              return (Number(a?.id) || 0) - (Number(b?.id) || 0);
+                            });
+                            let outstanding = 0;
+                            const outstandingById = new Map();
+                            chronological.forEach((row) => {
+                              const typ = String(row.entryType || '').toUpperCase();
+                              const amt = Number(row.amount ?? 0) || 0;
+                              if (typ === 'DISBURSEMENT') outstanding += amt;
+                              if (typ === 'REPAYMENT_RECEIVED') outstanding -= amt;
+                              outstandingById.set(row.id, outstanding);
+                            });
+                            return borrowerHistoryModal.rows.map((row) => {
+                              const typ = String(row.entryType || '').toUpperCase();
+                              const label = typ === 'DISBURSEMENT' ? 'Loan given' : typ === 'REPAYMENT_RECEIVED' ? 'Collection' : typ || '—';
+                              const dateStr = row.entryDate ? String(row.entryDate).slice(0, 10) : '—';
+                              const amt = Number(row.amount ?? 0) || 0;
+                              const out = Number(outstandingById.get(row.id) || 0);
+                              return (
+                                <tr key={row.id}>
+                                  <td>{dateStr}</td>
+                                  <td style={{ fontWeight: 600, color: typ === 'DISBURSEMENT' ? '#b91c1c' : '#0f766e' }}>{label}</td>
+                                  <td>₹{amt.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  <td style={{ fontWeight: 600, color: out > 0.005 ? '#b45309' : out < -0.005 ? '#1d4ed8' : '#0f766e' }}>
+                                    {out < -0.005
+                                      ? `Credit ₹${Math.abs(out).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                      : `₹${out.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                                  </td>
+                                  <td style={{ fontSize: '12px', color: '#64748b', wordBreak: 'break-word' }}>{row.notes || '—'}</td>
+                                </tr>
+                              );
+                            });
+                          })()}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2324,7 +3082,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           setPayAdvanceFormData({
             employeeId: '',
             amount: '',
-            date: getLocalDateString()
+            date: getLocalDateString(),
+            paymentMethod: 'CASH',
+            notes: ''
           });
         }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -2335,7 +3095,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 setPayAdvanceFormData({
                   employeeId: '',
                   amount: '',
-                  date: getLocalDateString()
+                  date: getLocalDateString(),
+                  paymentMethod: 'CASH',
+                  notes: ''
                 });
               }}>×</button>
             </div>
@@ -2381,17 +3143,45 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       required
                     />
                   </div>
+                  <div className="form-group">
+                    <label>Payment mode *</label>
+                    <select
+                      name="paymentMethod"
+                      value={payAdvanceFormData.paymentMethod || 'CASH'}
+                      onChange={(e) => setPayAdvanceFormData({ ...payAdvanceFormData, paymentMethod: e.target.value })}
+                      required
+                    >
+                      {EMPLOYEE_PAYMENT_MODE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                    <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#64748b' }}>
+                      How you paid this advance to the employee. Stored on payroll ledger and expenses.
+                    </p>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Notes (optional)</label>
+                  <input
+                    type="text"
+                    name="notes"
+                    value={payAdvanceFormData.notes || ''}
+                    onChange={(e) => setPayAdvanceFormData({ ...payAdvanceFormData, notes: e.target.value })}
+                    placeholder="e.g. Week 1 advance"
+                  />
                 </div>
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary">
-                    Pay Advance
+                  <button type="submit" className="btn btn-primary" disabled={submittingPayAdvance}>
+                    {submittingPayAdvance ? 'Paying...' : 'Pay Advance'}
                   </button>
                   <button type="button" className="btn btn-secondary" onClick={() => {
                     setShowPayAdvanceForm(false);
                     setPayAdvanceFormData({
                       employeeId: '',
                       amount: '',
-                      date: getLocalDateString()
+                      date: getLocalDateString(),
+                      paymentMethod: 'CASH',
+                      notes: ''
                     });
                   }}>
                     Cancel
@@ -2411,7 +3201,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           setPaySalaryFormData({
             month: getLocalMonthString(),
             date: getLocalDateString(),
-            paymentMethod: 'cash',
+            paymentMethod: 'CASH',
             amount: ''
           });
         }}>
@@ -2424,7 +3214,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 setPaySalaryFormData({
                   month: getLocalMonthString(),
                   date: getLocalDateString(),
-                  paymentMethod: 'cash',
+                  paymentMethod: 'CASH',
                   amount: ''
                 });
               }}>×</button>
@@ -2486,19 +3276,20 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     />
                   </div>
                   <div className="form-group">
-                    <label>Payment Method *</label>
+                    <label>Payment mode *</label>
                     <select
                       name="paymentMethod"
-                      value={paySalaryFormData.paymentMethod}
+                      value={paySalaryFormData.paymentMethod || 'CASH'}
                       onChange={(e) => setPaySalaryFormData({ ...paySalaryFormData, paymentMethod: e.target.value })}
                       required
                     >
-                      <option value="cash">Cash</option>
-                      <option value="bank">Bank Transfer</option>
-                      <option value="upi">UPI</option>
-                      <option value="cheque">Cheque</option>
-                      <option value="other">Other</option>
+                      {EMPLOYEE_PAYMENT_MODE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
                     </select>
+                    <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#64748b' }}>
+                      How you paid this salary (cash, UPI, bank transfer, or cheque). This is stored on the payroll ledger and expenses.
+                    </p>
                   </div>
                 </div>
                 <div className="form-actions">
@@ -2511,10 +3302,126 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     setPaySalaryFormData({
                       month: getLocalMonthString(),
                       date: getLocalDateString(),
-                      paymentMethod: 'cash',
+                      paymentMethod: 'CASH',
                       amount: ''
                     });
                   }}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Employee Modal */}
+      {showEditEmployeeModal && editEmployeeForm.id != null && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            if (!savingEditEmployee) closeEditEmployeeModal();
+          }}
+        >
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Edit Employee</h3>
+              <button
+                type="button"
+                className="modal-close"
+                disabled={savingEditEmployee}
+                onClick={closeEditEmployeeModal}
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const name = String(editEmployeeForm.employeeName || '').trim();
+                  const salaryNum = parseFloat(String(editEmployeeForm.salaryAmount).replace(/,/g, ''));
+                  if (!name) {
+                    showToast('Employee name is required.', 'error');
+                    return;
+                  }
+                  if (!Number.isFinite(salaryNum) || salaryNum <= 0) {
+                    showToast('Salary must be a number greater than 0.', 'error');
+                    return;
+                  }
+                  if (!editEmployeeForm.joiningDate) {
+                    showToast('Joining date is required.', 'error');
+                    return;
+                  }
+                  setSavingEditEmployee(true);
+                  try {
+                    await apiUpdateEmployee(editEmployeeForm.id, {
+                      employeeName: name,
+                      salaryAmount: salaryNum,
+                      joiningDate: editEmployeeForm.joiningDate,
+                    });
+                    await loadEmployees();
+                    await loadPayrollSummary();
+                    closeEditEmployeeModal();
+                    showToast('Employee updated successfully.', 'success');
+                  } catch (error) {
+                    console.error('Error updating employee:', error);
+                    showToast('Failed to update employee. Please try again.', 'error');
+                  } finally {
+                    setSavingEditEmployee(false);
+                  }
+                }}
+              >
+                <div className="form-group">
+                  <label>Employee Name *</label>
+                  <input
+                    type="text"
+                    value={editEmployeeForm.employeeName}
+                    onChange={(e) =>
+                      setEditEmployeeForm((p) => ({ ...p, employeeName: e.target.value }))
+                    }
+                    placeholder="Enter employee name"
+                    required
+                    disabled={savingEditEmployee}
+                  />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Salary Amount (₹) *</label>
+                    <input
+                      type="number"
+                      value={editEmployeeForm.salaryAmount}
+                      onChange={(e) =>
+                        setEditEmployeeForm((p) => ({ ...p, salaryAmount: e.target.value }))
+                      }
+                      min="0.01"
+                      step="0.01"
+                      placeholder="Enter salary amount"
+                      required
+                      disabled={savingEditEmployee}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Joining Date</label>
+                    <input
+                      type="date"
+                      value={editEmployeeForm.joiningDate}
+                      disabled
+                      title="Joining date cannot be changed"
+                      className="employee-edit-joining-readonly"
+                    />
+                  </div>
+                </div>
+                <div className="form-actions">
+                  <button type="submit" className="btn btn-primary" disabled={savingEditEmployee}>
+                    {savingEditEmployee ? 'Saving…' : 'Save changes'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={savingEditEmployee}
+                    onClick={closeEditEmployeeModal}
+                  >
                     Cancel
                   </button>
                 </div>
@@ -2657,7 +3564,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 setPayAdvanceFormData({
                   employeeId: '',
                   amount: '',
-                  date: getLocalDateString()
+                  date: getLocalDateString(),
+                  paymentMethod: 'CASH',
+                  notes: ''
                 });
               }}>
                 💰 Pay Advance
@@ -2731,10 +3640,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                               </button>
                               <button
                                 className="btn-icon btn-edit"
-                                onClick={() => {
-                                  // TODO: Implement edit functionality
-                                  console.log('Edit employee', employee);
-                                }}
+                                onClick={() => openEditEmployeeModal(employee)}
                                 title="Edit"
                               >
                                 ✏️
@@ -2842,7 +3748,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                 className="btn-icon btn-edit"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  console.log('Edit employee', employee);
+                                  openEditEmployeeModal(employee);
                                 }}
                                 title="Edit"
                               >
@@ -3463,15 +4369,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     console.log('Form submitted!', clientPaymentFormData);
                     console.log('Available purchases:', clientPayments);
                     
-                    // Use selectedClientPurchase if available (more reliable)
-                    let purchase = selectedClientPurchase;
-                    
-                    // If not available, try to find by ID (handle string/number mismatch)
-                    if (!purchase && clientPaymentFormData.purchaseId) {
-                      purchase = clientPayments.find(p => {
-                        // Compare as strings to handle type mismatch
-                        return String(p?.id) === String(clientPaymentFormData.purchaseId);
-                      });
+                    // Resolve purchase from latest server-backed list first.
+                    let purchase = null;
+                    if (clientPaymentFormData.purchaseId) {
+                      purchase = clientPayments.find((p) => String(p?.id) === String(clientPaymentFormData.purchaseId));
+                    }
+                    // Fallback to modal-selected object.
+                    if (!purchase && selectedClientPurchase) {
+                      purchase = selectedClientPurchase;
                     }
                     
                     if (!purchase) {
@@ -4117,10 +5022,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         {expense._ledgerOnly ? (
                           <span
                             className="ledger-feed-actions-hint"
-                            title="Recorded from Client Transactions (purchase payment). Edit or remove it there."
+                            title={expense._ledgerSource === 'loan'
+                              ? 'Recorded from Loan ledger. Edit or remove it in Loan tab.'
+                              : 'Recorded from Client Transactions (purchase payment). Edit or remove it there.'}
                             style={{ fontSize: '12px', color: '#64748b' }}
                           >
-                            Client module
+                            {expense._ledgerSource === 'loan' ? 'Loan module' : 'Client module'}
                           </span>
                         ) : (
                           <>
@@ -4185,8 +5092,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         </div>
                         <div className="expense-card-actions">
                           {expense._ledgerOnly ? (
-                            <span style={{ fontSize: '12px', color: '#64748b' }} title="Manage under Client Transactions">
-                              Client module — use Client tab to adjust
+                            <span
+                              style={{ fontSize: '12px', color: '#64748b' }}
+                              title={expense._ledgerSource === 'loan' ? 'Manage under Loan tab' : 'Manage under Client Transactions'}
+                            >
+                              {expense._ledgerSource === 'loan'
+                                ? 'Loan module — use Loan tab to adjust'
+                                : 'Client module — use Client tab to adjust'}
                             </span>
                           ) : (
                             <>

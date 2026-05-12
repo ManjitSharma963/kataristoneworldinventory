@@ -17,6 +17,7 @@ import {
 } from '../utils/api';
 import './Dashboard.css';
 import InventoryUpdateModal from './InventoryUpdateModal';
+import { digitsOnly, isExactlyTenDigits } from '../utils/indianMobile10';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -420,19 +421,24 @@ const InventoryItemsPage = () => {
       window.alert('Name is required');
       return;
     }
+    const phoneDigits = digitsOnly(quickAddForm.contact_number);
+    if (!isExactlyTenDigits(quickAddForm.contact_number)) {
+      window.alert('Contact number must be exactly 10 digits (0–9 only).');
+      return;
+    }
     setQuickAddSubmitting(true);
     try {
       let created;
       if (quickAddEntity.type === 'supplier') {
         created = await createSupplier({
           name: nm,
-          contact_number: quickAddForm.contact_number,
+          contact_number: phoneDigits,
           address: quickAddForm.address
         });
       } else {
         created = await createDealer({
           name: nm,
-          contact_number: quickAddForm.contact_number,
+          contact_number: phoneDigits,
           address: quickAddForm.address
         });
       }
@@ -1734,12 +1740,21 @@ const InventoryItemsPage = () => {
                 />
               </div>
               <div className="form-group">
-                <label>Contact number</label>
+                <label>Contact number *</label>
                 <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  placeholder="10-digit mobile"
                   value={quickAddForm.contact_number}
-                  onChange={(e) => setQuickAddForm((p) => ({ ...p, contact_number: e.target.value }))}
-                  maxLength={50}
+                  onChange={(e) => {
+                    const d = digitsOnly(e.target.value).slice(0, 10);
+                    setQuickAddForm((p) => ({ ...p, contact_number: d }));
+                  }}
+                  maxLength={10}
+                  required
                 />
+                <small className="form-help">Numbers only, exactly 10 digits</small>
               </div>
               <div className="form-group">
                 <label>Address</label>

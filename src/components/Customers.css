@@ -189,6 +189,20 @@
   margin-bottom: 8px;
 }
 
+.advance-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.advance-action-card {
+  background: #f0f4f8;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 0;
+}
+
 .advance-history-wrap {
   max-height: 320px;
   overflow: auto;
@@ -203,5 +217,11 @@
 
 .action-btn-advance {
   font-size: 1rem;
+}
+
+@media (max-width: 900px) {
+  .advance-actions-grid {
+    grid-template-columns: 1fr;
+  }
 }
 

@@ -8,20 +8,23 @@ const BudgetHistorySection = ({
   budgetHistoryTypeFilter,
   setBudgetHistoryTypeFilter,
   onDownloadPdf,
-  bankSourceLabel
+  bankSourceLabel,
+  showDownloadButton = true
 }) => {
   return (
     <div className="budget-history-section" style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '12px' }}>
       <div className="budget-history-header">
         <h4 className="budget-history-title">Transaction history</h4>
-        <button
-          type="button"
-          className="btn btn-secondary budget-history-download-btn"
-          onClick={onDownloadPdf}
-          disabled={loadingBudgetHistory || filteredBudgetHistoryRows.length === 0}
-        >
-          Download PDF
-        </button>
+        {showDownloadButton && (
+          <button
+            type="button"
+            className="btn btn-secondary budget-history-download-btn"
+            onClick={onDownloadPdf}
+            disabled={loadingBudgetHistory || filteredBudgetHistoryRows.length === 0}
+          >
+            Download PDF
+          </button>
+        )}
       </div>
       <div className="budget-history-filters">
         <div className="budget-history-filter-item">

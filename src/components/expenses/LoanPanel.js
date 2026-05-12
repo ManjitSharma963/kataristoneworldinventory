@@ -1,160 +1,367 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
+
+const INR = (n) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const LoanPanel = ({
-  handleRecordLoanReceipt,
-  loanReceiptAmount,
-  setLoanReceiptAmount,
-  loanReceiptPaymentMode,
-  setLoanReceiptPaymentMode,
-  loanReceiptLenderSelect,
-  setLoanReceiptLenderSelect,
-  loanReceiptNewLenderName,
-  setLoanReceiptNewLenderName,
-  submittingLoanReceipt,
+  handleCreateLoanTransaction,
   loanLenders,
-  formatLenderOutstandingLabel,
   loadingLoanLenders,
   loanLendersTotals,
-  formatLoanInr,
-  openLoanLenderHistory,
-  setActiveTab,
-  setCurrentPage,
-  handleAddClick
+  loanBorrowers,
+  loadingLoanBorrowers,
+  loanBorrowersTotals,
+  loanTransactions,
+  loadingLoanTransactions,
 }) => {
+  const localNow = new Date();
+  localNow.setMinutes(localNow.getMinutes() - localNow.getTimezoneOffset());
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [submittingQuickEntry, setSubmittingQuickEntry] = useState(false);
+  const [quickEntry, setQuickEntry] = useState({
+    dateTime: localNow.toISOString().slice(0, 16),
+    direction: 'GIVE',
+    personRef: '',
+    personName: '',
+    amount: '',
+    paymentMode: 'cash',
+    notes: '',
+  });
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [typeFilter, setTypeFilter] = useState('ALL');
+  const [payFilter, setPayFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [search, setSearch] = useState('');
+
+  const lenderRows = Array.isArray(loanLenders) ? loanLenders : [];
+  const borrowerRows = Array.isArray(loanBorrowers) ? loanBorrowers : [];
+  const rows = Array.isArray(loanTransactions) ? loanTransactions : [];
+
+  const rowMatchesSearch = (r, q) => {
+    if (!q) return true;
+    return `${r.person || ''} ${r.notes || ''} ${r.typeLabel || ''}`.toLowerCase().includes(q);
+  };
+
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rows.filter((r) => {
+      const d = r.date ? String(r.date).slice(0, 10) : '';
+      if (fromDate && d && d < fromDate) return false;
+      if (toDate && d && d > toDate) return false;
+      if (typeFilter !== 'ALL' && r.giveTake !== typeFilter) return false;
+      const pm = String(r.paymentMode || '').toUpperCase();
+      if (payFilter !== 'ALL' && !pm.includes(payFilter)) return false;
+      if (statusFilter !== 'ALL' && String(r.status || 'ACTIVE').toUpperCase() !== statusFilter) return false;
+      return rowMatchesSearch(r, q);
+    });
+  }, [rows, fromDate, toDate, typeFilter, payFilter, statusFilter, search]);
+
+  const totals = useMemo(() => {
+    let give = 0;
+    let take = 0;
+    for (const r of filteredRows) {
+      const amt = Number(r.amount || 0) || 0;
+      if (r.giveTake === 'GIVE') give += amt;
+      else if (r.giveTake === 'TAKE') take += amt;
+    }
+    return { give, take };
+  }, [filteredRows]);
+
+  const totalPie = Math.max(1, totals.give + totals.take);
+  const giveTotal = totals.give;
+  const takeTotal = totals.take;
+  const simpleNet = giveTotal - takeTotal;
+  const pGive = (giveTotal / totalPie) * 100;
+  const pTake = (takeTotal / totalPie) * 100;
+
+  const personOptions = useMemo(() => {
+    const opts = [];
+    for (const l of lenderRows) {
+      const nm = (l.displayName || l.display_name || l.personName || l.name || `Person #${l.id}`).trim();
+      opts.push({ key: `l:${l.id}`, label: `${nm} — you borrowed from them` });
+    }
+    for (const b of borrowerRows) {
+      const nm = (b.displayName || b.display_name || b.personName || b.name || `Person #${b.id}`).trim();
+      opts.push({ key: `b:${b.id}`, label: `${nm} — you lent to them` });
+    }
+    opts.sort((a, b) => a.label.localeCompare(b.label));
+    return opts;
+  }, [lenderRows, borrowerRows]);
+
+  const handleQuickEntryChange = (field, value) => {
+    setQuickEntry((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const resetQuickEntry = () => {
+    const dt = new Date();
+    dt.setMinutes(dt.getMinutes() - dt.getTimezoneOffset());
+    setQuickEntry({
+      dateTime: dt.toISOString().slice(0, 16),
+      direction: 'GIVE',
+      personRef: '',
+      personName: '',
+      amount: '',
+      paymentMode: 'cash',
+      notes: '',
+    });
+  };
+
+  const submitQuickEntry = async (e) => {
+    e.preventDefault();
+    const amount = parseFloat(String(quickEntry.amount || '').replace(/,/g, ''));
+    if (!Number.isFinite(amount) || amount <= 0 || submittingQuickEntry) return;
+    setSubmittingQuickEntry(true);
+    try {
+      await handleCreateLoanTransaction({
+        direction: quickEntry.direction,
+        transactionType: quickEntry.direction,
+        dateTime: quickEntry.dateTime || '',
+        personRef: quickEntry.personRef || '',
+        personName: quickEntry.personName || '',
+        amount,
+        paymentMode: quickEntry.paymentMode || 'cash',
+        notes: quickEntry.notes || '',
+      });
+      setShowAddModal(false);
+      resetQuickEntry();
+    } finally {
+      setSubmittingQuickEntry(false);
+    }
+  };
+
+  const exportCsv = () => {
+    const lines = [['Date', 'Type', 'Person', 'Amount', 'PaymentMode', 'GiveOrTake', 'Notes'].join(',')];
+    for (const r of filteredRows) {
+      const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      lines.push([
+        esc(r.date ? String(r.date).slice(0, 10) : ''),
+        esc(r.typeLabel),
+        esc(r.person),
+        Number(r.amount || 0),
+        esc(r.paymentMode),
+        esc(r.giveTake === 'GIVE' ? 'Give' : 'Take'),
+        esc(r.notes),
+      ].join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'loan-ledger.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="expenses-tab-content">
-      <form
-        className="loan-receipt-panel"
-        onSubmit={handleRecordLoanReceipt}
+      <div
         style={{
-          padding: '16px 18px',
-          borderRadius: '8px',
-          border: '1px solid #e2e8f0',
-          background: '#f8fafc',
-          maxWidth: '800px',
+          border: '1px solid #d9e2ec',
+          borderRadius: '12px',
+          background: '#fff',
+          padding: '12px',
+          fontSize: '13px',
         }}
       >
-        <div style={{ fontWeight: 600, fontSize: '15px', marginBottom: '8px', color: '#334155' }}>
-          Record money borrowed from a lender
-        </div>
-        <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#64748b', lineHeight: 1.5 }}>
-          Choose an existing lender to add more borrowing to their running total (outstanding increases by this amount).
-          Or use <strong>+ Add new lender</strong> for a first-time source. <strong>Cash</strong> and <strong>UPI</strong> increase daily in-hand balance; <strong>bank transfer</strong> and <strong>cheque</strong> only update lender totals. To repay, use{' '}
-          <strong>Daily Expenses</strong> → <strong>Add Expense</strong> → <strong>Loan Repay</strong>.
-        </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-end' }}>
-            <div className="form-group" style={{ marginBottom: 0, minWidth: '140px' }}>
-              <label style={{ fontSize: '13px' }}>Amount (₹) *</label>
-              <input type="number" min="0" step="0.01" value={loanReceiptAmount} onChange={(e) => setLoanReceiptAmount(e.target.value)} placeholder="0.00" disabled={submittingLoanReceipt} />
-            </div>
-            <div className="form-group" style={{ marginBottom: 0, minWidth: '170px' }}>
-              <label style={{ fontSize: '13px' }}>Payment mode</label>
-              <select value={loanReceiptPaymentMode} onChange={(e) => setLoanReceiptPaymentMode(e.target.value)} disabled={submittingLoanReceipt}>
-                <option value="cash">Cash (in hand)</option>
-                <option value="upi">UPI (in hand)</option>
-                <option value="bank_transfer">Bank transfer (not in hand)</option>
-                <option value="cheque">Cheque (not in hand)</option>
-              </select>
-            </div>
-            <div className="form-group" style={{ marginBottom: 0, flex: '1 1 240px' }}>
-              <label style={{ fontSize: '13px' }}>Lender</label>
-              <select
-                value={loanReceiptLenderSelect}
-                onChange={(e) => {
-                  setLoanReceiptLenderSelect(e.target.value);
-                  if (e.target.value !== '__new__') setLoanReceiptNewLenderName('');
-                }}
-                disabled={submittingLoanReceipt}
-              >
-                <option value="">Unspecified (no named lender)</option>
-                {loanLenders.map((l) => {
-                  const nm = l.displayName ?? l.display_name ?? `Lender #${l.id}`;
-                  const out = Number(l.outstanding ?? 0) || 0;
-                  return (
-                    <option key={l.id} value={String(l.id)}>
-                      {nm} ({formatLenderOutstandingLabel(out)})
-                    </option>
-                  );
-                })}
-                <option value="__new__">+ Add new lender…</option>
-              </select>
-            </div>
-            <button type="submit" className="btn btn-primary" disabled={submittingLoanReceipt}>
-              {submittingLoanReceipt ? 'Saving…' : 'Record loan received'}
-            </button>
-          </div>
-          {loanReceiptLenderSelect === '__new__' && (
-            <div className="form-group" style={{ marginBottom: 0, maxWidth: '420px' }}>
-              <label style={{ fontSize: '13px' }}>New lender name *</label>
-              <input type="text" value={loanReceiptNewLenderName} onChange={(e) => setLoanReceiptNewLenderName(e.target.value)} placeholder="e.g. Name or financier" disabled={submittingLoanReceipt} />
-            </div>
-          )}
-        </div>
-      </form>
-
-      <div style={{ marginTop: '20px' }}>
-        <h3 style={{ margin: '0 0 10px', fontSize: '16px', fontWeight: 600, color: '#334155' }}>Lenders</h3>
-        <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#64748b' }}>Click a row to see all borrowings and repayments for that lender.</p>
-        {!loadingLoanLenders && loanLenders.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))', gap: '10px', marginBottom: '16px', maxWidth: '900px' }}>
-            {[
-              { label: 'Total lenders', value: String(loanLendersTotals.count), accent: '#334155' },
-              { label: 'Total borrowed', value: formatLoanInr(loanLendersTotals.totalBorrowed), accent: '#1d4ed8' },
-              { label: 'Total repaid', value: formatLoanInr(loanLendersTotals.totalRepaid), accent: '#0f766e' },
-              { label: 'Overpay', value: formatLoanInr(loanLendersTotals.totalOverpay), accent: '#1d4ed8' },
-            ].map((c) => (
-              <div key={c.label} style={{ padding: '12px 14px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)' }}>
-                <div style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', letterSpacing: '0.02em', marginBottom: '6px' }}>{c.label}</div>
-                <div style={{ fontSize: '15px', fontWeight: 700, color: c.accent, lineHeight: 1.25 }}>{c.value}</div>
-              </div>
-            ))}
-          </div>
-        )}
-        {loadingLoanLenders ? (
-          <p style={{ fontSize: '13px', color: '#888' }}>Loading lenders…</p>
-        ) : loanLenders.length === 0 ? (
-          <div className="empty-state-wrapper" style={{ padding: '20px' }}>
-            <span className="empty-icon">🏦</span>
-            <p className="empty-state" style={{ marginBottom: '4px' }}>No lenders for this location</p>
-            <p className="empty-subtitle" style={{ fontSize: '13px', lineHeight: 1.45 }}>
-              Lenders are created when you use <strong>Record loan received</strong> above (they are not read from other tables).
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 20, color: '#1e293b' }}>Loan Ledger</h3>
+            <p style={{ margin: '2px 0 0', color: '#64748b', fontSize: 12 }}>
+              Overview updates from current filters (date, type, payment mode, search).
             </p>
           </div>
-        ) : (
-          <div className="sales-table-wrapper" style={{ maxWidth: '900px' }}>
-            <table className="data-table expenses-table">
-              <thead>
-                <tr><th>Lender</th><th>Total borrowed</th><th>Total repaid</th><th>Outstanding</th></tr>
-              </thead>
-              <tbody>
-                {loanLenders.map((l) => {
-                  const name = l.displayName ?? l.display_name ?? `Lender #${l.id}`;
-                  const borrowed = Number(l.totalBorrowed ?? l.total_borrowed ?? 0) || 0;
-                  const repaid = Number(l.totalRepaid ?? l.total_repaid ?? 0) || 0;
-                  const out = Number(l.outstanding ?? 0) || 0;
-                  return (
-                    <tr key={l.id} style={{ cursor: 'pointer' }} onClick={() => openLoanLenderHistory(l)} title="View full history">
-                      <td style={{ fontWeight: 600 }}>{name}</td>
-                      <td>₹{borrowed.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td>₹{repaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td style={{ fontWeight: 600, color: out > 0.005 ? '#b45309' : out < -0.005 ? '#1d4ed8' : '#0f766e' }}>
-                        {out < -0.005 ? `Credit ₹${Math.abs(out).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `₹${out.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="btn btn-secondary" onClick={exportCsv}>Export</button>
+            <button type="button" className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+              + Give / Take
+            </button>
           </div>
-        )}
-      </div>
+        </div>
 
-      <div style={{ marginTop: '16px' }}>
-        <button type="button" className="btn btn-secondary" onClick={() => { setActiveTab('all'); setCurrentPage(1); handleAddClick(); }}>
-          Record a repayment → Add Expense
-        </button>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 330px) 1fr', gap: 10, marginBottom: 10 }}>
+          <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
+            <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 14 }}>Give / Take Overview</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div
+                style={{
+                  width: 130, height: 130, borderRadius: '50%',
+                  background: `conic-gradient(#dc2626 0 ${pGive}%, #2563eb ${pGive}% ${pGive + pTake}%, #e2e8f0 ${pGive + pTake}% 100%)`,
+                  position: 'relative',
+                }}
+              >
+                <div style={{ position: 'absolute', inset: 28, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', fontSize: 12 }}>
+                  <span style={{ fontSize: 11 }}>Net</span>
+                  <strong>{INR(Math.abs(simpleNet)).replace('.00', '')}</strong>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: '#475569' }}>
+                <div style={{ marginBottom: 6 }}>● Total Give: {INR(giveTotal)}</div>
+                <div style={{ marginBottom: 6 }}>● Total Take: {INR(takeTotal)}</div>
+                <div style={{ marginBottom: 6 }}>
+                  ● Net: {simpleNet >= 0 ? 'Give' : 'Take'} {INR(Math.abs(simpleNet))}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>Give / Take Summary</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(120px,1fr))', gap: 8 }}>
+              {[
+                ['Give (money out)', giveTotal, '#dc2626'],
+                ['Take (money in)', takeTotal, '#2563eb'],
+              ].map(([l, v, c]) => (
+                <div key={l} style={{ border: '1px solid #eef2f7', borderRadius: 8, padding: 8, background: '#f8fafc' }}>
+                  <div style={{ fontSize: 11, color: '#64748b' }}>{l}</div>
+                  <div style={{ fontSize: 20, color: c, fontWeight: 700 }}>{INR(v).replace('.00', '')}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="loan-ledger-filters">
+          <input className="loan-ledger-filter-input" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          <input className="loan-ledger-filter-input" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          <select className="loan-ledger-filter-input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+            <option value="ALL">Give &amp; Take</option>
+            <option value="GIVE">I gave (money out)</option>
+            <option value="TAKE">I took (money in)</option>
+          </select>
+          <select className="loan-ledger-filter-input" value={payFilter} onChange={(e) => setPayFilter(e.target.value)}>
+            <option value="ALL">All Payment Modes</option>
+            <option value="CASH">Cash</option>
+            <option value="UPI">UPI</option>
+            <option value="BANK">Bank</option>
+          </select>
+          <select className="loan-ledger-filter-input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="ALL">All Status</option>
+            <option value="ACTIVE">Active</option>
+          </select>
+          <input className="loan-ledger-filter-input loan-ledger-search-input" type="text" placeholder="Search person..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          <button type="button" className="btn btn-secondary loan-ledger-reset-btn" onClick={() => { setFromDate(''); setToDate(''); setTypeFilter('ALL'); setPayFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}>
+            Reset
+          </button>
+        </div>
+
+        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
+        <div className="sales-table-wrapper">
+          <table className="data-table expenses-table" style={{ fontSize: 12 }}>
+            <thead>
+              <tr>
+                <th>Date & Time</th>
+                <th>Type</th>
+                <th>Person</th>
+                <th>Amount (₹)</th>
+                <th>Payment Mode</th>
+                <th>Give / Take</th>
+                <th>Notes</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(loadingLoanLenders || loadingLoanBorrowers || loadingLoanTransactions) ? (
+                <tr><td colSpan="8" style={{ textAlign: 'center' }}>Loading...</td></tr>
+              ) : filteredRows.length === 0 ? (
+                <tr><td colSpan="8" style={{ textAlign: 'center', color: '#64748b' }}>No loan transactions.</td></tr>
+              ) : filteredRows.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.date ? String(r.date).replace('T', ' ').slice(0, 16) : '—'}</td>
+                  <td><span style={{ fontWeight: 600, color: r.color }}>{r.typeLabel}</span></td>
+                  <td>{r.person || '—'}</td>
+                  <td style={{ color: r.color, fontWeight: 700 }}>{INR(r.amount)}</td>
+                  <td>{String(r.paymentMode || '—').replaceAll('_', ' ')}</td>
+                  <td>{r.giveTake === 'GIVE' ? 'Give' : 'Take'}</td>
+                  <td>{r.notes || '—'}</td>
+                  <td><span className="pill-status status-open">Active</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
+      {showAddModal && (
+        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 'min(720px, 92vw)' }}>
+            <div className="modal-header">
+              <h3>Record Give or Take</h3>
+              <button type="button" className="modal-close" onClick={() => setShowAddModal(false)} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={submitQuickEntry}>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Date & Time</label>
+                    <input type="datetime-local" value={quickEntry.dateTime} onChange={(e) => handleQuickEntryChange('dateTime', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label>What happened? *</label>
+                    <select value={quickEntry.direction} onChange={(e) => {
+                      handleQuickEntryChange('direction', e.target.value);
+                      handleQuickEntryChange('personRef', '');
+                    }}>
+                      <option value="GIVE">Give</option>
+                      <option value="TAKE">Take</option>
+                    </select>
+                  </div>
+                </div>
+                <p style={{ margin: '0 0 8px', fontSize: 12, color: '#64748b' }}>
+                  {quickEntry.direction === 'GIVE'
+                    ? 'Use “you lent to them” when you hand them a loan; use “you borrowed from them” when you are repaying someone you borrowed from.'
+                    : 'Use “you lent to them” when they repay you; use “you borrowed from them” when they lend you money.'}
+                </p>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Person</label>
+                    <select value={quickEntry.personRef} onChange={(e) => {
+                      const v = e.target.value;
+                      handleQuickEntryChange('personRef', v);
+                      if (v !== '__new__') handleQuickEntryChange('personName', '');
+                    }}>
+                      <option value="">Pick saved person…</option>
+                      <option value="__new__">+ Add new person</option>
+                      {personOptions.map((opt) => (
+                        <option key={opt.key} value={opt.key}>{opt.label}</option>
+                      ))}
+                    </select>
+                    {quickEntry.personRef === '__new__' && (
+                      <div style={{ marginTop: 8 }}>
+                        <label>New person name *</label>
+                        <input type="text" value={quickEntry.personName} onChange={(e) => handleQuickEntryChange('personName', e.target.value)} placeholder="e.g. Amit" required />
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Amount (₹) *</label>
+                    <input type="number" min="0" step="0.01" required value={quickEntry.amount} onChange={(e) => handleQuickEntryChange('amount', e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label>Payment Mode *</label>
+                    <select value={quickEntry.paymentMode} onChange={(e) => handleQuickEntryChange('paymentMode', e.target.value)}>
+                      <option value="cash">Cash</option>
+                      <option value="upi">UPI</option>
+                      <option value="bank_transfer">Bank</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Notes (optional)</label>
+                    <textarea rows={2} value={quickEntry.notes} onChange={(e) => handleQuickEntryChange('notes', e.target.value)} placeholder="Any reference notes" />
+                  </div>
+                </div>
+                <div className="form-actions" style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button type="button" className="btn btn-secondary" onClick={() => { setShowAddModal(false); resetQuickEntry(); }}>Cancel</button>
+                  <button type="submit" className="btn btn-primary" disabled={submittingQuickEntry}>
+                    {submittingQuickEntry ? 'Saving...' : 'Save Transaction'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
