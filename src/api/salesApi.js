@@ -1,7 +1,10 @@
 import { API_BASE_URL } from '../config/api';
 import { handleApiResponse } from '../utils/api';
 
-export const fetchSalesBills = async () => {
+/**
+ * @param {{ dateFrom?: string, dateTo?: string }} opts ISO dates (YYYY-MM-DD). When set, limits server work.
+ */
+export const fetchSalesBills = async (opts = {}) => {
   const token = localStorage.getItem('authToken');
   const headers = {
     'Content-Type': 'application/json',
@@ -11,7 +14,13 @@ export const fetchSalesBills = async () => {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}/bills`, {
+  const params = new URLSearchParams();
+  if (opts.dateFrom) params.set('billDateFrom', opts.dateFrom);
+  if (opts.dateTo) params.set('billDateTo', opts.dateTo);
+  const qs = params.toString();
+  const url = `${API_BASE_URL}/bills${qs ? `?${qs}` : ''}`;
+
+  const response = await fetch(url, {
     method: 'GET',
     headers,
   });

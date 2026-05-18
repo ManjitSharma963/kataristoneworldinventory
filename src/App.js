@@ -418,6 +418,16 @@ function App() {
                         <span className="nav-icon">👥</span>
                         <span className="nav-label">Customers</span>
                       </button>
+                      <button
+                        className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveNav('reports');
+                          setMobileMenuOpen(false);
+                        }}
+                      >
+                        <span className="nav-icon">📋</span>
+                        <span className="nav-label">Reports</span>
+                      </button>
                     </>
                   )}
                   <button 
@@ -430,18 +440,6 @@ function App() {
                     <span className="nav-icon">🛒</span>
                     <span className="nav-label">Products</span>
                   </button>
-                  {userIsAdmin && (
-                    <button 
-                      className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
-                      onClick={() => {
-                        setActiveNav('reports');
-                        setMobileMenuOpen(false);
-                      }}
-                    >
-                      <span className="nav-icon">📋</span>
-                      <span className="nav-label">Reports</span>
-                    </button>
-                  )}
                 </nav>
               </aside>
             </div>
@@ -506,7 +504,7 @@ function App() {
                 <span className="bottom-nav-icon">👥</span>
                 <span className="bottom-nav-label">Customers</span>
               </button>
-              <button 
+              <button
                 className={`bottom-nav-item ${activeNav === 'reports' ? 'active' : ''}`}
                 onClick={() => setActiveNav('reports')}
               >

@@ -129,6 +129,50 @@ const apiCall = async (endpoint, options = {}) => {
   }
 };
 
+/** Unwrap {@code ApiResponseDTO} envelope (`{ success, data, ... }`). */
+export const unwrapApiEntity = (value) => {
+  if (value == null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value;
+  if (value.data != null && typeof value.data === 'object' && !Array.isArray(value.data)) {
+    return value.data;
+  }
+  return value;
+};
+
+/** Unwrap list payloads from {@code ApiResponseDTO} or raw arrays. */
+export const unwrapApiList = (value) => {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.data)) return value.data;
+  if (Array.isArray(value?.content)) return value.content;
+  return [];
+};
+
+/** Normalize client purchase rows for the Client Transactions table. */
+export const normalizeClientPurchase = (raw) => {
+  const p = unwrapApiEntity(raw);
+  if (!p || typeof p !== 'object') return null;
+  const clientName = String(p.clientName ?? p.client_name ?? '').trim();
+  const purchaseDescription = String(p.purchaseDescription ?? p.purchase_description ?? '').trim();
+  const totalAmount = Number(p.totalAmount ?? p.total_amount ?? 0);
+  const amountPaid = Number(p.amountPaid ?? p.amount_paid ?? 0);
+  const amountOutstanding = Number(p.amountOutstanding ?? p.amount_outstanding ?? NaN);
+  if (!clientName && totalAmount <= 0 && !p.id) return null;
+  return {
+    ...p,
+    id: p.id,
+    clientName,
+    purchaseDescription,
+    totalAmount: Number.isFinite(totalAmount) ? totalAmount : 0,
+    purchaseDate: p.purchaseDate ?? p.purchase_date ?? null,
+    dueDate: p.dueDate ?? p.due_date ?? null,
+    amountPaid: Number.isFinite(amountPaid) ? amountPaid : 0,
+    amountOutstanding: Number.isFinite(amountOutstanding)
+      ? amountOutstanding
+      : Math.max(0, (Number.isFinite(totalAmount) ? totalAmount : 0) - (Number.isFinite(amountPaid) ? amountPaid : 0)),
+    payments: Array.isArray(p.payments) ? p.payments : [],
+  };
+};
+
 // Helper function to download PDF files
 const downloadPDF = async (endpoint, filename) => {
   try {
@@ -298,7 +342,8 @@ export const fetchClientTransactions = async ({ from, to, transactionType } = {}
   if (to) params.set('to', to);
   if (transactionType) params.set('transactionType', transactionType);
   const qs = params.toString();
-  return await apiCall(`/client-transactions${qs ? `?${qs}` : ''}`, { method: 'GET' });
+  const raw = await apiCall(`/client-transactions${qs ? `?${qs}` : ''}`, { method: 'GET' });
+  return unwrapApiList(raw);
 };
 
 export const createClientTransaction = async (payload) => {
@@ -312,7 +357,8 @@ export const createClientTransaction = async (payload) => {
 export const fetchClientRunningLedger = async (clientId) => {
   const cid = String(clientId ?? '').trim();
   const q = new URLSearchParams({ clientId: cid });
-  return await apiCall(`/client-transactions/running-ledger?${q}`, { method: 'GET' });
+  const raw = await apiCall(`/client-transactions/running-ledger?${q}`, { method: 'GET' });
+  return unwrapApiList(raw);
 };
 
 export const fetchClientDueAlerts = async () => {
@@ -449,7 +495,7 @@ export const getDailyBudgetByDate = async (date) => {
 };
 
 /**
- * Server-computed remaining + expense totals from daily_budget_events for a date range.
+ * Server-computed remaining + expense totals from transactions for a date range.
  * GET /api/budget/daily/summary?from=&to=
  */
 export const getDailyBudgetCalculatedSummary = async ({ from, to } = {}) => {
@@ -619,15 +665,15 @@ export const getDailyBudgetEvents = async ({ from, to, limit } = {}) => {
   return await apiCall(`/budget/daily/history${qs ? `?${qs}` : ''}`, { method: 'GET' });
 };
 
-// ==================== UNIFIED LEDGER (Phase 3–4) ====================
+// ==================== TRANSACTIONS LEDGER ====================
 
-/** Net cash+UPI, bank, total from unified_financial_ledger for current JWT location. */
+/** Net cash+UPI, bank, total from transactions for current JWT location. */
 export const getBalanceSummary = async () => {
   return await apiCall('/v1/balance/summary', { method: 'GET' });
 };
 
 /**
- * Transaction rows from unified_financial_ledger (newest first).
+ * Transaction rows from transactions table (newest first).
  * @param {{ from?: string, to?: string, limit?: number }} params - yyyy-MM-dd
  */
 export const getLedgerTransactions = async ({ from, to, limit = 200 } = {}) => {
@@ -640,12 +686,12 @@ export const getLedgerTransactions = async ({ from, to, limit = 200 } = {}) => {
 };
 
 /**
- * Daily closing report (location-scoped from JWT). Reads bills, bill_payments, expenses from the database.
- * @param {{ date: string, dateTo?: string, backfillLegacy?: boolean }} params - date and optional inclusive end (YYYY-MM-DD)
- * @returns {Promise<Object>} DailyClosingReportDTO
+ * Single inventory product by id (GET /inventory/:id).
+ * Unwraps {@code ApiResponseDTO} so callers receive the product object.
  */
 export const fetchProductById = async (productId) => {
-  return await apiCall(`/inventory/${productId}`, { method: 'GET' });
+  const raw = await apiCall(`/inventory/${productId}`, { method: 'GET' });
+  return unwrapApiEntity(raw);
 };
 
 /** Suppliers for current JWT location (firm). */
@@ -701,7 +747,8 @@ export const updateInventoryProduct = async (productId, body) => {
 
 /** Full product edit snapshots (prices, GST, stock, etc.). Newest first. */
 export const fetchProductChangeHistory = async (productId) => {
-  return await apiCall(`/inventory/product-changes/${productId}`, { method: 'GET' });
+  const res = await apiCall(`/inventory/product-changes/${productId}`, { method: 'GET' });
+  return unwrapApiList(res);
 };
 
 /** Manual stock increase; admin only. */
@@ -730,7 +777,8 @@ export const updateInventoryStock = async ({ productId, newQuantity, notes }) =>
 
 /** Stock audit trail for a product (newest first). */
 export const fetchInventoryHistory = async (productId) => {
-  return await apiCall(`/inventory/history/${productId}`, { method: 'GET' });
+  const res = await apiCall(`/inventory/history/${productId}`, { method: 'GET' });
+  return unwrapApiList(res);
 };
 
 /** Stock audit trail across all products for your location (newest first). */
@@ -741,7 +789,8 @@ export const fetchInventoryHistoryAll = async ({ from, to, actionType, limit } =
   if (actionType) params.set('actionType', String(actionType));
   if (limit != null) params.set('limit', String(limit));
   const qs = params.toString();
-  return await apiCall(`/inventory/history${qs ? `?${qs}` : ''}`, { method: 'GET' });
+  const res = await apiCall(`/inventory/history${qs ? `?${qs}` : ''}`, { method: 'GET' });
+  return unwrapApiList(res);
 };
 
 /**
@@ -841,12 +890,38 @@ export const deleteBillPayment = async (billId, billType, paymentId) => {
  */
 export const deleteBill = async (billId, billType, options = {}) => {
   const type = String(billType || '').replace('_', '-');
-  const reason = options?.reason != null ? String(options.reason).trim() : '';
+  const body = {
+    reason: options?.reason != null ? String(options.reason).trim() : undefined,
+    reasonCode: options?.reasonCode,
+    refundMode: options?.refundMode,
+  };
   const fetchOpts = { method: 'DELETE' };
-  if (reason) {
-    fetchOpts.body = JSON.stringify({ reason });
+  if (body.reason || body.reasonCode || body.refundMode) {
+    fetchOpts.body = JSON.stringify(body);
   }
   return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}`, fetchOpts);
+};
+
+/** Preview stock, payment, and advance impact before cancelling a finalized bill. */
+export const getBillCancelPreview = async (billId, billType) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(
+    `/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/cancel-preview`,
+    { method: 'GET' }
+  );
+};
+
+/** Cancel finalized bill (reversal flow) or hard-delete draft. */
+export const cancelBill = async (billId, billType, options = {}) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({
+      reason: options?.reason,
+      reasonCode: options?.reasonCode,
+      refundMode: options?.refundMode,
+    }),
+  });
 };
 
 /**
@@ -863,6 +938,31 @@ export const updateBill = async (billId, billType, payload) => {
   });
 };
 
+/** Full replace preview: totals, settlement, stock warnings (POST /bills/{type}/{id}/revision/preview). */
+export const fetchBillRevisionPreview = async (billId, billType, payload) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(
+    `/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/revision/preview`,
+    { method: 'POST', body: JSON.stringify(payload) }
+  );
+};
+
+export const fetchBillRevisionIntegrity = async (billId, billType) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(
+    `/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/revision/integrity`,
+    { method: 'GET' }
+  );
+};
+
+export const fetchBillRevisionDifference = async (billId, billType, payload) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(
+    `/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/revision/difference`,
+    { method: 'POST', body: JSON.stringify(payload) }
+  );
+};
+
 /**
  * Full bill with line items, charges, payments (GET /api/bills/{billType}/{id}).
  * List endpoints may omit line items; call this when opening bill details or edit.
@@ -870,6 +970,76 @@ export const updateBill = async (billId, billType, payload) => {
 export const fetchBillByTypeAndId = async (billId, billType) => {
   const type = String(billType || '').replace('_', '-');
   return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}`, { method: 'GET' });
+};
+
+/**
+ * Physical stock return (inventory RETURN/IN + optional settlement via refundMode).
+ * @param {string|number} billId
+ * @param {string} billType GST | NON-GST
+ * @param {{ notes?: string, refundMode: string, refundAmount?: number, refundPaymentMode?: string, lines: { billItemId: number, quantity: number }[] }} payload
+ */
+export const submitBillStockReturn = async (billId, billType, payload) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/stock-returns`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};
+
+/**
+ * Supplementary / adjustment bill linked to a parent invoice (POST …/supplementary).
+ * Parent lines are not rewritten; new items are a new document with {@code is_supplementary}.
+ */
+/** Lifecycle audit events for a bill (GET …/events). */
+export const fetchBillEvents = async (billId, billType) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/events`, {
+    method: 'GET',
+  });
+};
+
+/** Stock return history for a NON-GST bill (GET …/stock-returns). */
+export const fetchBillStockReturns = async (billId, billType) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(`/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/stock-returns`, {
+    method: 'GET',
+  });
+};
+
+export const createSupplementaryBill = async (billId, billType, payload) => {
+  const type = String(billType || '').replace('_', '-');
+  return await apiCall(
+    `/bills/${encodeURIComponent(type)}/${encodeURIComponent(billId)}/supplementary`,
+    { method: 'POST', body: JSON.stringify(payload) }
+  );
+};
+
+/** NON-GST: open adjustment / exchange session (bill lines, returns, settlement preview). */
+export const openBillAdjustmentSession = async (billId) => {
+  return await apiCall(`/bills/NON-GST/${encodeURIComponent(billId)}/adjustment-session`, {
+    method: 'POST',
+  });
+};
+
+/** NON-GST: atomic return + supplementary + net settlement in one transaction. */
+export const finalizeBillAdjustment = async (billId, payload) => {
+  return await apiCall(`/bills/NON-GST/${encodeURIComponent(billId)}/finalize-adjustment`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};
+
+/** NON-GST: adjustment history + timeline for a parent bill. */
+export const fetchBillAdjustments = async (billId) => {
+  return await apiCall(`/bills/NON-GST/${encodeURIComponent(billId)}/adjustments`, { method: 'GET' });
+};
+
+/** NON-GST: create return (alias of stock-returns with adjustment metadata). */
+export const createBillReturn = async (billId, payload) => {
+  return await apiCall(`/bills/NON-GST/${encodeURIComponent(billId)}/returns`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 };
 
 /** Cancelled-bill audit for branch; optional billDateFrom / billDateTo as YYYY-MM-DD (bill date, inclusive). */
@@ -1122,7 +1292,10 @@ export const deleteCustomer = async (id) => {
  * @returns {Promise<Array>} List of client purchases
  */
 export const fetchClientPurchases = async () => {
-  return await apiCall('/client-purchases', { method: 'GET' });
+  const raw = await apiCall('/client-purchases', { method: 'GET' });
+  return unwrapApiList(raw)
+    .map(normalizeClientPurchase)
+    .filter(Boolean);
 };
 
 /**
@@ -1145,10 +1318,11 @@ export const fetchClientPurchaseById = async (id) => {
  * @returns {Promise<Object>} Created client purchase
  */
 export const createClientPurchase = async (purchaseData) => {
-  return await apiCall('/client-purchases', {
+  const raw = await apiCall('/client-purchases', {
     method: 'POST',
     body: JSON.stringify(purchaseData),
   });
+  return normalizeClientPurchase(raw);
 };
 
 /**
@@ -1197,7 +1371,8 @@ export const addClientPayment = async (purchaseId, paymentData) => {
  * @returns {Promise<Array>} List of all payments
  */
 export const fetchAllPayments = async () => {
-  return await apiCall('/client-purchases/payments', { method: 'GET' });
+  const raw = await apiCall('/client-purchases/payments', { method: 'GET' });
+  return unwrapApiList(raw).map((p) => unwrapApiEntity(p));
 };
 
 /**

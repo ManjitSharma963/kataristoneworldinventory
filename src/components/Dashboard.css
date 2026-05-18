@@ -1786,7 +1786,7 @@
 
 .inventory-table.data-table th,
 .inventory-table.data-table td {
-  padding: 16px 14px;
+  padding: 11px 9px;
 }
 
 .search-wrapper {
@@ -2050,21 +2050,81 @@
  * Without a floor on the product column, word-break:break-word on .product-name-cell lets
  * the browser shrink that column to a few characters wide.
  */
-.inventory-table {
-  min-width: 1140px;
+.inventory-table.data-table {
+  width: max-content;
+  max-width: 100%;
+  min-width: 900px;
   table-layout: auto;
 }
 
-.inventory-table .product-name-cell {
-  min-width: 13.5rem;
-  max-width: 26rem;
+/* Allow long labels/values to wrap; .data-table defaults to nowrap */
+.inventory-table.data-table th,
+.inventory-table.data-table td {
   white-space: normal;
-  word-break: normal;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  vertical-align: top;
+  line-height: 1.4;
+}
+
+.inventory-table.data-table th {
+  line-height: 1.35;
+}
+
+.inventory-table .product-name-cell {
+  min-width: 14rem;
+  max-width: 22rem;
+  white-space: normal;
+  word-break: break-word;
   overflow-wrap: break-word;
 }
 
+.inventory-table th:nth-child(2),
+.inventory-table td:nth-child(2) {
+  min-width: 7.5rem;
+  max-width: 10rem;
+}
+
+.inventory-table th:nth-child(3),
+.inventory-table td:nth-child(3) {
+  min-width: 9rem;
+}
+
+.inventory-table th:nth-child(4),
+.inventory-table td:nth-child(4) {
+  min-width: 7.5rem;
+}
+
+.inventory-table th:nth-child(5),
+.inventory-table td:nth-child(5) {
+  min-width: 6.5rem;
+  max-width: 9rem;
+}
+
+.inventory-table th.total-col,
+.inventory-table td.total-col {
+  min-width: 8.5rem;
+}
+
+.inventory-table .product-type-badge,
+.inventory-table .color-badge {
+  white-space: normal;
+  text-align: center;
+  max-width: 100%;
+  overflow-wrap: break-word;
+  line-height: 1.35;
+}
+
+.inventory-table th:last-child,
+.inventory-table td.actions-cell {
+  width: 1%;
+  min-width: 5.5rem;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 .inventory-table .product-name-cell .product-name {
-  word-break: normal;
+  word-break: break-word;
   overflow-wrap: break-word;
 }
 

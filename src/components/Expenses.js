@@ -23,9 +23,6 @@ import {
   fetchAllPayments,
   fetchClientRunningLedger,
   fetchClientDueAlerts,
-  fetchClientSupplierAccounts,
-  createClientSupplierAccount,
-  updateClientSupplierAccount,
   apiGetDailyBudget,
   apiGetDailyBudgetByDate,
   apiGetBalanceSummary,
@@ -204,27 +201,18 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [selectedClientPurchase, setSelectedClientPurchase] = useState(null);
   const [clientFilter, setClientFilter] = useState(''); // Filter by client name
   const [clientDueAlerts, setClientDueAlerts] = useState([]);
-  const [clientSupplierAccounts, setClientSupplierAccounts] = useState([]);
-  const [showClientCreditPanel, setShowClientCreditPanel] = useState(false);
   const [showClientRunningLedgerModal, setShowClientRunningLedgerModal] = useState(false);
   const [clientRunningLedgerTitle, setClientRunningLedgerTitle] = useState('');
   const [clientRunningLedgerRows, setClientRunningLedgerRows] = useState([]);
   const [loadingClientRunningLedger, setLoadingClientRunningLedger] = useState(false);
-  const [supplierAccountForm, setSupplierAccountForm] = useState({
-    clientName: '',
-    creditLimit: '',
-    paymentTermsDays: '',
-    displayName: '',
-  });
-  const [editingSupplierAccountId, setEditingSupplierAccountId] = useState(null);
   const [showPaymentsTable, setShowPaymentsTable] = useState(false); // Toggle between purchases and payments view
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   // Start with 0 so we always show database value after fetch; never show stale localStorage first
   const [budgetInHand, setBudgetInHand] = useState(0);
-  /** Optional daily cap row (daily_budget); remaining/spent still from that snapshot when set. */
+  /** Optional daily cap amount; remaining/spent derived from transactions when set. */
   const [todayFromEvents, setTodayFromEvents] = useState({ expense: 0, remaining: 0 });
-  /** Phase 4: GET /api/v1/balance/summary — net by payment rail from unified_financial_ledger. */
+  /** GET /api/v1/balance/summary — net by payment rail from transactions. */
   const [ledgerBalances, setLedgerBalances] = useState({ inHand: 0, bank: 0, total: 0 });
   /** Today’s DEBIT totals by rail (same API); includes client/supplier bank payments, not only rows in the expense list. */
   const [ledgerTodayDebits, setLedgerTodayDebits] = useState({ cashUpi: 0, bank: 0 });
@@ -409,7 +397,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return x;
   };
 
-  /** Ledger nets (Phase 4) + optional daily_budget cap for the modal. */
+  /** Ledger nets from transactions + optional daily cap for the modal. */
   const loadBudgetState = async () => {
     const todayStr = getLocalDateString();
     try {
@@ -483,6 +471,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   // Automatically fetch daily budget when user opens the Expenses tab (component mounts)
   useEffect(() => {
     loadBudgetState();
+  }, []);
+
+  useEffect(() => {
+    const onLedgerRefresh = () => {
+      loadBudgetState();
+    };
+    window.addEventListener('kataria-ledger-refresh', onLedgerRefresh);
+    return () => window.removeEventListener('kataria-ledger-refresh', onLedgerRefresh);
   }, []);
 
   const loadLoanLenders = async () => {
@@ -971,7 +967,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     doc.text(`Filters: From ${fromText} | To ${toText} | Type ${typeText}`, 40, 54);
     doc.setFontSize(9);
     doc.setTextColor(100, 116, 139);
-    doc.text('Source: unified_financial_ledger (all payment rails).', 40, 66);
+    doc.text('Source: transactions ledger (all payment rails).', 40, 66);
     doc.setTextColor(0, 0, 0);
     doc.setFontSize(10);
     autoTable(doc, {
@@ -1290,36 +1286,35 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     loadAllPayments();
   }, []);
 
-  const refreshClientAlertsAndSupplierAccounts = useCallback(async () => {
+  const refreshClientDueAlerts = useCallback(async () => {
     try {
-      const [alerts, accounts] = await Promise.all([
-        fetchClientDueAlerts(),
-        fetchClientSupplierAccounts(),
-      ]);
+      const alerts = await fetchClientDueAlerts();
       setClientDueAlerts(Array.isArray(alerts) ? alerts : []);
-      setClientSupplierAccounts(Array.isArray(accounts) ? accounts : []);
     } catch (e) {
-      console.error('refreshClientAlertsAndSupplierAccounts', e);
+      console.error('refreshClientDueAlerts', e);
     }
   }, []);
 
   useEffect(() => {
     if (activeTab === 'client') {
-      refreshClientAlertsAndSupplierAccounts();
+      refreshClientDueAlerts();
     }
-  }, [activeTab, refreshClientAlertsAndSupplierAccounts]);
+  }, [activeTab, refreshClientDueAlerts]);
+
+  const openClientPaymentForm = useCallback(() => {
+    setShowClientPaymentForm(true);
+    setClientPaymentFormData({
+      purchaseId: '',
+      amount: '',
+      date: getLocalDateString(),
+      paymentMethod: 'cash',
+      notes: '',
+    });
+  }, []);
 
   const loadClientPayments = async () => {
     try {
-      // Try to fetch from API first
-      const rawPurchases = await fetchClientPurchases();
-      const purchases = Array.isArray(rawPurchases)
-        ? rawPurchases
-        : Array.isArray(rawPurchases?.data)
-          ? rawPurchases.data
-          : Array.isArray(rawPurchases?.content)
-            ? rawPurchases.content
-            : [];
+      const purchases = await fetchClientPurchases();
       if (purchases.length > 0) {
         // Fetch all payments and merge them into purchases to ensure paid amounts are accurate
         try {
@@ -1371,10 +1366,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         
         // Reload all payments to enrich them with purchase details (for All Payments view)
         await loadAllPayments();
-        await refreshClientAlertsAndSupplierAccounts();
+        await refreshClientDueAlerts();
       } else {
-        // Avoid stale/local IDs that may not exist server-side
         setClientPayments([]);
+        try {
+          localStorage.removeItem('clientPayments');
+        } catch {
+          /* ignore */
+        }
       }
     } catch (error) {
       console.error('Error loading client payments from API:', error);
@@ -1997,6 +1996,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         category: 'client_purchase_payment',
         description:
           r.description ||
+          r.notes ||
           (ref != null ? `Client / supplier payment (ref ${ref})` : 'Client / supplier payment'),
         amount: Number(r.amount) || 0,
         paymentMethod: fmtPm(r.paymentMode ?? r.payment_mode),
@@ -2241,7 +2241,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               <div className="form-group">
                 <label>Daily budget amount (₹)</label>
                 <p style={{ margin: '4px 0 8px', fontSize: '13px', color: '#666' }}>
-                  Optional daily cap (stored in daily_budget). Remaining vs that cap:{' '}
+                  Optional daily cap. Remaining vs that cap:{' '}
                   <strong>₹{(Number(todayFromEvents.remaining) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                   . Ledger nets are on the main Expenses tab (GET /api/v1/balance/summary).
                 </p>
@@ -2629,42 +2629,54 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
       {/* Tab Navigation */}
       <div className="expenses-tab-navigation">
-        <button
-          className={`expense-tab ${activeTab === 'all' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('all');
-            setCurrentPage(1);
-          }}
-        >
-          Daily Expenses
-        </button>
-        <button
-          className={`expense-tab ${activeTab === 'loan' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('loan');
-            setCurrentPage(1);
-          }}
-        >
-          Loan
-        </button>
-        <button
-          className={`expense-tab ${activeTab === 'employee' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('employee');
-            setCurrentPage(1);
-          }}
-        >
-          Employee Payroll
-        </button>
-        <button
-          className={`expense-tab ${activeTab === 'client' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('client');
-            setCurrentPage(1);
-          }}
-        >
-          Client Transactions
-        </button>
+        <div className="expenses-tab-navigation__tabs">
+          <button
+            className={`expense-tab ${activeTab === 'all' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('all');
+              setCurrentPage(1);
+            }}
+          >
+            Daily Expenses
+          </button>
+          <button
+            className={`expense-tab ${activeTab === 'loan' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('loan');
+              setCurrentPage(1);
+            }}
+          >
+            Loan
+          </button>
+          <button
+            className={`expense-tab ${activeTab === 'employee' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('employee');
+              setCurrentPage(1);
+            }}
+          >
+            Employee Payroll
+          </button>
+          <button
+            className={`expense-tab ${activeTab === 'client' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('client');
+              setCurrentPage(1);
+            }}
+          >
+            Client Transactions
+          </button>
+        </div>
+        {activeTab === 'client' && (
+          <div className="expenses-tab-navigation__actions">
+            <button type="button" className="btn btn-secondary" onClick={openClientPaymentForm}>
+              💰 Make Payment
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => setShowClientPurchaseForm(true)}>
+              + Add Client Purchase
+            </button>
+          </div>
+        )}
       </div>
 
       {/* All Expenses Tab Content */}
@@ -2673,7 +2685,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           {/* Budget in hand card – daily / date-wise */}
           <div className="budget-in-hand-card">
             <div className="budget-in-hand-header">
-              <span className="budget-in-hand-title" title="Net position from unified_financial_ledger (CREDIT − DEBIT by payment mode).">
+              <span className="budget-in-hand-title" title="Net position from transactions (CREDIT − DEBIT by payment mode).">
                 💰 Ledger balances
               </span>
             </div>
@@ -2704,7 +2716,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   value: splitCashUpi,
                   color: '#0d9488',
                   title:
-                    'Today’s money out (DEBIT) on cash/UPI in the unified ledger — daily expenses, client/supplier payments, payroll cash, etc. Not limited to rows in the table below.',
+                    'Today’s operating expenses on cash/UPI only — excludes bill cancellations and partial return refunds (BILL_REVERSAL / BILL_RETURN).',
                 },
                 {
                   label: 'Expenses in card + bank transfer + cheque',
@@ -3800,33 +3812,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       {/* Client Payment Tab Content */}
       {activeTab === 'client' && (
         <div className="expenses-tab-content">
-          <div className="salaries-actions" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" onClick={() => setShowClientPurchaseForm(true)}>
-              + Add Client Purchase
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => setShowClientCreditPanel((v) => !v)}
-            >
-              {showClientCreditPanel ? 'Hide credit & terms' : 'Credit & terms'}
-            </button>
-            {clientPayments.length > 0 && (
-              <button className="btn btn-secondary" onClick={() => {
-                setShowClientPaymentForm(true);
-                setClientPaymentFormData({
-                  purchaseId: '',
-                  amount: '',
-                  date: getLocalDateString(),
-                  paymentMethod: 'cash',
-                  notes: ''
-                });
-              }}>
-                💰 Make Payment
-              </button>
-            )}
-            {clientPayments.length > 0 && (
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginLeft: 'auto' }}>
+          {clientPayments.length > 0 && (
+          <div className="salaries-actions" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                 <button 
                   className={`btn ${!showPaymentsTable ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={async () => {
@@ -3850,8 +3838,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   💰 All Payments
                 </button>
               </div>
-            )}
           </div>
+          )}
 
           {Array.isArray(clientDueAlerts) && clientDueAlerts.length > 0 && (
             <div
@@ -3877,184 +3865,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             </div>
           )}
 
-          {showClientCreditPanel && (
-            <div
-              style={{
-                marginTop: '16px',
-                padding: '16px 18px',
-                borderRadius: '14px',
-                background: '#e8eef5',
-                border: '1px solid #cbd5e1',
-              }}
-            >
-              <h4 style={{ margin: '0 0 10px', fontSize: '16px' }}>Credit limits &amp; payment terms</h4>
-              <p style={{ fontSize: '12px', color: '#475569', margin: '0 0 14px', lineHeight: 1.45 }}>
-                Match supplier names from purchases (case-insensitive). If a purchase has no due date, the system sets due = purchase date + terms days.
-              </p>
-              {(clientSupplierAccounts || []).length > 0 && (
-                <div style={{ overflowX: 'auto', marginBottom: '16px' }}>
-                  <table className="data-table expenses-table" style={{ fontSize: '13px' }}>
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Credit limit ₹</th>
-                        <th>Terms (days)</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(clientSupplierAccounts || []).map((acc) => (
-                        <tr key={acc.id}>
-                          <td>{acc.displayName || acc.clientKey}</td>
-                          <td>{acc.creditLimit != null ? Number(acc.creditLimit).toLocaleString('en-IN') : '—'}</td>
-                          <td>{acc.paymentTermsDays != null ? acc.paymentTermsDays : '—'}</td>
-                          <td>
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              style={{ fontSize: '12px', padding: '4px 10px' }}
-                              onClick={() => {
-                                setEditingSupplierAccountId(acc.id);
-                                setSupplierAccountForm({
-                                  clientName: acc.clientKey || '',
-                                  displayName: acc.displayName || '',
-                                  creditLimit: acc.creditLimit != null ? String(acc.creditLimit) : '',
-                                  paymentTermsDays:
-                                    acc.paymentTermsDays != null ? String(acc.paymentTermsDays) : '',
-                                });
-                              }}
-                            >
-                              Edit
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  try {
-                    if (editingSupplierAccountId) {
-                      await updateClientSupplierAccount(editingSupplierAccountId, {
-                        displayName: supplierAccountForm.displayName?.trim() || undefined,
-                        creditLimit:
-                          supplierAccountForm.creditLimit === ''
-                            ? null
-                            : Number(supplierAccountForm.creditLimit),
-                        paymentTermsDays:
-                          supplierAccountForm.paymentTermsDays === ''
-                            ? null
-                            : parseInt(supplierAccountForm.paymentTermsDays, 10),
-                      });
-                    } else {
-                      await createClientSupplierAccount({
-                        clientName: supplierAccountForm.clientName.trim(),
-                        displayName: supplierAccountForm.displayName?.trim() || undefined,
-                        creditLimit:
-                          supplierAccountForm.creditLimit === ''
-                            ? null
-                            : Number(supplierAccountForm.creditLimit),
-                        paymentTermsDays:
-                          supplierAccountForm.paymentTermsDays === ''
-                            ? null
-                            : parseInt(supplierAccountForm.paymentTermsDays, 10),
-                      });
-                    }
-                    showToast('Supplier account saved', 'success');
-                    setEditingSupplierAccountId(null);
-                    setSupplierAccountForm({
-                      clientName: '',
-                      creditLimit: '',
-                      paymentTermsDays: '',
-                      displayName: '',
-                    });
-                    await refreshClientAlertsAndSupplierAccounts();
-                  } catch (err) {
-                    showToast(err.message || 'Could not save supplier account', 'error');
-                  }
-                }}
-              >
-                {editingSupplierAccountId && (
-                  <p style={{ fontSize: '12px', marginBottom: '8px' }}>
-                    Editing account #{editingSupplierAccountId}{' '}
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{ fontSize: '11px', padding: '2px 8px' }}
-                      onClick={() => {
-                        setEditingSupplierAccountId(null);
-                        setSupplierAccountForm({
-                          clientName: '',
-                          creditLimit: '',
-                          paymentTermsDays: '',
-                          displayName: '',
-                        });
-                      }}
-                    >
-                      Cancel edit
-                    </button>
-                  </p>
-                )}
-                {!editingSupplierAccountId && (
-                  <div className="form-group">
-                    <label>Client / supplier name (as on purchases) *</label>
-                    <input
-                      value={supplierAccountForm.clientName}
-                      onChange={(e) =>
-                        setSupplierAccountForm({ ...supplierAccountForm, clientName: e.target.value })
-                      }
-                      required={!editingSupplierAccountId}
-                    />
-                  </div>
-                )}
-                <div className="form-group">
-                  <label>Display name (optional)</label>
-                  <input
-                    value={supplierAccountForm.displayName}
-                    onChange={(e) =>
-                      setSupplierAccountForm({ ...supplierAccountForm, displayName: e.target.value })
-                    }
-                  />
-                </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>Credit limit ₹</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={supplierAccountForm.creditLimit}
-                      onChange={(e) =>
-                        setSupplierAccountForm({ ...supplierAccountForm, creditLimit: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Payment terms (days)</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={supplierAccountForm.paymentTermsDays}
-                      onChange={(e) =>
-                        setSupplierAccountForm({
-                          ...supplierAccountForm,
-                          paymentTermsDays: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-                </div>
-                <button type="submit" className="btn btn-primary">
-                  {editingSupplierAccountId ? 'Update' : 'Add account'}
-                </button>
-              </form>
-            </div>
-          )}
-          
           {/* Client Filter */}
           {clientPayments.length > 0 && (
             <div style={{ marginTop: '15px', marginBottom: '15px', display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -4673,9 +4483,22 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                             )
                             .map((purchase) => {
                         const payments = purchase?.payments || [];
-                        const paidAmount = Number((Array.isArray(payments) ? payments.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0) : 0) || 0) || 0;
+                        const paidFromLines = Number(
+                          (Array.isArray(payments)
+                            ? payments.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0)
+                            : 0) || 0
+                        ) || 0;
+                        const paidAmount = Math.max(
+                          paidFromLines,
+                          Number(purchase?.amountPaid ?? purchase?.amount_paid ?? 0) || 0
+                        );
                         const totalAmount = Number(parseFloat(purchase?.totalAmount || 0) || 0) || 0;
-                        const pendingAmount = Number((totalAmount - paidAmount) || 0) || 0;
+                        const outstandingRaw =
+                          purchase?.amountOutstanding ?? purchase?.amount_outstanding;
+                        const pendingAmount =
+                          outstandingRaw != null && Number.isFinite(Number(outstandingRaw))
+                            ? Math.max(0, Number(outstandingRaw))
+                            : Math.max(0, totalAmount - paidAmount);
                         const isFullyPaid = pendingAmount <= 0;
                         const safePaid = isNaN(paidAmount) ? 0 : paidAmount;
                         const safeTotal = isNaN(totalAmount) ? 0 : totalAmount;
@@ -4906,7 +4729,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               <div className="empty-state-wrapper">
                 <span className="empty-icon">💼</span>
                 <p className="empty-state">No client purchases added yet</p>
-                <p className="empty-subtitle">Click "Add Client Purchase" to record your first purchase</p>
+                <p className="empty-subtitle">
+                  Record stock bought on credit from a supplier or client. Retail bill customers, loans, and customer
+                  advances appear under Sales / Ledger, not here.
+                </p>
               </div>
             )}
           </div>
@@ -5210,4 +5036,5 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 };
 
 export default Expenses;
+
 

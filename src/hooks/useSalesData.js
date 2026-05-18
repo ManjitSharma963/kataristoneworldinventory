@@ -25,7 +25,10 @@ export const useSalesData = (dateFrom, dateTo) => {
   const refreshSales = useCallback(async () => {
     try {
       setLoading(true);
-      const raw = await fetchSalesBills();
+      const today = toIsoDate(new Date());
+      const fromIso = toIsoDate(dateFrom) || today;
+      const toIso = toIsoDate(dateTo) || fromIso;
+      const raw = await fetchSalesBills({ dateFrom: fromIso, dateTo: toIso });
       const allBills = Array.isArray(raw)
         ? raw
         : Array.isArray(raw?.data)
@@ -38,7 +41,7 @@ export const useSalesData = (dateFrom, dateTo) => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dateFrom, dateTo]);
 
   useEffect(() => {
     refreshSales();
@@ -68,4 +71,3 @@ export const useSalesData = (dateFrom, dateTo) => {
 
   return { sales, setSales, loading, paymentBandTotals, refreshSales };
 };
-

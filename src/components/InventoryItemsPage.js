@@ -96,6 +96,8 @@ function formatActionLabel(action) {
   const u = String(action).toUpperCase();
   if (u === 'SALE') return 'Sale';
   if (u === 'ADD') return 'Add';
+  if (u === 'OPENING') return 'Opening stock';
+  if (u === 'ADJUSTMENT') return 'Stock adjust';
   if (u === 'UPDATE') return 'Update';
   if (u === 'ADJUST') return 'Adjust';
   return action;
@@ -107,13 +109,15 @@ function localTodayYMD() {
 }
 
 function productToFormData(p) {
-  if (!p) return { ...initialFormData };
+  if (!p || typeof p !== 'object') return { ...initialFormData };
   const n = (v) => (v == null || v === '' ? '' : String(v));
   return {
     name: p.name || '',
     slug: p.slug || '',
-    product_type: p.productType || p.product_type || '',
-    price_per_sqft: n(p.pricePerUnit ?? p.price_per_sqft),
+    product_type: p.productType || p.product_type || p.category || '',
+    price_per_sqft: n(
+      p.pricePerUnit ?? p.price_per_sqft ?? p.pricePerSqft ?? p.price_per_sqft_before ?? p.basePrice ?? p.price
+    ),
     total_sqft_stock: n(p.quantity ?? p.totalSqftStock ?? p.total_sqft_stock),
     unit: p.unit || '',
     hsn_number: p.hsnNumber || p.hsn_number || '',
@@ -585,6 +589,18 @@ const InventoryItemsPage = () => {
     setUpdateFormData({ ...initialFormData });
     setUpdateAuditNotes('');
   };
+
+  /** Open update modal and load full product from API (prefills all inputs; user may edit before save). */
+  const openUpdateInventoryForProduct = useCallback((item) => {
+    const id = item?.id ?? item?.inventoryId;
+    if (id == null || id === '') {
+      window.alert('This row has no product id.');
+      return;
+    }
+    setUpdateAuditNotes('');
+    setShowUpdateInventoryModal(true);
+    setSelectedUpdateProductId(String(id));
+  }, []);
 
   const closeUpdateInventoryModal = () => {
     setShowUpdateInventoryModal(false);
@@ -1216,6 +1232,16 @@ const InventoryItemsPage = () => {
                           >
                             👁️
                           </button>
+                          {isAdmin() ? (
+                            <button
+                              type="button"
+                              className="btn-icon btn-edit"
+                              title="Update inventory — load full details from server"
+                              onClick={() => openUpdateInventoryForProduct(item)}
+                            >
+                              ✏️
+                            </button>
+                          ) : null}
                           <button type="button" className="btn-icon btn-delete" title="Delete" onClick={() => handleDeleteInventory(item)}>🗑️</button>
                         </td>
                       </tr>

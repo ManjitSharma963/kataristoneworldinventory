@@ -1,9 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  computeGstSplit,
+  resolveDeliveryState,
+  SELLER_STATE,
+} from '../utils/gst';
+import {
   getCart,
   saveCart,
   removeFromCart,
-  clearCart,
+  resetCartSession,
   getCartCount,
   getCartItemStockCap,
   getCartItemMaxQuantity,
@@ -11,6 +16,7 @@ import {
 } from '../utils/cart';
 import { API_BASE_URL } from '../config/api';
 import { handleApiResponse, isAdmin, fetchCustomerByPhone, fetchCustomerAdvanceSummary } from '../utils/api';
+import { formatCompositeAddress, mergeAddressFromSources } from '../utils/addressUtils';
 import { Button } from 'primereact/button';
 import { InputText } from 'primereact/inputtext';
 import { Toast } from 'primereact/toast';
@@ -26,8 +32,9 @@ const parsePayInput = (v) => {
 };
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const RUPEE = '\u20B9';
 
-/** Strip leading zeros from numeric string input (e.g. "00001" → "1"). */
+/** Strip leading zeros from numeric string input (e.g. "00001" ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ "1"). */
 const stripLeadingZeros = (str) => {
   if (str === '' || str === null || str === undefined) return str;
   const s = String(str).trim();
@@ -49,7 +56,7 @@ const sanitizeDiscountInput = (raw) => {
   return stripLeadingZeros(s);
 };
 
-/** Parse discount string for totals / API (incomplete "0." → 0 until more digits). */
+/** Parse discount string for totals / API (incomplete "0." ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 0 until more digits). */
 const discountInputToNumber = (s) => {
   if (s === '' || s === null || s === undefined) return 0;
   const t = String(s).trim();
@@ -82,6 +89,8 @@ function computeCartFinancials(
   const transportationChargeNum =
     typeof transportationCharge === 'number' ? transportationCharge : parseFloat(transportationCharge) || 0;
   const otherExpenseNum = typeof otherExpense === 'number' ? otherExpense : parseFloat(otherExpense) || 0;
+  const itemsPlusCharges =
+    subtotal + labourChargeNum + transportationChargeNum + otherExpenseNum;
   const grandTotal = total + labourChargeNum + transportationChargeNum + otherExpenseNum;
   const advanceWillApply =
     advanceRemaining != null && advanceRemaining > 0
@@ -90,6 +99,7 @@ function computeCartFinancials(
   const netDueAfterAdvance = Math.round(Math.max(0, grandTotal - advanceWillApply) * 100) / 100;
   return {
     subtotal,
+    itemsPlusCharges,
     taxRateNum,
     tax,
     total,
@@ -102,69 +112,35 @@ function computeCartFinancials(
   };
 }
 
-export default function CartModal({ isOpen, onClose, onBillCreated }) {
+export default function CartModal({
+  isOpen,
+  onClose,
+  onBillCreated,
+  supplementaryParent = null,
+  onSupplementaryCheckoutComplete,
+}) {
   const [cart, setCart] = useState([]);
   const [cartCount, setCartCount] = useState(0);
-  const [taxRate, setTaxRate] = useState(0);
-  const [discountInput, setDiscountInput] = useState(() => {
-    const saved = localStorage.getItem('cartDiscountAmount');
-    if (saved === null || saved === '') return '';
-    return sanitizeDiscountInput(saved);
-  });
-  const [mobileNumber, setMobileNumber] = useState(() => {
-    const saved = localStorage.getItem('cartMobileNumber');
-    return saved || '';
-  });
-  const [customerName, setCustomerName] = useState(() => {
-    const saved = localStorage.getItem('cartCustomerName');
-    return saved || '';
-  });
-  const [addressLine1, setAddressLine1] = useState(() => {
-    const saved = localStorage.getItem('cartAddressLine1');
-    return saved || '';
-  });
-  const [city, setCity] = useState(() => {
-    const saved = localStorage.getItem('cartCity');
-    return saved || '';
-  });
-  const [state, setState] = useState(() => {
-    const saved = localStorage.getItem('cartState');
-    return saved || '';
-  });
-  const [pincode, setPincode] = useState(() => {
-    const saved = localStorage.getItem('cartPincode');
-    return saved || '';
-  });
-  const [gstin, setGstin] = useState(() => {
-    const saved = localStorage.getItem('cartGstin');
-    return saved || '';
-  });
-  const [email, setEmail] = useState(() => {
-    const saved = localStorage.getItem('cartEmail');
-    return saved || '';
-  });
-  const [billType, setBillType] = useState(() => {
-    const saved = localStorage.getItem('cartBillType');
-    return saved || 'NON-GST';
-  });
-  const [payCash, setPayCash] = useState(() => localStorage.getItem('cartPayCash') || '');
-  const [payUpi, setPayUpi] = useState(() => localStorage.getItem('cartPayUpi') || '');
-  const [payBank, setPayBank] = useState(() => localStorage.getItem('cartPayBank') || '');
-  const [payCheque, setPayCheque] = useState(() => localStorage.getItem('cartPayCheque') || '');
-  const [labourCharge, setLabourCharge] = useState(() => {
-    const saved = localStorage.getItem('cartLabourCharge');
-    return saved ? parseFloat(saved) : 0;
-  });
-  const [transportationCharge, setTransportationCharge] = useState(() => {
-    const saved = localStorage.getItem('cartTransportationCharge');
-    return saved ? parseFloat(saved) : 0;
-  });
-  const [otherExpense, setOtherExpense] = useState(() => {
-    const saved = localStorage.getItem('cartOtherExpense');
-    return saved !== null && saved !== '' ? (parseFloat(saved) || 0) : 0;
-  });
-  const [gstVehicleNo, setGstVehicleNo] = useState(() => localStorage.getItem('cartGstVehicleNo') || '');
-  const [gstDeliveryAddress, setGstDeliveryAddress] = useState(() => localStorage.getItem('cartGstDeliveryAddress') || '');
+  const [taxRate, setTaxRate] = useState(18);
+  const [discountInput, setDiscountInput] = useState('');
+  const [mobileNumber, setMobileNumber] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [addressLine1, setAddressLine1] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
+  const [pincode, setPincode] = useState('');
+  const [gstin, setGstin] = useState('');
+  const [email, setEmail] = useState('');
+  const [billType, setBillType] = useState('GST');
+  const [payCash, setPayCash] = useState('');
+  const [payUpi, setPayUpi] = useState('');
+  const [payBank, setPayBank] = useState('');
+  const [payCheque, setPayCheque] = useState('');
+  const [labourCharge, setLabourCharge] = useState(0);
+  const [transportationCharge, setTransportationCharge] = useState(0);
+  const [otherExpense, setOtherExpense] = useState(0);
+  const [gstVehicleNo, setGstVehicleNo] = useState('');
+  const [gstDeliveryAddress, setGstDeliveryAddress] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [createBillNote, setCreateBillNote] = useState('');
@@ -175,7 +151,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
   const [customerSectionCollapsed, setCustomerSectionCollapsed] = useState(false);
   /** Remaining advance for current mobile (null = unknown / not loaded). */
   const [advanceRemaining, setAdvanceRemaining] = useState(null);
+  const [oldBillPendingAmount, setOldBillPendingAmount] = useState(0);
   const toast = React.useRef(null);
+
+  const supplementaryCheckoutKey = supplementaryParent?.parentBillId
+    ? `${supplementaryParent.parentBillId}:${supplementaryParent.parentBillType || ''}`
+    : '';
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +164,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       const digits = String(mobileNumber || '').replace(/\D/g, '');
       if (digits.length !== 10) {
         setAdvanceRemaining(null);
+        setOldBillPendingAmount(0);
         return;
       }
       try {
@@ -194,10 +176,16 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
         if (cust && typeof cust === 'object') {
           setCustomerName(String(cust.customerName || cust.name || ''));
           setEmail(String(cust.email || ''));
-          setAddressLine1(String(cust.address || ''));
-          setCity(String(cust.city || cust.location || ''));
-          setState(String(cust.state || ''));
-          setPincode(String(cust.pincode || ''));
+          const merged = mergeAddressFromSources({
+            storedAddress: cust.address,
+            city: cust.city || cust.location,
+            state: cust.state,
+            pincode: cust.pincode,
+          });
+          setAddressLine1(merged.line1);
+          setCity(merged.city);
+          setState(merged.state);
+          setPincode(merged.pincode);
           setGstin(String(cust.gstin || ''));
         }
         if (cancelled) return;
@@ -207,8 +195,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
           : rawSummary;
         if (cancelled) return;
         setAdvanceRemaining(Number(sum.remaining) || 0);
+        setOldBillPendingAmount(Number(sum.oldBillPendingAmount) || 0);
       } catch {
-        if (!cancelled) setAdvanceRemaining(0);
+        if (!cancelled) {
+          setAdvanceRemaining(0);
+          setOldBillPendingAmount(0);
+        }
       }
     })();
     return () => {
@@ -233,84 +225,86 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     };
   }, [isOpen]);
 
+  /** Prefill customer / tax when opening checkout for a supplementary (exchange) bill. */
   useEffect(() => {
-    localStorage.setItem('cartTaxRate', taxRate.toString());
-  }, [taxRate]);
+    if (!isOpen || !supplementaryCheckoutKey || !supplementaryParent?.parentBillId) return;
+    const p = supplementaryParent;
+    const digits = String(p.customerMobileNumber || '').replace(/\D/g, '').slice(-10);
+    if (digits.length === 10) {
+      setMobileNumber(digits);
+    }
+    if (p.customerName) setCustomerName(String(p.customerName).trim());
+    if (p.customerEmail) setEmail(String(p.customerEmail).trim());
+    if (p.gstin) setGstin(String(p.gstin).trim());
+    if (p.customerAddress) {
+      const merged = mergeAddressFromSources({ storedAddress: p.customerAddress });
+      setAddressLine1(merged.line1);
+      setCity(merged.city);
+      setState(merged.state);
+      setPincode(merged.pincode);
+    }
+    setBillType(p.parentBillType === 'GST' ? 'GST' : 'NON-GST');
+    const tp = p.defaultTaxPercentage;
+    if (typeof tp === 'number' && !Number.isNaN(tp) && tp >= 0) {
+      setTaxRate(p.parentBillType === 'GST' ? (tp > 0 ? tp : 18) : 0);
+    }
+    if (p.supplementaryReason) {
+      setCreateBillNote(String(p.supplementaryReason).trim().slice(0, 2000));
+    }
+  }, [isOpen, supplementaryCheckoutKey, supplementaryParent]);
 
+  // Keep defaults aligned: GST => default tax 18%, Non-GST => tax 0%.
   useEffect(() => {
-    localStorage.setItem('cartDiscountAmount', discountInput);
-  }, [discountInput]);
+    if (billType === 'GST') {
+      setTaxRate((prev) => {
+        const n = typeof prev === 'number' ? prev : parseFloat(prev);
+        return Number.isFinite(n) && n > 0 ? n : 18;
+      });
+    } else {
+      setTaxRate(0);
+    }
+  }, [billType]);
 
   const discountAmountNum = useMemo(() => discountInputToNumber(discountInput), [discountInput]);
 
-  useEffect(() => {
-    localStorage.setItem('cartMobileNumber', mobileNumber);
-  }, [mobileNumber]);
+  const resetCheckoutFormState = useCallback(() => {
+    setCustomerName('');
+    setMobileNumber('');
+    setEmail('');
+    setAddressLine1('');
+    setCity('');
+    setState('');
+    setPincode('');
+    setGstin('');
+    setTaxRate(18);
+    setDiscountInput('');
+    setBillType('GST');
+    setPayCash('');
+    setPayUpi('');
+    setPayBank('');
+    setPayCheque('');
+    setGstVehicleNo('');
+    setGstDeliveryAddress('');
+    setLabourCharge(0);
+    setTransportationCharge(0);
+    setOtherExpense(0);
+    setCreateBillNote('');
+    setAdvanceRemaining(null);
+    setOldBillPendingAmount(0);
+    setSubmitError('');
+    setEditingPriceItemId(null);
+    setEditingPriceValue('');
+    setEditingQtyItemId(null);
+    setEditingQtyValue('');
+    setCustomerSectionCollapsed(false);
+  }, []);
 
-  useEffect(() => {
-    localStorage.setItem('cartCustomerName', customerName);
-  }, [customerName]);
-
-  useEffect(() => {
-    localStorage.setItem('cartAddressLine1', addressLine1);
-  }, [addressLine1]);
-
-  useEffect(() => {
-    localStorage.setItem('cartCity', city);
-  }, [city]);
-
-  useEffect(() => {
-    localStorage.setItem('cartState', state);
-  }, [state]);
-
-  useEffect(() => {
-    localStorage.setItem('cartPincode', pincode);
-  }, [pincode]);
-
-  useEffect(() => {
-    localStorage.setItem('cartGstin', gstin);
-  }, [gstin]);
-
-  useEffect(() => {
-    localStorage.setItem('cartEmail', email);
-  }, [email]);
-
-  useEffect(() => {
-    localStorage.setItem('cartBillType', billType);
-  }, [billType]);
-
-  useEffect(() => {
-    localStorage.setItem('cartPayCash', payCash);
-  }, [payCash]);
-  useEffect(() => {
-    localStorage.setItem('cartPayUpi', payUpi);
-  }, [payUpi]);
-  useEffect(() => {
-    localStorage.setItem('cartPayBank', payBank);
-  }, [payBank]);
-  useEffect(() => {
-    localStorage.setItem('cartPayCheque', payCheque);
-  }, [payCheque]);
-
-  useEffect(() => {
-    localStorage.setItem('cartGstVehicleNo', gstVehicleNo);
-  }, [gstVehicleNo]);
-
-  useEffect(() => {
-    localStorage.setItem('cartGstDeliveryAddress', gstDeliveryAddress);
-  }, [gstDeliveryAddress]);
-
-  useEffect(() => {
-    localStorage.setItem('cartLabourCharge', labourCharge.toString());
-  }, [labourCharge]);
-
-  useEffect(() => {
-    localStorage.setItem('cartTransportationCharge', transportationCharge.toString());
-  }, [transportationCharge]);
-
-  useEffect(() => {
-    localStorage.setItem('cartOtherExpense', otherExpense.toString());
-  }, [otherExpense]);
+  const clearCartAndSession = useCallback(() => {
+    resetCartSession();
+    resetCheckoutFormState();
+    setCart([]);
+    setCartCount(0);
+  }, [resetCheckoutFormState]);
 
   const fin = useMemo(
     () =>
@@ -425,7 +419,11 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
   const handleRemoveFromCart = (productId) => {
     removeFromCart(productId);
-    loadCart();
+    if (getCart().length === 0) {
+      clearCartAndSession();
+    } else {
+      loadCart();
+    }
     if (toast.current) {
       toast.current.show({
         severity: 'info',
@@ -527,7 +525,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     return n.toFixed(2);
   };
 
-  // Display quantity with 2 decimal places (default 1.00) — for editing (no grouping)
+  // Display quantity with 2 decimal places (default 1.00) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â for editing (no grouping)
   const toDisplayQuantity = (num, fallback = '1.00') => {
     if (num === '' || num === null || num === undefined) return fallback;
     const n = Number(parseFloat(num));
@@ -535,7 +533,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     return (Math.max(MIN_CART_QTY, n)).toFixed(2);
   };
 
-  /** Quantity shown in cart (grouped), aligned with “In stock” line */
+  /** Quantity shown in cart (grouped), aligned with ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œIn stockÃƒÂ¢Ã¢â€šÂ¬Ã‚Â line */
   const formatQuantityInCart = (num, fallback = '0.00') => {
     if (num === '' || num === null || num === undefined) return fallback;
     const n = Number(parseFloat(num));
@@ -629,7 +627,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       const maxQ = getCartItemMaxQuantity(item);
       if (cap !== null) {
         if (maxQ === 0) {
-          setSubmitError(`${itemLabel} is out of stock — remove it from the cart.`);
+          setSubmitError(`${itemLabel} is out of stock ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â remove it from the cart.`);
           return;
         }
         if (qOrdered > maxQ + 1e-6) {
@@ -690,7 +688,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     const paidSum = round2(cashAmt + upiAmt + bankAmt + chequeAmt);
     if (paidSum - netDueCheckout > 0.015) {
       setSubmitError(
-        `Total paid (₹${paidSum.toFixed(2)}) cannot exceed amount due after advance (₹${netDueCheckout.toFixed(2)}; final amount incl. charges ₹${grandTotalCheckout.toFixed(2)})`
+        `Total paid (${RUPEE}${paidSum.toFixed(2)}) cannot exceed amount due after advance (${RUPEE}${netDueCheckout.toFixed(2)}; final amount incl. charges ${RUPEE}${grandTotalCheckout.toFixed(2)})`
       );
       return;
     }
@@ -701,16 +699,45 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
     if (bankAmt > 0) payments.push({ amount: bankAmt, paymentMode: 'BANK_TRANSFER' });
     if (chequeAmt > 0) payments.push({ amount: chequeAmt, paymentMode: 'CHEQUE' });
 
-    const address = `${addressLine1}, ${city}, ${state} - ${pincode}`;
-    const isGST = billType === 'GST' || (gstin && gstin.trim() !== '');
+    const address = formatCompositeAddress({
+      line1: addressLine1,
+      city,
+      state,
+      pincode,
+    });
+    const isGST = billType === 'GST';
     const finalBillType = isGST ? 'GST' : 'NON-GST';
+
+    // For GST bills, compute the intra/inter-state split so the bill payload
+    // carries CGST/SGST/IGST alongside the existing taxPercentage. The total
+    // tax amount (subtotal * rate) stays the same; only how it's reported.
+    const taxAmountForBill = Number(finCo.tax) || 0;
+    const gstSplit = isGST
+      ? computeGstSplit({
+          taxAmount: taxAmountForBill,
+          taxRatePct: taxRateNum,
+          deliveryState: resolveDeliveryState({
+            deliveryAddress: gstDeliveryAddress,
+            customerState: state,
+            customerAddress: address,
+          }),
+        })
+      : null;
+
+    const supParentId = supplementaryParent?.parentBillId;
+    const isSupplementaryCheckout = supParentId != null;
+    const parentKindForUrl = supplementaryParent?.parentBillType === 'GST' ? 'GST' : 'NON_GST';
+    const urlType = String(parentKindForUrl).replace('_', '-');
+    const postUrl = isSupplementaryCheckout
+      ? `${API_BASE_URL}/bills/${encodeURIComponent(urlType)}/${encodeURIComponent(supParentId)}/supplementary`
+      : `${API_BASE_URL}/bills`;
 
     const billData = {
       billType: finalBillType,
       customerMobileNumber: mobileNumber,
       customerName: customerName.trim(),
       address,
-      gstin: gstin.trim() || null,
+      gstin: isGST ? (gstin.trim() || null) : null,
       customerEmail: email.trim() || null,
       items: formatCartItemsForBilling(cart),
       taxPercentage: taxRateNum,
@@ -721,9 +748,26 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
       otherExpenses: otherExpenseNum || 0,
       grandTotal: grandTotalCheckout,
       payments,
+      ...(isSupplementaryCheckout && {
+        supplementaryReason: String(
+          supplementaryParent.supplementaryReason || 'Supplementary / exchange adjustment'
+        ).slice(0, 500),
+      }),
+      ...(createBillNote.trim() ? { notes: createBillNote.trim().slice(0, 2000) } : {}),
       ...(billType === 'GST' && {
         vehicleNo: gstVehicleNo.trim() || null,
-        deliveryAddress: gstDeliveryAddress.trim() || null
+        deliveryAddress: gstDeliveryAddress.trim() || null,
+        // Place-of-supply split. Backend can read these or recompute from
+        // taxPercentage + deliveryAddress; they are duplicated for clarity
+        // and for any reports that don't want to re-run the split logic.
+        interState: !!(gstSplit && gstSplit.isInterState),
+        placeOfSupplyState: gstSplit ? gstSplit.resolvedState : null,
+        cgstRate: gstSplit ? gstSplit.cgstRate : 0,
+        sgstRate: gstSplit ? gstSplit.sgstRate : 0,
+        igstRate: gstSplit ? gstSplit.igstRate : 0,
+        cgstAmount: gstSplit ? gstSplit.cgstAmount : 0,
+        sgstAmount: gstSplit ? gstSplit.sgstAmount : 0,
+        igstAmount: gstSplit ? gstSplit.igstAmount : 0,
       })
     };
 
@@ -739,7 +783,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const response = await fetch(`${API_BASE_URL}/bills`, {
+      const response = await fetch(postUrl, {
         method: 'POST',
         headers: headers,
         body: JSON.stringify(billData)
@@ -784,29 +828,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
       const createdBill = await response.json();
 
-      // Success - clear all inputs and cart
-      setCustomerName('');
-      setMobileNumber('');
-      setEmail('');
-      setAddressLine1('');
-      setCity('');
-      setState('');
-      setPincode('');
-      setGstin('');
-      setTaxRate(0);
-      setDiscountInput('');
-      setBillType('NON-GST');
-      setPayCash('');
-      setPayUpi('');
-      setPayBank('');
-      setPayCheque('');
-      setGstVehicleNo('');
-      setGstDeliveryAddress('');
-      setLabourCharge(0);
-      setTransportationCharge(0);
-      setOtherExpense(0);
-      clearCart();
-      loadCart();
+      if (isSupplementaryCheckout && typeof onSupplementaryCheckoutComplete === 'function') {
+        onSupplementaryCheckoutComplete();
+      }
+
+      // Success — wipe cart + all saved checkout session data
+      clearCartAndSession();
 
       if (toast.current) {
         const adv = createdBill && (Number(createdBill.advanceUsed) || 0);
@@ -814,9 +841,12 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
           severity: 'success',
           summary: 'Success',
           detail:
-            adv > 0
-              ? `Bill created. Advance applied: ₹${adv.toFixed(2)}`
-              : 'Bill created successfully!',
+            isSupplementaryCheckout
+              ? `Supplementary bill ${createdBill?.billNumber ? `#${createdBill.billNumber}` : ''} created.` +
+                  (adv > 0 ? ` Advance applied: ${RUPEE}${adv.toFixed(2)}` : '')
+              : adv > 0
+                ? `Bill created. Advance applied: ${RUPEE}${adv.toFixed(2)}`
+                : 'Bill created successfully!',
           life: 3000
         });
       }
@@ -857,16 +887,60 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
           </button>
           <h2 className="cart-modal-title">My Cart ({cartCount})</h2>
           <button className="cart-modal-clear" onClick={() => {
-            if (window.confirm('Are you sure you want to clear the cart?')) {
-              clearCart();
-              loadCart();
+            if (window.confirm('Clear the cart and reset customer & payment details?')) {
+              clearCartAndSession();
             }
           }}>
             <i className="pi pi-trash"></i>
           </button>
         </div>
 
+        {supplementaryParent?.parentBillId ? (
+          <div
+            style={{
+              margin: '0 16px 12px',
+              padding: '10px 12px',
+              borderRadius: '8px',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              fontSize: '13px',
+              color: '#1e3a8a',
+              lineHeight: 1.45,
+            }}
+          >
+            <strong>Supplementary / exchange checkout</strong> — new lines post as a separate bill linked to parent{' '}
+            <strong>#{supplementaryParent.parentBillNumber || supplementaryParent.parentBillId}</strong>. Original
+            invoice and payments are not overwritten; record returns from Sales separately, then collect payment here
+            for the new amount (ledger IN as a normal bill).
+          </div>
+        ) : null}
+
         <div className="cart-modal-content">
+        <div className="cart-top-gst-toggle">
+          <div className="summary-row editable-field cart-bill-type-toggle">
+            <span className="summary-label">GST / Non-GST:</span>
+            <div className="cart-bill-type-btns" role="group" aria-label="GST or Non-GST toggle (default GST)">
+              <button
+                type="button"
+                className={`cart-bill-type-btn ${billType === 'GST' ? 'cart-bill-type-btn--on' : ''}`}
+                aria-pressed={billType === 'GST'}
+                onClick={() => setBillType('GST')}
+              >
+                <i className="pi pi-file-invoice" aria-hidden />
+                GST
+              </button>
+              <button
+                type="button"
+                className={`cart-bill-type-btn ${billType !== 'GST' ? 'cart-bill-type-btn--on' : ''}`}
+                aria-pressed={billType !== 'GST'}
+                onClick={() => setBillType('NON-GST')}
+              >
+                <i className="pi pi-minus-circle" aria-hidden />
+                Non-GST
+              </button>
+            </div>
+          </div>
+        </div>
           <div className="cart-items-list">
             {cart.map((item) => {
               const maxQty = getCartItemMaxQuantity(item);
@@ -941,7 +1015,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                         placeholder="0.00"
                       />
                       <span className="cart-item-unit-price">
-                        ₹ {(Number(item.pricePerSqftAfter ?? item.price ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / {unitLabel}
+                        {RUPEE} {(Number(item.pricePerSqftAfter ?? item.price ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / {unitLabel}
                       </span>
                     </div>
                   </div>
@@ -1035,7 +1109,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   <div className="cart-item-stock-pill" role="status">
                     {stockCap === null ? (
                       <span className="cart-item-stock cart-item-stock-unknown">
-                        <i className="pi pi-info-circle" aria-hidden /> Stock not on file — check inventory
+                        <i className="pi pi-info-circle" aria-hidden /> Stock not on file - check inventory
                       </span>
                     ) : stockCap <= 0 ? (
                       <span className="cart-item-stock cart-item-stock-out">
@@ -1054,7 +1128,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   <div className="cart-item-total-box">
                     <span className="cart-item-total-label">Line total</span>
                     <span className="cart-item-total-value">
-                      ₹{' '}
+                      {RUPEE}{' '}
                       {((Number(item.pricePerSqftAfter ?? item.price ?? 0)) * (Number(parseFloat(item.quantity)) || 0)).toLocaleString('en-IN', {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2
@@ -1085,7 +1159,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   className="discount-input"
                   placeholder="0"
                 />
-                <span className="summary-value">₹ {(fin.labourChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="summary-value">{RUPEE} {(fin.labourChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
             <div className="summary-row editable-discount">
@@ -1103,7 +1177,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   className="discount-input"
                   placeholder="0"
                 />
-                <span className="summary-value">₹ {(fin.transportationChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="summary-value">{RUPEE} {(fin.transportationChargeNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
             <div className="summary-row editable-discount">
@@ -1121,12 +1195,15 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   className="discount-input"
                   placeholder="0"
                 />
-                <span className="summary-value">₹ {(fin.otherExpenseNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="summary-value">{RUPEE} {(fin.otherExpenseNum || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
-            <div className="summary-row">
+            <div className="summary-row cart-charges-total-row">
               <span className="summary-label">Item Total</span>
-              <span className="summary-value">₹ {fin.subtotal.toLocaleString('en-IN')}</span>
+              <span className="summary-value">
+                {RUPEE}{' '}
+                {fin.itemsPlusCharges.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
             </div>
           </div>
 
@@ -1224,16 +1301,18 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                     maxLength={6}
                   />
                 </div>
-                <div className="form-row">
-                  <label>GSTIN:</label>
-                  <InputText
-                    placeholder="GSTIN (optional)"
-                    value={gstin}
-                    onChange={(e) => setGstin(e.target.value.slice(0, 20))}
-                    className="customer-input"
-                    maxLength={20}
-                  />
-                </div>
+                {billType === 'GST' && (
+                  <div className="form-row">
+                    <label>GSTIN:</label>
+                    <InputText
+                      placeholder="GSTIN (optional)"
+                      value={gstin}
+                      onChange={(e) => setGstin(e.target.value.slice(0, 20))}
+                      className="customer-input"
+                      maxLength={20}
+                    />
+                  </div>
+                )}
               </div>
             </div>
             )}
@@ -1278,25 +1357,69 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   className="tax-input"
                   placeholder="0"
                 />
-                <span className="summary-value tax-amount">₹ {fin.tax.toFixed(2)}</span>
+                <span className="summary-value tax-amount">{RUPEE} {fin.tax.toFixed(2)}</span>
               </div>
             </div>
 
+            {billType === 'GST' && fin.tax > 0 && (() => {
+              const deliveryState = resolveDeliveryState({
+                deliveryAddress: gstDeliveryAddress,
+                customerState: state,
+                customerAddress: formatCompositeAddress({
+                  line1: addressLine1,
+                  city,
+                  state,
+                  pincode,
+                }),
+              });
+              const split = computeGstSplit({
+                taxAmount: fin.tax,
+                taxRatePct: fin.taxRateNum,
+                deliveryState,
+              });
+              return (
+                <>
+                  {split.isInterState ? (
+                    <div className="summary-row">
+                      <span className="summary-label">
+                        IGST ({split.igstRate}%)
+                      </span>
+                      <span className="summary-value">{RUPEE} {split.igstAmount.toFixed(2)}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="summary-row">
+                        <span className="summary-label">CGST ({split.cgstRate}%)</span>
+                        <span className="summary-value">{RUPEE} {split.cgstAmount.toFixed(2)}</span>
+                      </div>
+                      <div className="summary-row">
+                        <span className="summary-label">SGST ({split.sgstRate}%)</span>
+                        <span className="summary-value">{RUPEE} {split.sgstAmount.toFixed(2)}</span>
+                      </div>
+                    </>
+                  )}
+                  <div
+                    className="summary-row"
+                    style={{ fontSize: '0.72rem', color: '#64748b' }}
+                  >
+                    <span className="summary-label">
+                      {split.isInterState ? 'Inter-state supply' : 'Intra-state supply'}
+                      {split.resolvedState ? ` · ${split.resolvedState}` : ' · state unknown'}
+                    </span>
+                    <span className="summary-value">seller: {SELLER_STATE}</span>
+                  </div>
+                </>
+              );
+            })()}
+
             <div className="summary-row editable-field">
               <span className="summary-label">Bill Type:</span>
-              <select
-                value={billType}
-                onChange={(e) => setBillType(e.target.value)}
-                className="bill-type-select"
-              >
-                <option value="NON-GST">NON-GST</option>
-                <option value="GST">GST</option>
-              </select>
+              <span className="summary-value">{billType}</span>
             </div>
 
             <div className="cart-payment-split" role="group" aria-label="Split payment amounts">
               <div className="summary-row cart-payment-split-title">
-                <span className="summary-label">Payments (₹)</span>
+                <span className="summary-label">Payments ({RUPEE})</span>
               </div>
               {[
                 ['Cash', payCash, 'cash'],
@@ -1318,17 +1441,17 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               ))}
               <div className="summary-row cart-payment-totals">
                 <span className="summary-label">Total paid</span>
-                <span className="summary-value">₹ {totalPaidNow.toFixed(2)}</span>
+                <span className="summary-value">{RUPEE} {totalPaidNow.toFixed(2)}</span>
               </div>
               <div className="summary-row cart-payment-totals">
                 <span className="summary-label">Remaining</span>
                 <span className={`summary-value${paymentRemaining > 0.009 ? ' cart-payment-due' : ''}`}>
-                  ₹ {paymentRemaining.toFixed(2)}
+                  {RUPEE} {paymentRemaining.toFixed(2)}
                 </span>
               </div>
               <p className="cart-payment-hint">
                 Leave fields empty or zero for credit (due). Customer advance applies before split payments. Total paid
-                cannot exceed Grand Total (After Advance) (max ₹{fin.netDueAfterAdvance.toFixed(2)}).
+                cannot exceed Grand Total (After Advance) (max {RUPEE}{fin.netDueAfterAdvance.toFixed(2)}).
                 {paymentRemaining > 0.009 ? ' Partial payment means bill is not fully paid yet.' : ''}
               </p>
             </div>
@@ -1374,7 +1497,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
                   placeholder="0"
                 />
                 <span className="summary-value discount-amount" style={{ color: '#10b981' }}>
-                  - ₹{' '}
+                  - {RUPEE}{' '}
                   {discountAmountNum.toLocaleString('en-IN', {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2
@@ -1386,26 +1509,33 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
 
           <div className="summary-total">
             <span className="total-label">Final Amount (Incl. Labour/Transport/Other)</span>
-            <span className="total-value">₹ {fin.grandTotal.toFixed(2)}</span>
+            <span className="total-value">{'\u20B9'} {fin.grandTotal.toFixed(2)}</span>
           </div>
 
-          <div className="summary-total" style={{ marginTop: '8px' }}>
+          <div className="summary-total summary-total-compact" style={{ marginTop: '8px' }}>
             <span className="total-label">Customer Advance Balance</span>
             <span className="total-value" style={{ color: '#0d9488' }}>
-              ₹ {Number(advanceRemaining || 0).toFixed(2)}
+              {'\u20B9'} {Number(advanceRemaining || 0).toFixed(2)}
+            </span>
+          </div>
+
+          <div className="summary-total summary-total-compact" style={{ marginTop: '8px' }}>
+            <span className="total-label">Old Pending Amount</span>
+            <span className="total-value" style={{ color: '#dc2626' }}>
+              {'\u20B9'} {Number(oldBillPendingAmount || 0).toFixed(2)}
             </span>
           </div>
 
           {fin.advanceWillApply > 0 && (
-            <div className="summary-total" style={{ marginTop: '8px' }}>
+            <div className="summary-total summary-total-compact" style={{ marginTop: '8px' }}>
               <span className="total-label" style={{ color: '#0d9488' }}>Advance (auto)</span>
-              <span className="total-value" style={{ color: '#0d9488' }}>− ₹ {fin.advanceWillApply.toFixed(2)}</span>
+              <span className="total-value" style={{ color: '#0d9488' }}>- {'\u20B9'} {fin.advanceWillApply.toFixed(2)}</span>
             </div>
           )}
 
-          <div className="summary-total" style={{ marginTop: '8px', borderTop: '2px solid #e5e7eb', paddingTop: '8px' }}>
+          <div className="summary-total summary-total-compact" style={{ marginTop: '8px', borderTop: '2px solid #e5e7eb', paddingTop: '8px' }}>
             <span className="total-label">Grand Total (After Advance)</span>
-            <span className="total-value" style={{ fontSize: '1.3rem', fontWeight: 'bold', color: '#2563eb' }}>₹ {fin.netDueAfterAdvance.toFixed(2)}</span>
+            <span className="total-value" style={{ fontSize: '1.3rem', fontWeight: 'bold', color: '#2563eb' }}>{'\u20B9'} {fin.netDueAfterAdvance.toFixed(2)}</span>
           </div>
 
           <div className="form-row" style={{ marginTop: '12px' }}>
@@ -1417,7 +1547,7 @@ export default function CartModal({ isOpen, onClose, onBillCreated }) {
               className="customer-input"
               rows={2}
               maxLength={2000}
-              placeholder="Why this bill / internal note — stored on the bill"
+              placeholder="Why this bill / internal note - stored on the bill"
               value={createBillNote}
               onChange={(e) => setCreateBillNote(e.target.value)}
               style={{ width: '100%', resize: 'vertical' }}

@@ -115,7 +115,7 @@ const Customers = () => {
       ]);
       const sum = unwrapEntity(sumRaw);
       const hist = unwrapList(histRaw);
-      setAdvanceSummary(sum || { totalAdvance: 0, totalUsed: 0, remaining: 0 });
+      setAdvanceSummary(sum || { totalAdvance: 0, totalUsed: 0, remaining: 0, oldBillPendingAmount: 0 });
       setAdvanceHistory(hist);
       if (sum && customerId != null) {
         setRemainingAdvanceByCustomerId((prev) => ({
@@ -441,6 +441,10 @@ const Customers = () => {
                     <div className="advance-summary-card">
                       <span className="advance-summary-label">Remaining</span>
                       <span className="advance-summary-value">₹ {money(advanceSummary?.remaining)}</span>
+                    </div>
+                    <div className="advance-summary-card">
+                      <span className="advance-summary-label">Old Bill Pending</span>
+                      <span className="advance-summary-value">₹ {money(advanceSummary?.oldBillPendingAmount)}</span>
                     </div>
                   </div>
 

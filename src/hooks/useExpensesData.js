@@ -37,7 +37,13 @@ export const useExpensesData = ({ apiFetchExpenses, apiGetLedgerTransactions }) 
       const clientOut = arr.filter((r) => {
         const tt = String(r?.txnType ?? r?.txn_type ?? '').toUpperCase();
         const src = String(r?.source ?? '').toUpperCase();
-        return tt === 'DEBIT' && (src === 'CLIENT_OUT' || src === 'CLIENT');
+        const isOutflow = tt === 'DEBIT' || tt === 'OUT';
+        const isClientPayment =
+          src === 'CLIENT_OUT' ||
+          src === 'CLIENT' ||
+          src === 'CLIENT_PAYMENT' ||
+          src.includes('CLIENT');
+        return isOutflow && isClientPayment;
       });
       setClientLedgerFeedRows(clientOut);
     } catch (e) {

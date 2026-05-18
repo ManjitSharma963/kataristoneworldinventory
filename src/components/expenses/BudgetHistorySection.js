@@ -66,7 +66,7 @@ const BudgetHistorySection = ({
         </button>
       </div>
       <p className="budget-history-scope-hint" style={{ margin: '8px 0 10px', fontSize: '12px', color: '#64748b', lineHeight: 1.45 }}>
-        Rows from <strong>unified_financial_ledger</strong> (dual-written from bills, expenses, loans, payroll, client payments). Filter by date
+        Rows from <strong>transactions</strong> (bills, expenses, loans, payroll, client payments). Filter by date
         range above; leave dates empty to load the latest window from the server.
       </p>
       {loadingBudgetHistory ? (

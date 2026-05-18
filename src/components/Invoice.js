@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './Invoice.css';
+import { computeGstSplit, resolveDeliveryState, SELLER_STATE } from '../utils/gst';
 
 const Invoice = ({ bill, onClose }) => {
   const [invoiceNumber, setInvoiceNumber] = useState('');
@@ -185,28 +186,65 @@ const Invoice = ({ bill, onClose }) => {
                 ₹{formatCurrency(calculateTotal())}
               </span>
             </div>
-            {bill?.billType === 'GST' && (
-              <>
-                <div className="totals-row">
-                  <span className="total-label">CGST (9%):</span>
-                  <span className="total-value">
-                    ₹{formatCurrency(calculateTax() / 2)}
-                  </span>
-                </div>
-                <div className="totals-row">
-                  <span className="total-label">SGST (9%):</span>
-                  <span className="total-value">
-                    ₹{formatCurrency(calculateTax() / 2)}
-                  </span>
-                </div>
-                <div className="totals-row">
-                  <span className="total-label">GST (18%):</span>
-                  <span className="total-value">
-                    ₹{formatCurrency(calculateTax())}
-                  </span>
-                </div>
-              </>
-            )}
+            {bill?.billType === 'GST' && (() => {
+              const totalTax = calculateTax();
+              // 18% default rate, but use whatever the bill actually charged
+              const taxRatePct = bill?.taxPercentage ?? bill?.taxRate ?? bill?.gstRate ?? 18;
+              const deliveryState = resolveDeliveryState({
+                deliveryState: bill?.deliveryState,
+                deliveryAddress: bill?.deliveryAddress,
+                customerState: bill?.customerState || bill?.state,
+                customerAddress: bill?.customerAddress || bill?.address,
+              });
+              const split = computeGstSplit({
+                taxAmount: totalTax,
+                taxRatePct,
+                deliveryState,
+              });
+              return (
+                <>
+                  {split.isInterState ? (
+                    <div className="totals-row">
+                      <span className="total-label">IGST ({split.igstRate}%):</span>
+                      <span className="total-value">
+                        ₹{formatCurrency(split.igstAmount)}
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="totals-row">
+                        <span className="total-label">CGST ({split.cgstRate}%):</span>
+                        <span className="total-value">
+                          ₹{formatCurrency(split.cgstAmount)}
+                        </span>
+                      </div>
+                      <div className="totals-row">
+                        <span className="total-label">SGST ({split.sgstRate}%):</span>
+                        <span className="total-value">
+                          ₹{formatCurrency(split.sgstAmount)}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  <div className="totals-row">
+                    <span className="total-label">
+                      Total GST ({Number(taxRatePct).toFixed(0)}%
+                      {split.isInterState ? ', inter-state' : ', intra-state'}
+                      ):
+                    </span>
+                    <span className="total-value">
+                      ₹{formatCurrency(totalTax)}
+                    </span>
+                  </div>
+                  <div className="totals-row" style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                    <span className="total-label">
+                      Place of supply: {split.resolvedState || 'unknown'} (seller: {SELLER_STATE})
+                    </span>
+                    <span className="total-value" />
+                  </div>
+                </>
+              );
+            })()}
             <div className="totals-row grand-total">
               <span className="total-label">Grand Total:</span>
               <span className="total-value">

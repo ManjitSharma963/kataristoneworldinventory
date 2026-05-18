@@ -23,6 +23,93 @@
 .totals p { display: flex; justify-content: space-between; margin: 6px 0; }
 .totals-due { font-weight: 600; }
 .totals-due b { color: #b45309; font-size: 1.05em; }
+.bill-card--gst-note {
+  border-color: #fde68a;
+  background: linear-gradient(135deg, #fffbeb 0%, #f8fafc 100%);
+}
+.bill-card--gst-note h3 { color: #92400e; }
+
+.bill-scenario-strip {
+  margin: 0 0 14px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+}
+.bill-scenario-strip--up {
+  border-color: #38bdf8;
+  background: linear-gradient(135deg, #f0f9ff 0%, #fff 55%);
+}
+.bill-scenario-strip--down {
+  border-color: #fb923c;
+  background: linear-gradient(135deg, #fff7ed 0%, #fff 55%);
+}
+.bill-scenario-strip__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 10px;
+  line-height: 1.35;
+}
+.bill-scenario-strip__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  color: #475569;
+  margin: 6px 0;
+}
+.bill-scenario-strip__row b {
+  color: #0f172a;
+  font-size: 13px;
+}
+.bill-scenario-strip__row--delta {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #cbd5e1;
+  font-weight: 600;
+}
+.bill-scenario-strip__row--delta b {
+  font-size: 15px;
+  color: #0369a1;
+}
+.bill-scenario-strip--down .bill-scenario-strip__row--delta b {
+  color: #c2410c;
+}
+.bill-scenario-strip__hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #64748b;
+}
+
+.bill-scenario-bullets {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #475569;
+}
+.bill-scenario-bullets li { margin: 6px 0; }
+
+.bill-edit-wallet-preview {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #065f46;
+}
+.bill-edit-wallet-preview b {
+  color: #047857;
+  font-size: 13px;
+}
+
 .bill-card--advance p { display: flex; justify-content: space-between; gap: 10px; margin: 8px 0; font-size: 13px; }
 .bill-edit-muted { color: #64748b; font-size: 13px; margin: 8px 0; }
 .bill-edit-muted--small { font-size: 11px; line-height: 1.4; }
@@ -126,6 +213,10 @@
 .bill-payable-hint--ok {
   color: #0f766e;
 }
+.bill-payable-hint--warn {
+  color: #b45309;
+  font-weight: 500;
+}
 .payment-mode-list { display: flex; flex-direction: column; gap: 8px; }
 .payment-mode-row { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px; align-items: center; }
 .payment-mode-label { font-size: 12px; color: #334155; font-weight: 600; }
@@ -134,4 +225,135 @@
 @media (max-width: 1200px) {
   .bill-edit-grid { grid-template-columns: 1fr; }
 }
+
+/* §16 — editable grid, original vs draft, stock preview */
+.bill-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -4px;
+}
+.bill-table--edit-grid { min-width: 920px; }
+.bill-table-row--changed { background: #fffbeb; }
+.bill-table-savedcell { font-size: 11px; color: #64748b; white-space: nowrap; }
+.bill-table-savedcell__main { font-weight: 600; color: #475569; }
+.bill-table-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bill-table-num--was { color: #64748b; }
+.bill-table-num--now { color: #0f172a; font-weight: 600; }
+.bill-stock-delta {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.bill-stock-delta--out { background: #fee2e2; color: #991b1b; }
+.bill-stock-delta--in { background: #dcfce7; color: #166534; }
+.bill-stock-delta--new { background: #e0f2fe; color: #0369a1; }
+.bill-stock-delta--none { color: #94a3b8; font-weight: 500; }
+
+.bill-card--stock-preview {
+  border-color: #bae6fd;
+  background: linear-gradient(135deg, #f0f9ff 0%, #f8fafc 100%);
+}
+.bill-stock-impact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+}
+.bill-stock-impact-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+.bill-stock-impact-list li:last-child { border-bottom: none; }
+.bill-stock-impact-list__name { color: #334155; flex: 1; min-width: 0; }
+.bill-stock-impact-list__badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+.bill-stock-impact-list__badge--out { background: #fee2e2; color: #991b1b; }
+.bill-stock-impact-list__badge--in { background: #dcfce7; color: #166534; }
+.bill-stock-impact-list__badge--new { background: #e0f2fe; color: #0369a1; }
+.bill-stock-warn {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  font-size: 12px;
+  color: #991b1b;
+}
+.bill-stock-warn p { margin: 4px 0; }
+
+.bill-primary-callout {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 2px solid #e2e8f0;
+  margin-bottom: 12px;
+}
+.bill-primary-callout__label {
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475569;
+  margin-bottom: 6px;
+}
+.bill-primary-callout__amount {
+  font-size: 1.75rem;
+  font-weight: 900;
+  line-height: 1.15;
+  color: #0f172a;
+}
+.bill-primary-callout__hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #64748b;
+}
+.bill-primary-callout--pay {
+  border-color: #38bdf8;
+  background: linear-gradient(145deg, #f0f9ff 0%, #fff 55%);
+}
+.bill-primary-callout--pay .bill-primary-callout__amount { color: #0369a1; }
+.bill-primary-callout--refund {
+  border-color: #fb923c;
+  background: linear-gradient(145deg, #fff7ed 0%, #fff 55%);
+}
+.bill-primary-callout--refund .bill-primary-callout__amount { color: #c2410c; }
+.bill-primary-callout--wallet {
+  border-color: #34d399;
+  background: linear-gradient(145deg, #ecfdf5 0%, #fff 55%);
+}
+.bill-primary-callout--wallet .bill-primary-callout__amount { color: #047857; }
+
+.bill-advance-recalc {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #cbd5e1;
+}
+.bill-advance-recalc__title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.bill-advance-recalc p {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 6px 0;
+  font-size: 12px;
+  color: #334155;
+}
+.bill-advance-recalc__release b { color: #b45309; }
 

@@ -8,10 +8,28 @@
 
 .expenses-tab-navigation {
   display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 10px;
   margin-bottom: 24px;
   border-bottom: 2px solid rgba(163, 177, 198, 0.3);
   padding-bottom: 0;
+}
+
+.expenses-tab-navigation__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: 1 1 auto;
+}
+
+.expenses-tab-navigation__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-left: auto;
+  padding-bottom: 8px;
 }
 
 .expense-tab {

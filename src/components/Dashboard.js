@@ -159,7 +159,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
     stats: false,
     charts: false
   });
-  /** Phase 4: unified_financial_ledger nets (same as Expenses tab). */
+  /** Transaction ledger nets (same as Expenses tab). */
   // Statistics Overview date filter: 'all' | 'monthly' | 'range'. Default 'all'.
   const [statsPeriod, setStatsPeriod] = useState('all');
   const [statsMonth, setStatsMonth] = useState(() => {
@@ -688,6 +688,32 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   }, [inventory, statsPeriod, statsMonth, statsRangeStart, statsRangeEnd]);
 
   const statsFromFiltered = useMemo(() => calculateStats(filteredBillsForStats), [filteredBillsForStats]);
+
+  /** Non-GST net sales: gross parent bills − returns + supplementary (matches Sales / Reports). */
+  const adjustmentSalesMetrics = useMemo(() => {
+    const rows = (filteredBillsForStats || []).filter((b) => b.billType !== 'GST');
+    if (rows.length === 0) return null;
+    let gross = 0;
+    let supplementary = 0;
+    let returns = 0;
+    for (const r of rows) {
+      const amt = Number(r.totalAmount) || 0;
+      const isSupp =
+        r.supplementaryBill === true ||
+        r.isSupplementary === true ||
+        String(r.billLifecycleStatus || '').toUpperCase() === 'SUPPLEMENTARY' ||
+        String(r.billStatus || '').toUpperCase() === 'SUPPLEMENTARY';
+      if (isSupp) supplementary += amt;
+      else gross += amt;
+      returns += Number(r.returnSummary?.cumulativeReturnedValue ?? 0);
+    }
+    return {
+      gross: Math.round(gross * 100) / 100,
+      supplementary: Math.round(supplementary * 100) / 100,
+      returns: Math.round(returns * 100) / 100,
+      net: Math.round((gross - returns + supplementary) * 100) / 100,
+    };
+  }, [filteredBillsForStats]);
   const totalExpensesFiltered = useMemo(() => {
     return filteredExpensesForStats.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
   }, [filteredExpensesForStats]);
@@ -1723,6 +1749,65 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
               <p className="stat-label">{statsFromFiltered.countWithoutGST} sale(s)</p>
             </div>
           </div>
+
+          
+
+          {adjustmentSalesMetrics ? (
+            <>
+              <div className="stat-card primary" title="Parent Non-GST bills only">
+                <div className="stat-icon">📊</div>
+                <div className="stat-content">
+                  <h3>Gross sales</h3>
+                  <p className="stat-value">
+                    ₹{adjustmentSalesMetrics.gross.toLocaleString('en-IN', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </p>
+                  <p className="stat-label">Excludes supplementary bills</p>
+                </div>
+              </div>
+              <div className="stat-card expense" title="Cumulative return value">
+                <div className="stat-icon">↩</div>
+                <div className="stat-content">
+                  <h3>Sales returns</h3>
+                  <p className="stat-value">
+                    ₹{adjustmentSalesMetrics.returns.toLocaleString('en-IN', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </p>
+                  <p className="stat-label">Not expenses</p>
+                </div>
+              </div>
+              <div className="stat-card success">
+                <div className="stat-icon">➕</div>
+                <div className="stat-content">
+                  <h3>Supplementary</h3>
+                  <p className="stat-value">
+                    ₹{adjustmentSalesMetrics.supplementary.toLocaleString('en-IN', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </p>
+                  <p className="stat-label">Exchange / adjustment bills</p>
+                </div>
+              </div>
+              <div className="stat-card info">
+                <div className="stat-icon">∑</div>
+                <div className="stat-content">
+                  <h3>Net sales</h3>
+                  <p className="stat-value">
+                    ₹{adjustmentSalesMetrics.net.toLocaleString('en-IN', {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </p>
+                  <p className="stat-label">Gross − returns + supplementary</p>
+                </div>
+              </div>
+            </>
+          ) : null}
 
           <div className="stat-card info">
             <div className="stat-icon">📦</div>

@@ -1,6 +1,25 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 const INR = (n) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/**
+ * Columns shown in the Transaction History table. Each row is rendered only
+ * when `visibleColumns[key]` is true. Defaults are tuned to fit a normal
+ * desktop width without needing horizontal scroll; users can toggle columns
+ * on/off via the toolbar above the table or by clicking the × on a header,
+ * and the preference is persisted in localStorage.
+ */
+const LOAN_TXN_COLUMNS = [
+  { key: 'datetime', label: 'Date & Time', defaultVisible: true },
+  { key: 'type', label: 'Type', defaultVisible: true },
+  { key: 'person', label: 'Person', defaultVisible: true },
+  { key: 'amount', label: 'Amount (₹)', defaultVisible: true },
+  { key: 'paymentMode', label: 'Payment Mode', defaultVisible: true },
+  { key: 'giveTake', label: 'Give / Take', defaultVisible: false },
+  { key: 'notes', label: 'Notes', defaultVisible: true },
+  { key: 'status', label: 'Status', defaultVisible: false },
+];
+const LOAN_TXN_COLUMNS_KEY = 'loanLedger.visibleColumns.v1';
 
 const LoanPanel = ({
   handleCreateLoanTransaction,
@@ -32,6 +51,56 @@ const LoanPanel = ({
   const [payFilter, setPayFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [search, setSearch] = useState('');
+  const [showColumnsMenu, setShowColumnsMenu] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState(() => {
+    const fallback = LOAN_TXN_COLUMNS.reduce(
+      (acc, c) => ({ ...acc, [c.key]: c.defaultVisible }),
+      {}
+    );
+    if (typeof window === 'undefined') return fallback;
+    try {
+      const raw = window.localStorage.getItem(LOAN_TXN_COLUMNS_KEY);
+      if (!raw) return fallback;
+      const saved = JSON.parse(raw);
+      if (!saved || typeof saved !== 'object') return fallback;
+      return LOAN_TXN_COLUMNS.reduce(
+        (acc, c) => ({
+          ...acc,
+          [c.key]: typeof saved[c.key] === 'boolean' ? saved[c.key] : c.defaultVisible,
+        }),
+        {}
+      );
+    } catch {
+      return fallback;
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(LOAN_TXN_COLUMNS_KEY, JSON.stringify(visibleColumns));
+    } catch {
+      /* localStorage may be unavailable (private mode, quota); ignore. */
+    }
+  }, [visibleColumns]);
+
+  const isColVisible = (key) => visibleColumns[key] !== false;
+  const visibleColumnCount = LOAN_TXN_COLUMNS.filter((c) => isColVisible(c.key)).length;
+
+  const toggleColumn = (key) => {
+    setVisibleColumns((prev) => {
+      const next = { ...prev, [key]: !isColVisible(key) ? true : false };
+      // Always keep at least one column visible so the table isn't empty.
+      const stillVisible = LOAN_TXN_COLUMNS.some((c) => next[c.key] !== false);
+      return stillVisible ? next : prev;
+    });
+  };
+
+  const resetColumns = () => {
+    setVisibleColumns(
+      LOAN_TXN_COLUMNS.reduce((acc, c) => ({ ...acc, [c.key]: c.defaultVisible }), {})
+    );
+  };
 
   const lenderRows = Array.isArray(loanLenders) ? loanLenders : [];
   const borrowerRows = Array.isArray(loanBorrowers) ? loanBorrowers : [];
@@ -243,36 +312,192 @@ const LoanPanel = ({
           </button>
         </div>
 
-        <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 8,
+            gap: 8,
+            flexWrap: 'wrap',
+            position: 'relative',
+          }}
+        >
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Transaction History</div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', position: 'relative' }}>
+            <span style={{ fontSize: 11, color: '#64748b' }}>
+              Showing {visibleColumnCount} of {LOAN_TXN_COLUMNS.length} columns
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ padding: '4px 10px', fontSize: 12 }}
+              onClick={() => setShowColumnsMenu((v) => !v)}
+              title="Show or hide table columns"
+            >
+              ⚙ Columns
+            </button>
+            {showColumnsMenu && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  right: 0,
+                  zIndex: 20,
+                  background: '#fff',
+                  border: '1px solid #d9e2ec',
+                  borderRadius: 8,
+                  boxShadow: '0 8px 24px rgba(15,23,42,0.12)',
+                  padding: 8,
+                  minWidth: 200,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: 6,
+                    paddingBottom: 6,
+                    borderBottom: '1px solid #eef2f7',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: '#475569',
+                  }}
+                >
+                  <span>Toggle columns</span>
+                  <button
+                    type="button"
+                    onClick={resetColumns}
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      color: '#2563eb',
+                      cursor: 'pointer',
+                      fontSize: 11,
+                      padding: 0,
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+                {LOAN_TXN_COLUMNS.map((c) => (
+                  <label
+                    key={c.key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '4px 2px',
+                      fontSize: 12,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isColVisible(c.key)}
+                      onChange={() => toggleColumn(c.key)}
+                    />
+                    {c.label}
+                  </label>
+                ))}
+                <div style={{ marginTop: 4, paddingTop: 6, borderTop: '1px solid #eef2f7' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ width: '100%', fontSize: 12, padding: '4px 8px' }}
+                    onClick={() => setShowColumnsMenu(false)}
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
         <div className="sales-table-wrapper">
-          <table className="data-table expenses-table" style={{ fontSize: 12 }}>
+          <table
+            className="data-table expenses-table loan-txn-table"
+            style={{ fontSize: 12, width: '100%', tableLayout: 'auto' }}
+          >
             <thead>
               <tr>
-                <th>Date & Time</th>
-                <th>Type</th>
-                <th>Person</th>
-                <th>Amount (₹)</th>
-                <th>Payment Mode</th>
-                <th>Give / Take</th>
-                <th>Notes</th>
-                <th>Status</th>
+                {LOAN_TXN_COLUMNS.filter((c) => isColVisible(c.key)).map((c) => (
+                  <th key={c.key} style={{ position: 'relative', whiteSpace: 'nowrap' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      {c.label}
+                      <button
+                        type="button"
+                        onClick={() => toggleColumn(c.key)}
+                        title={`Hide ${c.label} column`}
+                        aria-label={`Hide ${c.label} column`}
+                        disabled={visibleColumnCount <= 1}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          color: '#94a3b8',
+                          cursor: visibleColumnCount <= 1 ? 'not-allowed' : 'pointer',
+                          fontSize: 11,
+                          lineHeight: 1,
+                          padding: 0,
+                          opacity: visibleColumnCount <= 1 ? 0.3 : 0.8,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {(loadingLoanLenders || loadingLoanBorrowers || loadingLoanTransactions) ? (
-                <tr><td colSpan="8" style={{ textAlign: 'center' }}>Loading...</td></tr>
+                <tr>
+                  <td colSpan={visibleColumnCount} style={{ textAlign: 'center' }}>Loading...</td>
+                </tr>
               ) : filteredRows.length === 0 ? (
-                <tr><td colSpan="8" style={{ textAlign: 'center', color: '#64748b' }}>No loan transactions.</td></tr>
+                <tr>
+                  <td colSpan={visibleColumnCount} style={{ textAlign: 'center', color: '#64748b' }}>
+                    No loan transactions.
+                  </td>
+                </tr>
               ) : filteredRows.map((r) => (
                 <tr key={r.id}>
-                  <td>{r.date ? String(r.date).replace('T', ' ').slice(0, 16) : '—'}</td>
-                  <td><span style={{ fontWeight: 600, color: r.color }}>{r.typeLabel}</span></td>
-                  <td>{r.person || '—'}</td>
-                  <td style={{ color: r.color, fontWeight: 700 }}>{INR(r.amount)}</td>
-                  <td>{String(r.paymentMode || '—').replaceAll('_', ' ')}</td>
-                  <td>{r.giveTake === 'GIVE' ? 'Give' : 'Take'}</td>
-                  <td>{r.notes || '—'}</td>
-                  <td><span className="pill-status status-open">Active</span></td>
+                  {isColVisible('datetime') && (
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {r.date ? String(r.date).replace('T', ' ').slice(0, 16) : '—'}
+                    </td>
+                  )}
+                  {isColVisible('type') && (
+                    <td>
+                      <span style={{ fontWeight: 600, color: r.color }}>{r.typeLabel}</span>
+                    </td>
+                  )}
+                  {isColVisible('person') && <td>{r.person || '—'}</td>}
+                  {isColVisible('amount') && (
+                    <td style={{ color: r.color, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                      {INR(r.amount)}
+                    </td>
+                  )}
+                  {isColVisible('paymentMode') && (
+                    <td>{String(r.paymentMode || '—').replaceAll('_', ' ')}</td>
+                  )}
+                  {isColVisible('giveTake') && <td>{r.giveTake === 'GIVE' ? 'Give' : 'Take'}</td>}
+                  {isColVisible('notes') && (
+                    <td
+                      style={{
+                        whiteSpace: 'normal',
+                        wordBreak: 'break-word',
+                        maxWidth: 280,
+                        minWidth: 160,
+                      }}
+                    >
+                      {r.notes || '—'}
+                    </td>
+                  )}
+                  {isColVisible('status') && (
+                    <td><span className="pill-status status-open">Active</span></td>
+                  )}
                 </tr>
               ))}
             </tbody>

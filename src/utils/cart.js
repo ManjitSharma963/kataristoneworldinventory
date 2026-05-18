@@ -148,10 +148,56 @@ export const updateCartItemQuantity = (productId, quantity) => {
   return cart;
 };
 
-export const clearCart = () => {
-  saveCart([]);
+/** All known cart-related localStorage keys (checkout draft + preferences). */
+export const CART_SESSION_STORAGE_KEYS = [
+  'cartMobileNumber',
+  'cartCustomerName',
+  'cartAddressLine1',
+  'cartCity',
+  'cartState',
+  'cartPincode',
+  'cartGstin',
+  'cartEmail',
+  'cartDiscountAmount',
+  'cartPayCash',
+  'cartPayUpi',
+  'cartPayBank',
+  'cartPayCheque',
+  'cartGstVehicleNo',
+  'cartGstDeliveryAddress',
+  'cartLabourCharge',
+  'cartTransportationCharge',
+  'cartOtherExpense',
+  'cartTaxRate',
+  'cartBillType',
+];
+
+/** Remove every cart* key from localStorage (including legacy keys). */
+export const clearCartSessionStorage = () => {
+  try {
+    const keys = new Set([CART_STORAGE_KEY, ...CART_SESSION_STORAGE_KEYS]);
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('cart')) {
+        keys.add(key);
+      }
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    /* ignore */
+  }
+};
+
+/** Clear cart items and all saved checkout/session data. */
+export const resetCartSession = () => {
+  clearCartSessionStorage();
   return [];
 };
+
+export const clearCart = () => resetCartSession();
+
+/** @deprecated Use resetCartSession */
+export const clearCartCheckoutDraft = () => clearCartSessionStorage();
 
 export const getCartCount = () => {
   const cart = getCart();

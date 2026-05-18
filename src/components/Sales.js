@@ -3,10 +3,12 @@ import {
   downloadBillPDF,
   addBillPayment,
   deleteBillPayment,
-  deleteBill,
   getBillCancellations,
   updateBill,
-  fetchBillByTypeAndId
+  fetchBillByTypeAndId,
+  submitBillStockReturn,
+  fetchBillAdjustments,
+  openBillAdjustmentSession
 } from '../utils/api';
 import { fetchProductsCatalog } from '../api/productsApi';
 import {
@@ -28,8 +30,12 @@ import { Dialog } from 'primereact/dialog';
 import { AutoComplete } from 'primereact/autocomplete';
 import InlineToast from './InlineToast';
 import useDebouncedValue from '../utils/useDebouncedValue';
+import { computeGstSplit, resolveDeliveryState, SELLER_STATE } from '../utils/gst';
 import { useSalesData } from '../hooks/useSalesData';
 import BillEditPage from './sales/BillEditPage';
+import AdjustmentExchangeDialog from './sales/AdjustmentExchangeDialog';
+import CancelBillModal from './sales/CancelBillModal';
+import { computeReturnSettlementPreview } from './sales/billReturnUtils';
 import './Sales.css';
 
 /** API list responses may omit lazy-loaded line items; GET by id returns full payload. */
@@ -82,6 +88,14 @@ function mergeBillWithFullDetail(row, detail) {
         : Number(row.originalSale?.otherExpenses ?? row.originalSale?.otherExpense ?? 0),
     taxAmount:
       d.taxAmount != null ? Number(d.taxAmount) : Number(row.originalSale?.taxAmount ?? row.gstAmount ?? 0),
+    billLifecycleStatus:
+      d.billLifecycleStatus != null && d.billLifecycleStatus !== ''
+        ? d.billLifecycleStatus
+        : row.originalSale?.billLifecycleStatus,
+    returnSummary: d.returnSummary != null ? d.returnSummary : row.originalSale?.returnSummary,
+    returnHistory: Array.isArray(d.returnHistory) ? d.returnHistory : row.originalSale?.returnHistory,
+    supplementaryBills: Array.isArray(d.supplementaryBills) ? d.supplementaryBills : row.originalSale?.supplementaryBills,
+    billEvents: Array.isArray(d.billEvents) ? d.billEvents : row.originalSale?.billEvents,
   };
   return {
     ...row,
@@ -90,26 +104,44 @@ function mergeBillWithFullDetail(row, detail) {
     totalAmount: Number(d.totalAmount ?? row.totalAmount) || 0,
     advanceUsed: Number(d.advanceUsed ?? row.advanceUsed) || 0,
     paidAmount: Number(d.paidAmount ?? row.paidAmount) || 0,
+    paidDisplay: Number(d.totalPaid ?? d.paidAmount ?? row.paidDisplay) || 0,
+    paidBillPaymentsOnly: Number(d.totalPaid ?? d.paidAmount ?? row.paidBillPaymentsOnly ?? row.paidDisplay) || 0,
+    paidIncludingAdvance: Number(
+      (
+        Number(d.totalPaid ?? d.paidAmount ?? 0) + Number(d.advanceUsed ?? row.advanceUsed ?? 0)
+      ).toFixed(2)
+    ),
     balanceDue:
-      d.balanceDue != null && d.balanceDue !== ''
-        ? Number(d.balanceDue)
-        : row.balanceDue != null
-          ? Number(row.balanceDue)
-          : row.balanceDue,
+      d.amountDue != null && d.amountDue !== ''
+        ? Number(d.amountDue)
+        : d.balanceDue != null && d.balanceDue !== ''
+          ? Number(d.balanceDue)
+          : row.balanceDue != null
+            ? Number(row.balanceDue)
+            : row.balanceDue,
     paymentStatus: d.paymentStatus != null && d.paymentStatus !== '' ? d.paymentStatus : row.paymentStatus,
     paymentMode: d.paymentMode ?? d.paymentMethod ?? row.paymentMode,
     paymentModeRaw: d.paymentMode ?? d.paymentMethod ?? row.paymentModeRaw,
+    billLifecycleStatus:
+      d.billLifecycleStatus != null && d.billLifecycleStatus !== ''
+        ? d.billLifecycleStatus
+        : row.billLifecycleStatus,
+    returnSummary: d.returnSummary != null ? d.returnSummary : row.returnSummary,
+    returnHistory: Array.isArray(d.returnHistory) ? d.returnHistory : row.returnHistory,
+    supplementaryBills: Array.isArray(d.supplementaryBills) ? d.supplementaryBills : row.supplementaryBills,
+    billEvents: Array.isArray(d.billEvents) ? d.billEvents : row.billEvents,
     originalSale,
   };
 }
 
-/** Amount still owed: prefer API balanceDue, else total − advance − paid. */
+/** Amount still owed: prefer API amountDue/balanceDue, else total − advance − paid. */
 function computeBalanceDueForBill(bill) {
   if (!bill) return 0;
-  const fromApi = Number(bill.balanceDue);
+  const fromApi = Number(bill.amountDue ?? bill.balanceDue);
   if (Number.isFinite(fromApi) && fromApi >= 0) return fromApi;
   const total = Number(bill.totalAmount) || 0;
-  const paid = Number(bill.paidAmount) || 0;
+  const paid =
+    Number(bill.totalPaid ?? bill.paidDisplay ?? bill.paidAmount) || 0;
   const adv = Number(bill.advanceUsed ?? bill.originalSale?.advanceUsed) || 0;
   return Math.max(0, Number((total - adv - paid).toFixed(2)));
 }
@@ -118,6 +150,23 @@ function getBillPaymentStatusKey(bill) {
   if (!bill) return '';
   const raw = bill.paymentStatus ?? bill.originalSale?.paymentStatus ?? '';
   return String(raw).trim().toUpperCase();
+}
+
+/** Cancelled / superseded bills: view & PDF only in the row ⋮ menu. */
+function billIsReadOnlyInSalesList(bill) {
+  if (!bill) return true;
+  if (bill.isCancelled) return true;
+  if (getBillPaymentStatusKey(bill) === 'CANCELLED') return true;
+  const life = String(
+    bill.billLifecycleStatus ??
+      bill.billStatus ??
+      bill.originalSale?.billLifecycleStatus ??
+      bill.originalSale?.billStatus ??
+      ''
+  )
+    .trim()
+    .toUpperCase();
+  return life === 'CANCELLED' || life === 'SUPERSEDED';
 }
 
 /**
@@ -135,25 +184,111 @@ function billAllowsAdditionalPayment(bill) {
   return false;
 }
 
-/** Single ⋮ menu per row: View / Edit / Pay / PDF / Delete */
-function SalesRowActionsMenu({ row, onView, onEdit, onPay, onPdf, onDelete }) {
+/** Physical return entry (does not rewrite bill lines). Block cancelled / fully returned lifecycle. */
+function billAllowsStockReturn(bill) {
+  if (!bill) return false;
+  const pay = getBillPaymentStatusKey(bill);
+  if (pay === 'CANCELLED') return false;
+  const life = String(bill.billLifecycleStatus || bill.originalSale?.billLifecycleStatus || '').trim().toUpperCase();
+  if (
+    life === 'FULLY_RETURNED' ||
+    life === 'RETURNED' ||
+    life === 'CANCELLED' ||
+    life === 'SUPERSEDED' ||
+    life === 'LOCKED'
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** Supplementary child bill: parent must stay valid (mirrors backend assertParent*AllowsSupplementary). */
+function billAllowsSupplementaryExchange(bill) {
+  if (!bill?.id || !bill?.billType) return false;
+  if (getBillPaymentStatusKey(bill) === 'CANCELLED') return false;
+  const life = String(bill.billLifecycleStatus || bill.originalSale?.billLifecycleStatus || '')
+    .trim()
+    .toUpperCase();
+  if (['CANCELLED', 'SUPERSEDED', 'FULLY_RETURNED', 'LOCKED', 'EXCHANGED'].includes(life)) {
+    return false;
+  }
+  const rs = bill.returnSummary ?? bill.originalSale?.returnSummary;
+  if (rs != null) {
+    const eff = Number(rs.effectiveSoldQuantityRemaining);
+    if (Number.isFinite(eff) && eff <= 0.0005) return false;
+  }
+  return true;
+}
+
+/** True when every sold quantity has been returned (safe to offer bill cancel/delete). */
+function billAllItemsReturned(bill) {
+  if (!bill) return false;
+  const life = String(
+    bill.billLifecycleStatus ??
+      bill.billStatus ??
+      bill.originalSale?.billLifecycleStatus ??
+      bill.originalSale?.billStatus ??
+      ''
+  )
+    .trim()
+    .toUpperCase();
+  if (life === 'FULLY_RETURNED' || life === 'RETURNED') return true;
+  const rs = bill.returnSummary ?? bill.originalSale?.returnSummary;
+  if (rs != null) {
+    const eff = Number(rs.effectiveSoldQuantityRemaining);
+    if (Number.isFinite(eff) && eff <= 0.0005) return true;
+    const orig = Number(rs.originalInvoiceQuantity);
+    const ret = Number(rs.cumulativeReturnedQuantity);
+    if (Number.isFinite(orig) && orig > 0.0005 && Number.isFinite(ret) && ret >= orig - 0.0005) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function billIsDraftRow(row) {
+  const life = String(
+    row?.billLifecycleStatus ?? row?.billStatus ?? row?.originalSale?.billLifecycleStatus ?? ''
+  )
+    .trim()
+    .toUpperCase();
+  return life === 'DRAFT';
+}
+
+/** Row ⋮ menu: View, Adjust/Exchange, PDF, Cancel bill. Payments/returns are inside View. */
+function SalesRowActionsMenu({
+  row,
+  onView,
+  onAdjustExchange,
+  onPdf,
+  onCancel,
+  readOnly = false
+}) {
   const menuRef = useRef(null);
-  const items = useMemo(
-    () => [
-      { label: 'View', icon: 'pi pi-eye', command: () => void onView(row) },
-      { label: 'Edit', icon: 'pi pi-pencil', command: () => void onEdit(row) },
-      { label: 'Pay', icon: 'pi pi-wallet', command: () => void onPay(row) },
-      { label: 'Download PDF', icon: 'pi pi-file-pdf', command: () => void onPdf(row) },
-      { separator: true },
-      {
-        label: 'Delete bill',
-        icon: 'pi pi-trash',
-        className: 'sales-dash-menu-delete',
-        command: () => void onDelete(row)
-      }
-    ],
-    [row, onView, onEdit, onPay, onPdf, onDelete]
-  );
+  const items = useMemo(() => {
+    const locked = readOnly || billIsReadOnlyInSalesList(row);
+    const base = [{ label: 'View', icon: 'pi pi-eye', command: () => void onView(row) }];
+    if (!locked && typeof onAdjustExchange === 'function' && billAllowsSupplementaryExchange(row)) {
+      base.push({
+        label: 'Adjust bill / Exchange',
+        icon: 'pi pi-sync',
+        command: () => void onAdjustExchange(row)
+      });
+    }
+    base.push({ label: 'Download PDF', icon: 'pi pi-file-pdf', command: () => void onPdf(row) });
+    if (!locked) {
+      base.push(
+        { separator: true },
+        {
+          label: billIsDraftRow(row) ? 'Delete draft' : 'Cancel bill',
+          icon: 'pi pi-trash',
+          className: 'sales-dash-menu-delete',
+          command: () => void onCancel(row)
+        }
+      );
+    }
+    return base;
+  }, [row, readOnly, onView, onAdjustExchange, onPdf, onCancel]);
 
   return (
     <div className="sales-dash-actions-menu">
@@ -212,6 +347,24 @@ const Sales = ({ setActiveNav }) => {
   const [productCatalog, setProductCatalog] = useState([]);
   const [productCatalogLoading, setProductCatalogLoading] = useState(false);
   const [productSuggestions, setProductSuggestions] = useState([]);
+
+  const [stockReturnOpen, setStockReturnOpen] = useState(false);
+  const [stockReturnRefundMode, setStockReturnRefundMode] = useState('NO_REFUND');
+  const [stockReturnCashRail, setStockReturnCashRail] = useState('CASH');
+  const [stockReturnQtyById, setStockReturnQtyById] = useState({});
+  const [stockReturnNotes, setStockReturnNotes] = useState('');
+  const [stockReturnSubmitting, setStockReturnSubmitting] = useState(false);
+
+  const [cancelBillOpen, setCancelBillOpen] = useState(false);
+  const [cancelBillTarget, setCancelBillTarget] = useState(null);
+
+  const [adjustExchangeOpen, setAdjustExchangeOpen] = useState(false);
+  const [adjustExchangeBill, setAdjustExchangeBill] = useState(null);
+  const [adjustExchangeSession, setAdjustExchangeSession] = useState(null);
+  const [adjustExchangeLoading, setAdjustExchangeLoading] = useState(false);
+  const [billDetailTab, setBillDetailTab] = useState('details');
+  const [adjustmentHistory, setAdjustmentHistory] = useState(null);
+  const [adjustmentHistoryLoading, setAdjustmentHistoryLoading] = useState(false);
 
   const canAddMorePayments = useMemo(() => {
     if (!selectedBill || billDetailLoading) return false;
@@ -273,97 +426,83 @@ const Sales = ({ setActiveNav }) => {
 
   // Prepare data for DataTable
   const prepareSalesData = useMemo(() => {
-    return sales.map(sale => {
-      const billId = sale.id || sale.billId;
-      const billNumber = sale.billNumber || sale.billId || billId || '-';
-      const billDate = sale.billDate || sale.createdAt || sale.date;
-      const customerNumber = sale.customerMobileNumber || sale.customerNumber || sale.customerPhone || '-';
-      const customerName =
-        String(
-          sale.customerName ??
-            sale.customer_name ??
-            sale.name ??
-            sale.customer?.customerName ??
-            sale.customer?.name ??
-            ''
-        ).trim() || '—';
-      const items = sale.items || sale.billItems || [];
-      
-      // Normalize billType
-      let billType = sale.billType || (sale.gstPaid ? 'GST' : 'NON-GST');
-      const billTypeUpper = (billType || '').toUpperCase();
-      if (billTypeUpper !== 'GST') {
-        billType = 'NON-GST';
-      } else {
-        billType = 'GST';
-      }
-      
-      const isGST = billType === 'GST';
-      const gstRate = sale.gstRate || (isGST ? 18 : 0);
-      const subtotal = sale.subtotal || sale.subTotal || 0;
-      const gstAmount = sale.taxAmount || sale.gstAmount || sale.gst || 0;
-      const totalAmount = Number(sale.totalAmount || sale.total || sale.amount) || 0;
-      const paidAmount =
-        Number(sale.paidAmount ?? sale.paid_amount) ||
-        Math.max(
-          0,
-          totalAmount - (Number(sale.dueAmount ?? sale.due_amount) || 0)
-        );
-      const advanceUsed = Number(sale.advanceUsed) || 0;
-      const dueFromApi = sale.dueAmount ?? sale.due_amount;
-      const balanceDue =
-        dueFromApi != null && Number.isFinite(Number(dueFromApi))
-          ? Math.max(0, Number(dueFromApi))
-          : Math.max(0, totalAmount - paidAmount - advanceUsed);
-      const paidDisplay = Math.max(0, paidAmount + advanceUsed);
-      const paymentModeRaw =
-        sale.paymentMode ??
-        sale.payment_mode ??
-        sale.paymentMethod ??
-        sale.payment_method ??
-        '';
-      const paymentModeNorm = String(paymentModeRaw).trim();
-      const isNoPayment =
-        !paymentModeNorm || paymentModeNorm === '-' || paymentModeNorm === '—';
-      const paymentMode = isNoPayment
-        ? null
-        : normalizePaymentModeKey(paymentModeNorm) || null;
+    return sales
+      .filter((sale) => {
+        if (sale.isCancelled) return false;
+        const pay = String(sale.paymentStatus ?? '').trim().toUpperCase();
+        if (pay === 'CANCELLED') return false;
+        const life = String(sale.billLifecycleStatus ?? sale.billStatus ?? '').trim().toUpperCase();
+        if (life === 'CANCELLED' || life === 'SUPERSEDED') return false;
+        return true;
+      })
+      .map(sale => {
+        const billId = sale.id || sale.billId;
+        const billNumber = sale.billNumber || sale.billId || billId || '-';
+        const billDate = sale.billDate || sale.createdAt || sale.date;
+        const customerNumber = sale.customerMobileNumber || sale.customerNumber || sale.customerPhone || '-';
+        const customerName =
+          String(
+            sale.customerName ??
+              sale.customer_name ??
+              sale.name ??
+              sale.customer?.customerName ??
+              sale.customer?.name ??
+              ''
+          ).trim() || '—';
+        const items = sale.items || sale.billItems || [];
 
-      // Ensure billDate is a proper Date object
-      let dateObj = null;
-      if (billDate) {
-        try {
-          dateObj = billDate instanceof Date ? billDate : new Date(billDate);
-          if (isNaN(dateObj.getTime())) {
-            dateObj = null;
-          }
-        } catch (e) {
-          dateObj = null;
+        // Normalize billType
+        let billType = sale.billType || (sale.gstPaid ? 'GST' : 'NON-GST');
+        const billTypeUpper = (billType || '').toUpperCase();
+        if (billTypeUpper !== 'GST') {
+          billType = 'NON-GST';
+        } else {
+          billType = 'GST';
         }
-      }
 
-      return {
-        id: billId,
-        billNumber: String(billNumber || '').toUpperCase(),
-        billDate: dateObj,
-        customerNumber: String(customerNumber || ''),
-        customerName,
-        itemsCount: items.length,
-        billType: billType,
-        isGST: isGST,
-        gstRate: gstRate,
-        subtotal: Number(subtotal) || 0,
-        gstAmount: Number(gstAmount) || 0,
-        totalAmount: Number(totalAmount) || 0,
-        paidAmount: Number(paidAmount) || 0,
-        advanceUsed,
-        paidDisplay,
-        balanceDue,
-        paymentMode: paymentMode,
-        paymentModeRaw: String(paymentModeRaw || ''),
-        originalSale: sale
-      };
-    });
+        const totalAmount = Number(sale.totalAmount) || 0;
+        const advanceUsed = Number(sale.advanceUsed) || 0;
+        const paidDisplay =
+          Number(sale.totalPaid ?? sale.paidDisplay ?? sale.paidAmount) || 0;
+        /** Cash/UPI/bank/cheque collected on the bill (excludes wallet advance). */
+        const paidBillPaymentsOnly = paidDisplay;
+        /** Total settled toward the bill including customer advance (matches business “received”). */
+        const paidIncludingAdvance = Number(
+          (paidBillPaymentsOnly + advanceUsed).toFixed(2)
+        );
+        const fromApiDue = Number(sale.amountDue ?? sale.balanceDue);
+        const balanceDue =
+          Number.isFinite(fromApiDue) && fromApiDue >= 0
+            ? fromApiDue
+            : Math.max(0, Number((totalAmount - advanceUsed - paidDisplay).toFixed(2)));
+        const isGST = billType === 'GST';
+        const gstRate =
+          sale.taxPercentage != null && sale.taxPercentage !== ''
+            ? Number(sale.taxPercentage)
+            : sale.gstRate != null && sale.gstRate !== ''
+              ? Number(sale.gstRate)
+              : isGST
+                ? 18
+                : 0;
+
+        return {
+          ...sale,
+          billId,
+          billNumber,
+          billDate,
+          customerNumber,
+          customerName,
+          items,
+          billType,
+          isGST,
+          gstRate,
+          advanceUsed,
+          paidDisplay,
+          paidBillPaymentsOnly,
+          paidIncludingAdvance,
+          balanceDue
+        };
+      });
   }, [sales]);
 
   const dateRangeFilteredSales = useMemo(() => {
@@ -381,12 +520,14 @@ const Sales = ({ setActiveNav }) => {
     });
   }, [prepareSalesData, dateFrom, dateTo]);
 
+  /**
+   * Bills filtered by every active filter EXCEPT bill type (date range,
+   * search, payment mode). Bill type is now controlled by the GST / Non-GST
+   * tab split below, so it's intentionally excluded here.
+   */
   const commonFilteredSales = useMemo(() => {
       const q = normalizeSearchText(debouncedSearchQuery);
     return dateRangeFilteredSales.filter((row) => {
-      if (billTypeFilter && billTypeFilter !== 'ALL') {
-        if (String(row.billType || '').toUpperCase() !== billTypeFilter) return false;
-      }
       if (paymentModeFilter && paymentModeFilter !== 'ALL') {
         const band = getPaymentBand(row.paymentMode);
         if (band !== paymentModeFilter) return false;
@@ -407,7 +548,29 @@ const Sales = ({ setActiveNav }) => {
         type.includes(q)
       );
     });
-  }, [dateRangeFilteredSales, debouncedSearchQuery, billTypeFilter, paymentModeFilter]);
+  }, [dateRangeFilteredSales, debouncedSearchQuery, paymentModeFilter]);
+
+  /** Regular bills (Non-GST) — these are the only bills that count as "real" sales. */
+  const nonGstFilteredSales = useMemo(
+    () => commonFilteredSales.filter((r) => String(r.billType || '').toUpperCase() !== 'GST'),
+    [commonFilteredSales]
+  );
+
+  /** B2B GST bills — kept entirely separate from in-hand cash and stock. */
+  const gstFilteredSales = useMemo(
+    () => commonFilteredSales.filter((r) => String(r.billType || '').toUpperCase() === 'GST'),
+    [commonFilteredSales]
+  );
+
+  /**
+   * The slice of sales the active tab is responsible for. KPIs and the payment-
+   * method breakdown both follow this so the cards always describe the table
+   * the user is looking at, and GST B2B bills never bleed into Non-GST totals.
+   */
+  const activeTabSales = useMemo(() => {
+    if (salesListTab === 'gst') return gstFilteredSales;
+    return nonGstFilteredSales;
+  }, [salesListTab, nonGstFilteredSales, gstFilteredSales]);
 
   const filteredCancellations = useMemo(() => {
     const q = normalizeSearchText(debouncedSearchQuery);
@@ -423,17 +586,153 @@ const Sales = ({ setActiveNav }) => {
   }, [cancellations, debouncedSearchQuery]);
 
   const kpiTotals = useMemo(() => {
-    const rows = dateRangeFilteredSales;
+    // KPIs reflect the currently selected tab (Non-GST or GST B2B). They never
+    // mix the two so GST bills don't inflate Non-GST "in-hand" / Total Received.
+    const rows = activeTabSales;
     let totalSales = 0;
-    let totalReceived = 0;
+    /** Sum of bill_payment lines only (counter collections). */
+    let totalBillPayments = 0;
+    /** Customer wallet applied on bills in period. */
+    let totalAdvanceOnBills = 0;
     let totalPending = 0;
     for (const r of rows) {
-      totalSales += Number(r.totalAmount) || 0;
-      totalReceived += Number(r.paidDisplay) || 0;
-      totalPending += Number(r.balanceDue) || 0;
+      const totalAmount = Number(r.totalAmount) || 0;
+      const billPayments = Number(r.paidBillPaymentsOnly ?? r.paidDisplay) || 0;
+      const advanceUsed = Number(r.advanceUsed) || 0;
+      const balanceDue = Number(r.balanceDue) || 0;
+
+      totalSales += totalAmount;
+      totalBillPayments += billPayments;
+      totalAdvanceOnBills += advanceUsed;
+      totalPending += balanceDue;
     }
-    return { totalSales, totalReceived, totalPending, periodCount: rows.length };
-  }, [dateRangeFilteredSales]);
+    const totalReceived = Number((totalBillPayments + totalAdvanceOnBills).toFixed(2));
+    const coveredByPayments = Number((totalReceived + totalPending).toFixed(2));
+    const salesVsCoveredDelta = Number((totalSales - coveredByPayments).toFixed(2));
+    return {
+      totalSales,
+      /** Payments + advance applied (full “money toward bills” for the period). */
+      totalReceived,
+      totalBillPayments,
+      totalAdvanceOnBills,
+      totalPending,
+      coveredByPayments,
+      salesVsCoveredDelta,
+      periodCount: rows.length
+    };
+  }, [activeTabSales]);
+
+  const adjustmentKpis = useMemo(() => {
+    if (salesListTab === 'gst') return null;
+    const rows = activeTabSales;
+    let gross = 0;
+    let supplementary = 0;
+    let returns = 0;
+    for (const r of rows) {
+      const amt = Number(r.totalAmount) || 0;
+      const isSupp =
+        r.supplementaryBill === true ||
+        r.isSupplementary === true ||
+        String(r.billLifecycleStatus || '').toUpperCase() === 'SUPPLEMENTARY' ||
+        String(r.billStatus || '').toUpperCase() === 'SUPPLEMENTARY';
+      if (isSupp) supplementary += amt;
+      else gross += amt;
+      returns += Number(r.returnSummary?.cumulativeReturnedValue ?? 0);
+    }
+    return {
+      gross: Number(gross.toFixed(2)),
+      supplementary: Number(supplementary.toFixed(2)),
+      returns: Number(returns.toFixed(2)),
+      net: Number((gross - returns + supplementary).toFixed(2)),
+    };
+  }, [activeTabSales, salesListTab]);
+
+  /**
+   * Breakdown that sums to Total Received exactly (same bill-date axis as KPIs).
+   * For each bill in the period we bucket payments[] by mode, then add a per-bill
+   * "Adjustments" residual = bill.totalPaid − sum(payments[] excluding wallet).
+   * That residual is normally 0; it's non-zero when payments[] returned by the API
+   * doesn't match the bill's stored paid amount (legacy PAID bills, refunds, etc.).
+   */
+  const paymentBreakdownExact = useMemo(() => {
+    // Mirror KPIs: breakdown follows the same filtered row set so it always
+    // reconciles with the Total Received card for the active tab.
+    const rows = activeTabSales;
+    const round2 = (n) => Math.round(n * 100) / 100;
+    let cash = 0;
+    let upi = 0;
+    let bank = 0;
+    let chequeOther = 0;
+    let advance = 0;
+    let adjustments = 0;
+    const adjustmentBills = [];
+    for (const r of rows) {
+      const payments = Array.isArray(r.payments)
+        ? r.payments
+        : Array.isArray(r.originalSale?.payments)
+          ? r.originalSale.payments
+          : [];
+      const expectedPaid = Number(r.paidBillPaymentsOnly ?? r.totalPaid ?? r.paidAmount ?? r.paidDisplay) || 0;
+      let bucketedPaid = 0;
+      for (const p of payments) {
+        const amt = Number(p?.amount) || 0;
+        if (amt === 0) continue;
+        const mode = String(p?.paymentMode || p?.paymentMethod || '').trim().toUpperCase();
+        if (mode === 'WALLET' || mode === 'ADVANCE') {
+          // wallet rows are not counted here; advanceUsed is added once per bill below
+          continue;
+        }
+        bucketedPaid += amt;
+        if (mode === 'CASH') cash += amt;
+        else if (mode === 'UPI') upi += amt;
+        else if (
+          mode === 'BANK_TRANSFER' ||
+          mode === 'BANK' ||
+          mode === 'NETBANKING' ||
+          mode === 'BANK TRANSFER'
+        )
+          bank += amt;
+        else chequeOther += amt;
+      }
+      const residual = round2(expectedPaid - bucketedPaid);
+      if (Math.abs(residual) > 0.005) {
+        adjustments += residual;
+        adjustmentBills.push({
+          billNumber: r.billNumber,
+          customerName: r.customerName,
+          expectedPaid,
+          bucketedPaid: round2(bucketedPaid),
+          residual,
+          paymentMode: r.paymentModeRaw || r.paymentMode || ''
+        });
+      }
+      advance += Number(r.advanceUsed) || 0;
+    }
+    cash = round2(cash);
+    upi = round2(upi);
+    bank = round2(bank);
+    chequeOther = round2(chequeOther);
+    advance = round2(advance);
+    adjustments = round2(adjustments);
+    const sum = round2(cash + upi + bank + chequeOther + advance + adjustments);
+    const pct = (x) => (sum > 0 ? Math.round((x / sum) * 100) : 0);
+    return {
+      cash,
+      upi,
+      bank,
+      other: chequeOther,
+      advance,
+      adjustments,
+      adjustmentBills,
+      sum,
+      pctCash: pct(cash),
+      pctUpi: pct(upi),
+      pctBank: pct(bank),
+      pctOther: pct(chequeOther),
+      pctAdvance: pct(advance),
+      pctAdjustments: pct(adjustments)
+    };
+  }, [activeTabSales]);
 
   const paymentBreakdown = useMemo(() => {
     const c = Number(paymentBandTotals.cash) || 0;
@@ -474,9 +773,10 @@ const Sales = ({ setActiveNav }) => {
   const handleExportCsv = () => {
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const lines = [];
-    if (salesListTab === 'active') {
+    if (salesListTab === 'active' || salesListTab === 'gst') {
+      const rows = salesListTab === 'gst' ? gstFilteredSales : nonGstFilteredSales;
       lines.push(['BillNo', 'Customer', 'Phone', 'Date', 'Items', 'Type', 'Amount', 'Paid', 'Balance', 'PaidVia'].join(','));
-      for (const r of commonFilteredSales) {
+      for (const r of rows) {
         lines.push(
           [
             esc(r.billNumber),
@@ -486,7 +786,7 @@ const Sales = ({ setActiveNav }) => {
             r.itemsCount,
             esc(r.billType),
             Number(r.totalAmount) || 0,
-            Number(r.paidDisplay) || 0,
+            Number(r.paidIncludingAdvance ?? r.paidDisplay) || 0,
             Number(r.balanceDue) || 0,
             esc(r.paymentModeRaw || formatPaymentModeLabel(r.paymentMode) || '')
           ].join(',')
@@ -513,7 +813,12 @@ const Sales = ({ setActiveNav }) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = salesListTab === 'active' ? 'sales-bills.csv' : 'cancelled-bills.csv';
+    a.download =
+      salesListTab === 'gst'
+        ? 'gst-bills.csv'
+        : salesListTab === 'cancelled'
+          ? 'cancelled-bills.csv'
+          : 'sales-bills.csv';
     a.click();
     URL.revokeObjectURL(url);
     setToast({ message: 'CSV file downloaded.', type: 'success' });
@@ -559,14 +864,42 @@ const Sales = ({ setActiveNav }) => {
     }
   };
 
+  const handleOpenCancelBill = (bill) => {
+    if (!bill?.id) return;
+    setCancelBillTarget(bill);
+    setCancelBillOpen(true);
+  };
+
+  const handleCancelBillSuccess = async () => {
+    window.dispatchEvent(new CustomEvent('kataria-ledger-refresh'));
+    await refreshSales();
+    try {
+      const todayIso = toIsoDate(new Date());
+      const fromIso = toIsoDate(dateFrom) || todayIso;
+      const toIso = toIsoDate(dateTo) || fromIso;
+      const rows = await getBillCancellations(fromIso, toIso);
+      setCancellations(Array.isArray(rows) ? rows : []);
+    } catch {
+      /* best-effort */
+    }
+    setToast({
+      message: 'Bill cancelled; stock and payments reversed in the ledger.',
+      type: 'success',
+    });
+    if (selectedBill && cancelBillTarget && String(selectedBill.id) === String(cancelBillTarget.id)) {
+      closeBillPopup();
+    }
+    setCancelBillTarget(null);
+  };
+
   const actionsBodyTemplate = (rowData) => (
     <SalesRowActionsMenu
       row={rowData}
+      readOnly={salesListTab === 'cancelled'}
       onView={handleViewBillDetails}
-      onEdit={handleOpenEditPage}
-      onPay={handleViewBillDetails}
+      onAdjustExchange={handleOpenAdjustExchangeGuide}
       onPdf={handlePdfFromRow}
-      onDelete={handleDeleteBill}
+      onCancel={handleOpenCancelBill}
     />
   );
 
@@ -580,6 +913,8 @@ const Sales = ({ setActiveNav }) => {
     setPaymentAddMode('CASH');
     setEditMode(false);
     setEditDraft(null);
+    setBillDetailTab('details');
+    setAdjustmentHistory(null);
     setBillPopupVisible(true);
     setBillDetailLoading(true);
     try {
@@ -616,13 +951,181 @@ const Sales = ({ setActiveNav }) => {
     }
   };
 
+  const stockReturnPreviewTotal = useMemo(() => {
+    if (!selectedBill || !stockReturnOpen) return 0;
+    return computeReturnSettlementPreview(selectedBill, stockReturnQtyById, Boolean(selectedBill.isGST));
+  }, [selectedBill, stockReturnQtyById, stockReturnOpen]);
+
+  const stockReturnableItems = useMemo(() => {
+    const items = selectedBill?.originalSale?.items;
+    if (!Array.isArray(items)) return [];
+    return items.filter((it) => {
+      const id = Number(it.itemId);
+      if (!Number.isFinite(id) || id <= 0) return false;
+      const max = Number(it.quantityReturnable ?? it.quantity);
+      return Number.isFinite(max) && max > 0;
+    });
+  }, [selectedBill]);
+
+  const handleOpenStockReturn = async (bill) => {
+    if (!bill?.id || !bill?.billType) return;
+    if (!billAllowsStockReturn(bill)) {
+      setToast({
+        message: 'This bill cannot accept stock returns (cancelled, locked, or fully returned).',
+        type: 'error'
+      });
+      return;
+    }
+    setStockReturnRefundMode('NO_REFUND');
+    setStockReturnCashRail('CASH');
+    setStockReturnQtyById({});
+    setStockReturnNotes('');
+    setSelectedBill(bill);
+    setBillDetailLoading(true);
+    try {
+      const raw = await fetchBillByTypeAndId(bill.id, bill.billType);
+      const detail = unwrapBillEnvelope(raw);
+      setSelectedBill((prev) => (prev && prev.id === bill.id ? mergeBillWithFullDetail(prev, detail) : prev));
+      setStockReturnOpen(true);
+    } catch (err) {
+      console.error('[Sales] load bill for return', err);
+      setToast({
+        message: err?.message || 'Could not load bill lines for return.',
+        type: 'error'
+      });
+    } finally {
+      setBillDetailLoading(false);
+    }
+  };
+
+  const handleOpenAdjustExchangeGuide = async (bill) => {
+    if (!bill?.id || !bill?.billType) {
+      setToast({ message: 'Bill id missing.', type: 'error' });
+      return;
+    }
+    const isGstBill =
+      bill.isGST === true || String(bill.billType || '').toUpperCase().replace(/-/g, '_') === 'GST';
+    if (isGstBill) {
+      setToast({ message: 'Adjustment / exchange is available for Non-GST bills only.', type: 'error' });
+      return;
+    }
+    setAdjustExchangeLoading(true);
+    setAdjustExchangeOpen(true);
+    setAdjustExchangeBill(null);
+    setAdjustExchangeSession(null);
+    try {
+      const raw = await openBillAdjustmentSession(bill.id);
+      const session = raw?.data ?? raw;
+      const detail = session?.originalBill;
+      if (!detail) {
+        throw new Error('Adjustment session did not return bill details.');
+      }
+      const enriched = mergeBillWithFullDetail(bill, detail);
+      if (!billAllowsSupplementaryExchange(enriched)) {
+        setToast({
+          message:
+            'This bill cannot accept a supplementary exchange (cancelled, superseded, fully returned, exchanged, locked, or no sale quantity left on the parent).',
+          type: 'error',
+        });
+        setAdjustExchangeOpen(false);
+        return;
+      }
+      setAdjustExchangeSession(session);
+      setAdjustExchangeBill(enriched);
+    } catch (e) {
+      setToast({ message: e?.message || 'Could not open exchange guide.', type: 'error' });
+      setAdjustExchangeOpen(false);
+    } finally {
+      setAdjustExchangeLoading(false);
+    }
+  };
+
+  const handleSubmitStockReturn = async () => {
+    if (!selectedBill?.id || !selectedBill?.billType) return;
+    const lines = [];
+    for (const it of stockReturnableItems) {
+      const id = Number(it.itemId);
+      const max = Number(it.quantityReturnable ?? it.quantity) || 0;
+      const q = Number(stockReturnQtyById[id]);
+      if (!Number.isFinite(q) || q <= 0) continue;
+      if (q > max + 1e-6) {
+        setToast({
+          message: `Return qty cannot exceed returnable (${max}) for line ${it.itemName || id}.`,
+          type: 'error'
+        });
+        return;
+      }
+      lines.push({ billItemId: id, quantity: q });
+    }
+    if (lines.length === 0) {
+      setToast({ message: 'Enter return quantity on at least one line.', type: 'error' });
+      return;
+    }
+    try {
+      setStockReturnSubmitting(true);
+      const payload = {
+        refundMode: stockReturnRefundMode,
+        notes: stockReturnNotes.trim() || undefined,
+        lines
+      };
+      if (stockReturnRefundMode === 'CASH_REFUND') {
+        payload.refundPaymentMode = stockReturnCashRail;
+      }
+      const res = await submitBillStockReturn(selectedBill.id, selectedBill.billType, payload);
+      const unwrapped = res && typeof res === 'object' && res.data != null ? res.data : res;
+      const computed = Number(
+        unwrapped?.computedReturnAmount ?? stockReturnPreviewTotal
+      );
+      const posted = Number(unwrapped?.postedSettlementAmount ?? (stockReturnRefundMode === 'NO_REFUND' ? 0 : computed));
+      setStockReturnOpen(false);
+      window.dispatchEvent(new CustomEvent('kataria-ledger-refresh'));
+      await refreshSales();
+      setToast({
+        message:
+          `Stock return recorded. Computed ₹${Number.isFinite(computed) ? computed.toFixed(2) : '0.00'}` +
+          (Number.isFinite(posted) && posted > 0 ? ` · Booked ₹${posted.toFixed(2)}` : ''),
+        type: 'success'
+      });
+    } catch (e) {
+      setToast({ message: e?.message || 'Return could not be saved.', type: 'error' });
+    } finally {
+      setStockReturnSubmitting(false);
+    }
+  };
+
   const closeBillPopup = () => {
     setBillPopupVisible(false);
     setSelectedBill(null);
     setEditMode(false);
     setEditDraft(null);
     setBillDetailLoading(false);
+    setBillDetailTab('details');
+    setAdjustmentHistory(null);
   };
+
+  useEffect(() => {
+    if (!isBillPopupVisible || billDetailTab !== 'adjustments' || !selectedBill?.id || selectedBill.isGST) {
+      return;
+    }
+    let cancelled = false;
+    setAdjustmentHistoryLoading(true);
+    fetchBillAdjustments(selectedBill.id)
+      .then((raw) => {
+        if (!cancelled) setAdjustmentHistory(raw?.data ?? raw);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setAdjustmentHistory(null);
+          setToast({ message: e?.message || 'Could not load adjustment history.', type: 'error' });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setAdjustmentHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isBillPopupVisible, billDetailTab, selectedBill?.id, selectedBill?.isGST]);
 
   const handleEditItemChange = (rowId, key, value) => {
     setEditDraft((prev) => {
@@ -822,16 +1325,6 @@ const Sales = ({ setActiveNav }) => {
       setToast({ message: 'At least one valid item is required.', type: 'error' });
       return;
     }
-    const existingPayments = Array.isArray(selectedBill?.originalSale?.payments) ? selectedBill.originalSale.payments : [];
-    const payments = existingPayments
-      .filter((p) => String(p?.paymentMode || '').toUpperCase() !== 'WALLET')
-      .map((p) => ({
-        amount: Number(p.amount || 0) || 0,
-        paymentMode: String(p.paymentMode || '').trim(),
-        paymentDate: p.paymentDate || undefined
-      }))
-      .filter((p) => p.amount > 0 && p.paymentMode);
-
     const payload = {
       customerMobileNumber: String(editDraft.customerMobileNumber || '').trim(),
       customerName: String(editDraft.customerName || '').trim() || undefined,
@@ -844,8 +1337,7 @@ const Sales = ({ setActiveNav }) => {
       labourCharge: Number(editDraft.labourCharge || 0),
       transportationCharge: Number(editDraft.transportationCharge || 0),
       otherExpenses: Number(editDraft.otherExpenses || 0),
-      billDate: editDraft.billDate || undefined,
-      payments
+      billDate: editDraft.billDate || undefined
     };
 
     try {
@@ -916,56 +1408,10 @@ const Sales = ({ setActiveNav }) => {
     }
   };
 
-  const handleDeleteBill = async (billFromRow) => {
-    const bill = billFromRow ?? selectedBill;
-    if (!bill?.id || !bill?.billType) return;
-    const ok = window.confirm(
-      'Delete this entire bill?\n\n' +
-        'This will:\n' +
-        '• Put all line-item quantities back into inventory\n' +
-        '• Remove all payments (paid, partial, or pending) and reverse cash/UPI effects on daily budget\n' +
-        '• Restore any customer advance used on this bill\n\n' +
-        'The bill will be cancelled and hidden from sales lists. This cannot be undone from the app.'
-    );
-    if (!ok) return;
-    const reasonRaw = window.prompt(
-      'Optional: reason for cancelling this bill (stored in audit and bill notes). Leave blank to skip.',
-      ''
-    );
-    if (reasonRaw === null) {
-      return;
-    }
-    const reason = String(reasonRaw).trim();
-    try {
-      setPaymentSubmitting(true);
-      await deleteBill(bill.id, bill.billType, reason ? { reason } : undefined);
-      await refreshSales();
-      try {
-        const todayIso = toIsoDate(new Date());
-        const fromIso = toIsoDate(dateFrom) || todayIso;
-        const toIso = toIsoDate(dateTo) || fromIso;
-        const rows = await getBillCancellations(fromIso, toIso);
-        setCancellations(Array.isArray(rows) ? rows : []);
-      } catch {
-        /* audit list refresh is best-effort */
-      }
-      setToast({ message: 'Bill deleted; stock and payments were rolled back.', type: 'success' });
-      if (selectedBill && String(selectedBill.id) === String(bill.id)) {
-        closeBillPopup();
-      }
-    } catch (e) {
-      setToast({ message: e?.message || 'Bill could not be deleted.', type: 'error' });
-    } finally {
-      setPaymentSubmitting(false);
-    }
-  };
 
-  // Filter templates for row-based filtering
-  const billTypeFilterOptions = [
-    { label: 'All types', value: 'ALL' },
-    { label: 'GST', value: 'GST' },
-    { label: 'NON-GST', value: 'NON-GST' }
-  ];
+  // Filter templates for row-based filtering. The bill-type dropdown was
+  // removed in favour of the GST / Non-GST tab split, so the options array
+  // has been retired with it.
 
   const paymentModeFilterOptions = [
     { label: 'All modes', value: 'ALL' },
@@ -984,6 +1430,9 @@ const Sales = ({ setActiveNav }) => {
         onBack={() => setEditPageBill(null)}
         onSaved={() => {
           setEditPageBill(null);
+          refreshSales?.();
+        }}
+        onPaymentsRecorded={() => {
           refreshSales?.();
         }}
       />
@@ -1021,15 +1470,24 @@ const Sales = ({ setActiveNav }) => {
         </div>
       </header>
 
-      <section className="sales-dash-kpis" aria-label="Period summary">
+      <section
+        className="sales-dash-kpis"
+        aria-label={salesListTab === 'gst' ? 'GST B2B summary' : 'Period summary'}
+      >
         <div className="sales-kpi-card sales-kpi-card--blue">
           <div className="sales-kpi-icon" aria-hidden>
             <i className="pi pi-chart-line" />
           </div>
           <div className="sales-kpi-body">
-            <span className="sales-kpi-label">Total sales</span>
+            <span className="sales-kpi-label">
+              {salesListTab === 'gst' ? 'Total GST sales' : 'Total sales'}
+            </span>
             <span className="sales-kpi-value">{formatCurrency(kpiTotals.totalSales)}</span>
-            <span className="sales-kpi-hint">All bills (this period)</span>
+            <span className="sales-kpi-hint">
+              {salesListTab === 'gst'
+                ? 'B2B GST invoices — not counted in in-hand cash'
+                : 'Sum of bill amounts for filtered bills'}
+            </span>
           </div>
         </div>
         <div className="sales-kpi-card sales-kpi-card--green">
@@ -1037,9 +1495,15 @@ const Sales = ({ setActiveNav }) => {
             <i className="pi pi-wallet" />
           </div>
           <div className="sales-kpi-body">
-            <span className="sales-kpi-label">Total received</span>
+            <span className="sales-kpi-label">
+              {salesListTab === 'gst' ? 'Received from GST' : 'Total received'}
+            </span>
             <span className="sales-kpi-value">{formatCurrency(kpiTotals.totalReceived)}</span>
-            <span className="sales-kpi-hint">Paid + advance on bills</span>
+            <span className="sales-kpi-hint">
+              {salesListTab === 'gst'
+                ? `Recorded on GST bills (separate from in-hand cash)`
+                : `Bill payments ${formatCurrency(kpiTotals.totalBillPayments)} + advance applied ${formatCurrency(kpiTotals.totalAdvanceOnBills)}`}
+            </span>
           </div>
         </div>
         <div className="sales-kpi-card sales-kpi-card--red">
@@ -1047,44 +1511,146 @@ const Sales = ({ setActiveNav }) => {
             <i className="pi pi-clock" />
           </div>
           <div className="sales-kpi-body">
-            <span className="sales-kpi-label">Pending amount</span>
+            <span className="sales-kpi-label">
+              {salesListTab === 'gst' ? 'Pending on GST' : 'Pending amount'}
+            </span>
             <span className="sales-kpi-value">{formatCurrency(kpiTotals.totalPending)}</span>
-            <span className="sales-kpi-hint">Balance due (estimate)</span>
+            <span className="sales-kpi-hint">
+              {salesListTab === 'gst'
+                ? 'Outstanding on B2B invoices'
+                : 'Balance still due on bills'}
+            </span>
           </div>
         </div>
         <div className="sales-kpi-card sales-kpi-card--wide">
-          <span className="sales-kpi-wide-title">Payment method breakdown</span>
+          <span className="sales-kpi-wide-title">
+            Payment method breakdown
+            <span
+              className="sales-kpi-wide-title-note"
+              title="Built from bill.payments[] for the filtered bills (date range + search + type + mode), plus advance applied on those bills. Sums to Total Received."
+            >
+              {' '}
+              (matches Total Received)
+            </span>
+          </span>
           <div className="sales-kpi-breakdown">
             <div>
               <span className="sales-kpi-br-label">
                 <i className="pi pi-wallet" /> Cash
               </span>
-              <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdown.cash)}</span>
-              <span className="sales-kpi-br-pct">{paymentBreakdown.pctCash}%</span>
+              <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdownExact.cash)}</span>
+              <span className="sales-kpi-br-pct">{paymentBreakdownExact.pctCash}%</span>
             </div>
             <div>
               <span className="sales-kpi-br-label">
                 <i className="pi pi-mobile" /> UPI
               </span>
-              <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdown.upi)}</span>
-              <span className="sales-kpi-br-pct">{paymentBreakdown.pctUpi}%</span>
+              <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdownExact.upi)}</span>
+              <span className="sales-kpi-br-pct">{paymentBreakdownExact.pctUpi}%</span>
             </div>
             <div>
               <span className="sales-kpi-br-label">
                 <i className="pi pi-building" /> Bank
               </span>
-              <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdown.bank)}</span>
-              <span className="sales-kpi-br-pct">{paymentBreakdown.pctBank}%</span>
+              <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdownExact.bank)}</span>
+              <span className="sales-kpi-br-pct">{paymentBreakdownExact.pctBank}%</span>
             </div>
             <div>
               <span className="sales-kpi-br-label">
-                <i className="pi pi-ellipsis-h" /> Other
+                <i className="pi pi-money-bill" /> Advance
               </span>
-              <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdown.other)}</span>
-              <span className="sales-kpi-br-pct">{paymentBreakdown.pctOther}%</span>
+              <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdownExact.advance)}</span>
+              <span className="sales-kpi-br-pct">{paymentBreakdownExact.pctAdvance}%</span>
+            </div>
+            {paymentBreakdownExact.other > 0 ? (
+              <div className="sales-kpi-breakdown-other">
+                <span className="sales-kpi-br-label">
+                  <i className="pi pi-ellipsis-h" /> Other / Cheque
+                </span>
+                <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdownExact.other)}</span>
+                <span className="sales-kpi-br-pct">{paymentBreakdownExact.pctOther}%</span>
+              </div>
+            ) : null}
+            {Math.abs(paymentBreakdownExact.adjustments) > 0.005 ? (
+              <div
+                className="sales-kpi-breakdown-other sales-kpi-breakdown-adjustments"
+                title={paymentBreakdownExact.adjustmentBills
+                  .map(
+                    (b) =>
+                      `${b.billNumber} (${b.customerName || ''}) → stored paid ${formatCurrency(b.expectedPaid)} vs payment lines ${formatCurrency(b.bucketedPaid)} = ${formatCurrency(b.residual)} (${b.paymentMode || 'no mode'})`
+                  )
+                  .join('\n')}
+              >
+                <span className="sales-kpi-br-label">
+                  <i className="pi pi-info-circle" /> Adjustments / legacy
+                </span>
+                <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdownExact.adjustments)}</span>
+                <span className="sales-kpi-br-pct">{paymentBreakdownExact.pctAdjustments}%</span>
+              </div>
+            ) : null}
+            <div className="sales-kpi-breakdown-total">
+              <span className="sales-kpi-br-label">Total</span>
+              <span className="sales-kpi-br-amt">{formatCurrency(paymentBreakdownExact.sum)}</span>
+              <span className="sales-kpi-br-pct">100%</span>
             </div>
           </div>
         </div>
+        <div className="sales-kpi-recon-strip" role="note">
+          <span className="sales-kpi-recon-formula">
+            Total sales ≈ Received + Pending:&nbsp;
+            {formatCurrency(kpiTotals.totalReceived)} + {formatCurrency(kpiTotals.totalPending)} ={' '}
+            {formatCurrency(kpiTotals.coveredByPayments)}
+          </span>
+          {Math.abs(kpiTotals.salesVsCoveredDelta) > 0.05 ? (
+            <span className="sales-kpi-recon-delta">
+              {' '}
+              (diff vs total sales {formatCurrency(kpiTotals.salesVsCoveredDelta)} — rounding or unusual payment rows,
+              e.g. refunds)
+            </span>
+          ) : null}
+        </div>
+        {adjustmentKpis ? (
+          <div
+            className="sales-kpi-adjustment-strip"
+            role="note"
+            style={{
+              gridColumn: '1 / -1',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+              gap: '12px',
+              padding: '12px 14px',
+              borderRadius: '10px',
+              border: '1px solid #e2e8f0',
+              background: '#f8fafc',
+            }}
+          >
+            <div>
+              <span className="sales-kpi-label">Gross sales</span>
+              <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
+                {formatCurrency(adjustmentKpis.gross)}
+              </span>
+            </div>
+            <div>
+              <span className="sales-kpi-label">Sales returns</span>
+              <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
+                {formatCurrency(adjustmentKpis.returns)}
+              </span>
+            </div>
+            <div>
+              <span className="sales-kpi-label">Supplementary</span>
+              <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
+                {formatCurrency(adjustmentKpis.supplementary)}
+              </span>
+            </div>
+            <div>
+              <span className="sales-kpi-label">Net sales</span>
+              <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
+                {formatCurrency(adjustmentKpis.net)}
+              </span>
+              <span className="sales-kpi-hint">Gross − returns + supplementary</span>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="sales-dash-filters" aria-label="Filters">
@@ -1097,13 +1663,8 @@ const Sales = ({ setActiveNav }) => {
             className="sales-dash-search-input"
           />
         </div>
-        <Dropdown
-          value={billTypeFilter}
-          options={billTypeFilterOptions}
-          onChange={(e) => setBillTypeFilter(e.value)}
-          placeholder="All types"
-          className="sales-dash-dropdown"
-        />
+        {/* Bill type is now controlled by the GST / Non-GST tab split, so the
+            type dropdown is intentionally removed here to avoid confusion. */}
         <Dropdown
           value={paymentModeFilter}
           options={paymentModeFilterOptions}
@@ -1145,8 +1706,19 @@ const Sales = ({ setActiveNav }) => {
             aria-selected={salesListTab === 'active'}
             className={`sales-dash-tab ${salesListTab === 'active' ? 'sales-dash-tab--active' : ''}`}
             onClick={() => setSalesListTab('active')}
+            title="Regular (Non-GST) sales — counted in in-hand cash and stock movements"
           >
-            Active bills ({commonFilteredSales.length})
+            Non-GST bills ({nonGstFilteredSales.length})
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={salesListTab === 'gst'}
+            className={`sales-dash-tab ${salesListTab === 'gst' ? 'sales-dash-tab--active' : ''}`}
+            onClick={() => setSalesListTab('gst')}
+            title="B2B GST invoices — kept separate; not counted in in-hand cash or stock"
+          >
+            GST bills ({gstFilteredSales.length})
           </button>
           <button
             type="button"
@@ -1159,19 +1731,43 @@ const Sales = ({ setActiveNav }) => {
           </button>
         </div>
 
+        {salesListTab === 'gst' ? (
+          <div
+            className="sales-dash-gst-note"
+            role="note"
+            style={{
+              background: '#fff7ed',
+              border: '1px solid #fed7aa',
+              color: '#9a3412',
+              borderRadius: 8,
+              padding: '8px 12px',
+              fontSize: 12,
+              margin: '8px 0',
+            }}
+          >
+            <strong>B2B GST invoices.</strong> These bills are tracked separately and do NOT
+            affect in-hand cash, the regular Total Received, or stock levels. KPIs above
+            reflect only the GST tab while it is selected.
+          </div>
+        ) : null}
+
         <div className="sales-dash-table-container">
-          {salesListTab === 'active' ? (
+          {salesListTab === 'active' || salesListTab === 'gst' ? (
             <DataTable
-              value={commonFilteredSales}
+              value={salesListTab === 'gst' ? gstFilteredSales : nonGstFilteredSales}
               paginator
               rows={10}
               rowsPerPageOptions={[10, 25, 50]}
               loading={loading}
               dataKey="id"
               emptyMessage={
-                debouncedSearchQuery.trim() && commonFilteredSales.length === 0 && dateRangeFilteredSales.length > 0
-                  ? 'No bills match your search for this date range.'
-                  : 'No bills found for this period or filters.'
+                salesListTab === 'gst'
+                  ? (debouncedSearchQuery.trim() && gstFilteredSales.length === 0 && dateRangeFilteredSales.length > 0
+                      ? 'No GST bills match your search for this date range.'
+                      : 'No GST bills in this period.')
+                  : (debouncedSearchQuery.trim() && nonGstFilteredSales.length === 0 && dateRangeFilteredSales.length > 0
+                      ? 'No bills match your search for this date range.'
+                      : 'No bills found for this period or filters.')
               }
               showGridlines
               stripedRows
@@ -1213,14 +1809,21 @@ const Sales = ({ setActiveNav }) => {
                 body={(rowData) => <span className="sales-dash-amt">{amountBodyTemplate(rowData, 'totalAmount')}</span>}
               />
               <Column
-                field="paidDisplay"
+                field="paidIncludingAdvance"
                 header="Paid"
                 align="right"
                 alignHeader="right"
                 style={{ minWidth: '8rem' }}
-                body={(rowData) => (
-                  <span className="sales-dash-paid">{formatCurrency(Number(rowData.paidDisplay) || 0)}</span>
-                )}
+                body={(rowData) => {
+                  const total = Number(rowData.paidIncludingAdvance) || 0;
+                  const adv = Number(rowData.advanceUsed) || 0;
+                  const paymentsOnly = Number(rowData.paidBillPaymentsOnly ?? rowData.paidDisplay) || 0;
+                  return (
+                    <span className="sales-dash-paid" title={adv > 0 ? `Payments ${formatCurrency(paymentsOnly)} + Advance ${formatCurrency(adv)}` : undefined}>
+                      {formatCurrency(total)}
+                    </span>
+                  );
+                }}
               />
               <Column
                 field="balanceDue"
@@ -1378,6 +1981,28 @@ const Sales = ({ setActiveNav }) => {
                 return t || '—';
               }}
             />
+            <Column
+              header="Actions"
+              align="center"
+              alignHeader="center"
+              style={{ minWidth: '3.25rem', width: '3.5rem' }}
+              body={(row) => (
+                <SalesRowActionsMenu
+                  row={{
+                    ...row,
+                    id: row.billId ?? row.id,
+                    billType: String(row.billKind || '').includes('NON') ? 'NON-GST' : 'GST',
+                    isCancelled: true,
+                    paymentStatus: 'CANCELLED',
+                    billLifecycleStatus: 'CANCELLED'
+                  }}
+                  readOnly
+                  onView={handleViewBillDetails}
+                  onPdf={handlePdfFromRow}
+                  onCancel={handleOpenCancelBill}
+                />
+              )}
+            />
           </DataTable>
           )}
         </div>
@@ -1400,6 +2025,148 @@ const Sales = ({ setActiveNav }) => {
             {!editMode && (
               <>
                 <h3>Invoice No: {selectedBill.billNumber}</h3>
+                {!selectedBill.isGST ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '8px',
+                      marginBottom: '14px',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className={billDetailTab === 'details' ? 'btn btn-primary' : 'btn btn-secondary'}
+                      onClick={() => setBillDetailTab('details')}
+                    >
+                      Bill details
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        billDetailTab === 'adjustments' ? 'btn btn-primary' : 'btn btn-secondary'
+                      }
+                      onClick={() => setBillDetailTab('adjustments')}
+                    >
+                      Adjustment history
+                    </button>
+                  </div>
+                ) : null}
+                {billDetailTab === 'adjustments' && !selectedBill.isGST ? (
+                  <div style={{ marginBottom: '16px' }}>
+                    {adjustmentHistoryLoading ? (
+                      <p style={{ color: '#64748b' }}>Loading adjustment history…</p>
+                    ) : adjustmentHistory ? (
+                      <>
+                        {adjustmentHistory.returnSummary ? (
+                          <section
+                            className="bill-return-summary-panel"
+                            style={{
+                              marginBottom: '14px',
+                              padding: '12px 14px',
+                              borderRadius: '10px',
+                              border: '1px solid #e2e8f0',
+                              background: '#f8fafc',
+                            }}
+                          >
+                            <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Effective values</h4>
+                            <div style={{ fontSize: '13px', lineHeight: 1.6 }}>
+                              <div>
+                                Original bill:{' '}
+                                <strong>
+                                  {formatCurrency(
+                                    adjustmentHistory.returnSummary.originalInvoiceTotalAmount
+                                  )}
+                                </strong>
+                              </div>
+                              <div>
+                                Returned:{' '}
+                                <strong>
+                                  {formatCurrency(
+                                    adjustmentHistory.returnSummary.cumulativeReturnedValue
+                                  )}
+                                </strong>
+                              </div>
+                              <div>
+                                Net effective:{' '}
+                                <strong>
+                                  {formatCurrency(adjustmentHistory.returnSummary.effectiveBillTotal)}
+                                </strong>
+                              </div>
+                              <div>
+                                Suggested refund vs effective:{' '}
+                                <strong>
+                                  {formatCurrency(
+                                    adjustmentHistory.returnSummary
+                                      .suggestedCustomerRefundVersusEffective
+                                  )}
+                                </strong>
+                              </div>
+                            </div>
+                          </section>
+                        ) : null}
+                        {Array.isArray(adjustmentHistory.returns) &&
+                        adjustmentHistory.returns.length > 0 ? (
+                          <section style={{ marginBottom: '14px' }}>
+                            <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Return timeline</h4>
+                            <table className="bill-return-history-table" style={{ width: '100%', fontSize: '13px' }}>
+                              <thead>
+                                <tr>
+                                  <th>Date</th>
+                                  <th>Return #</th>
+                                  <th>Value</th>
+                                  <th>Refund mode</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {adjustmentHistory.returns.map((r) => (
+                                  <tr key={r.returnId}>
+                                    <td>{r.createdAt ? formatDate(r.createdAt) : '—'}</td>
+                                    <td>{r.returnId}</td>
+                                    <td>{formatCurrency(Number(r.computedReturnAmount) || 0)}</td>
+                                    <td>{r.refundMode || '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </section>
+                        ) : null}
+                        {Array.isArray(adjustmentHistory.supplementaryBills) &&
+                        adjustmentHistory.supplementaryBills.length > 0 ? (
+                          <section style={{ marginBottom: '14px' }}>
+                            <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Supplementary bills</h4>
+                            <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '13px' }}>
+                              {adjustmentHistory.supplementaryBills.map((s) => (
+                                <li key={s.id}>
+                                  #{s.billNumber} · {formatCurrency(s.totalAmount)} ·{' '}
+                                  {s.paymentStatus || '—'}
+                                </li>
+                              ))}
+                            </ul>
+                          </section>
+                        ) : null}
+                        {Array.isArray(adjustmentHistory.timeline) &&
+                        adjustmentHistory.timeline.length > 0 ? (
+                          <section style={{ marginBottom: '14px' }}>
+                            <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Adjustment timeline</h4>
+                            <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '13px' }}>
+                              {adjustmentHistory.timeline.map((step, i) => (
+                                <li key={i}>
+                                  <strong>{step.label}</strong>
+                                  {step.detail ? ` — ${step.detail}` : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          </section>
+                        ) : null}
+                      </>
+                    ) : (
+                      <p style={{ color: '#64748b' }}>No adjustment history.</p>
+                    )}
+                  </div>
+                ) : null}
+                {billDetailTab === 'details' || selectedBill.isGST ? (
+                <>
                 <div className="bill-customer-details">
                   <div className="detail-row">
                     <span className="label">Name:</span>
@@ -1431,7 +2198,198 @@ const Sales = ({ setActiveNav }) => {
                   )}
                 </div>
 
+                {billAllowsStockReturn(selectedBill) ? (
+                  <div style={{ marginBottom: '12px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={billDetailLoading || paymentSubmitting}
+                      onClick={() => void handleOpenStockReturn(selectedBill)}
+                    >
+                      Return items…
+                    </button>
+                    <span style={{ marginLeft: '10px', fontSize: '12px', color: '#64748b' }}>
+                      Restores inventory; does not rewrite original line items.
+                    </span>
+                  </div>
+                ) : null}
+
+                {billAllowsSupplementaryExchange(selectedBill) ? (
+                  <div style={{ marginBottom: '12px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={billDetailLoading || paymentSubmitting}
+                      onClick={() => void handleOpenAdjustExchangeGuide(selectedBill)}
+                    >
+                      Adjust bill / Exchange…
+                    </button>
+                    <span style={{ marginLeft: '10px', fontSize: '12px', color: '#64748b' }}>
+                      Return module + supplementary bill for new items (no destructive edit of the original).
+                    </span>
+                  </div>
+                ) : null}
+
+                {(() => {
+                  const rs = selectedBill.returnSummary ?? selectedBill.originalSale?.returnSummary;
+                  if (!rs || billDetailLoading) return null;
+                  const origQ = Number(rs.originalInvoiceQuantity ?? 0);
+                  const origAmt = Number(rs.originalInvoiceTotalAmount ?? selectedBill.totalAmount ?? 0);
+                  const retQ = Number(rs.cumulativeReturnedQuantity ?? 0);
+                  const retAmt = Number(rs.cumulativeReturnedValue ?? 0);
+                  const effQ = Number(rs.effectiveSoldQuantityRemaining ?? 0);
+                  const effAmt = Number(rs.effectiveBillTotal ?? 0);
+                  const sug = Number(rs.suggestedCustomerRefundVersusEffective ?? 0);
+                  const adv = Number(selectedBill.advanceUsed ?? selectedBill.originalSale?.advanceUsed ?? 0);
+                  const paidCash = Number(selectedBill.totalPaid ?? selectedBill.paidAmount ?? 0);
+                  return (
+                    <section
+                      className="bill-return-summary-panel"
+                      style={{
+                        marginBottom: '14px',
+                        padding: '12px 14px',
+                        borderRadius: '10px',
+                        border: '1px solid #e2e8f0',
+                        background: '#f8fafc',
+                      }}
+                    >
+                      <h4 style={{ margin: '0 0 10px', fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
+                        Bill vs returns (separate module — original invoice untouched)
+                      </h4>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                          gap: '12px',
+                          marginBottom: '10px',
+                        }}
+                      >
+                        <div style={{ fontSize: '13px' }}>
+                          <div style={{ color: '#64748b', marginBottom: '4px' }}>Original bill</div>
+                          <div style={{ fontWeight: 700, color: '#0f172a' }}>
+                            {origQ.toLocaleString('en-IN', { maximumFractionDigits: 3 })} sq.ft
+                          </div>
+                          <div style={{ fontWeight: 600 }}>{formatCurrency(origAmt)}</div>
+                        </div>
+                        <div style={{ fontSize: '13px' }}>
+                          <div style={{ color: '#64748b', marginBottom: '4px' }}>Return summary (cumulative)</div>
+                          <div style={{ fontWeight: 700, color: '#0f172a' }}>
+                            Returned: {retQ.toLocaleString('en-IN', { maximumFractionDigits: 3 })} sq.ft
+                          </div>
+                          <div style={{ fontWeight: 600 }}>{formatCurrency(retAmt)}</div>
+                        </div>
+                        <div style={{ fontSize: '13px' }}>
+                          <div style={{ color: '#64748b', marginBottom: '4px' }}>Effective final bill</div>
+                          <div style={{ fontWeight: 700, color: '#0f172a' }}>
+                            {effQ.toLocaleString('en-IN', { maximumFractionDigits: 3 })} sq.ft
+                          </div>
+                          <div style={{ fontWeight: 600 }}>{formatCurrency(effAmt)}</div>
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          lineHeight: 1.5,
+                          color: '#334155',
+                          paddingTop: '10px',
+                          borderTop: '1px solid #e2e8f0',
+                        }}
+                      >
+                        <strong>Advance:</strong> {formatCurrency(adv)} already applied — not recomputed here. Additional
+                        paid (non-advance): {formatCurrency(paidCash)}. Total paid {formatCurrency(adv + paidCash)} vs
+                        effective final bill {formatCurrency(effAmt)}.{' '}
+                        {sug > 0.005 ? (
+                          <span>
+                            <strong>Refund via normal rails</strong> (cash / bank / wallet credit):{' '}
+                            {formatCurrency(sug)} — same surplus; do not recreate advance postings.
+                          </span>
+                        ) : (
+                          <span>
+                            No surplus vs effective bill from these figures (printed invoice totals may still show the
+                            original grand total for audit).
+                          </span>
+                        )}
+                      </div>
+                    </section>
+                  );
+                })()}
+
+                {!selectedBill.isGST && selectedBill.billLifecycleStatus ? (
+                  <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#475569' }}>
+                    Lifecycle: <strong>{selectedBill.billLifecycleStatus}</strong>
+                  </p>
+                ) : null}
+
+                {(() => {
+                  const rh = selectedBill.returnHistory ?? selectedBill.originalSale?.returnHistory ?? [];
+                  if (!Array.isArray(rh) || rh.length === 0 || billDetailLoading) return null;
+                  return (
+                    <section style={{ marginBottom: '14px' }}>
+                      <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Return history</h4>
+                      <table className="bill-table" style={{ fontSize: '13px' }}>
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>#</th>
+                            <th>Value</th>
+                            <th>Posted</th>
+                            <th>Mode</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rh.map((r) => (
+                            <tr key={r.returnId}>
+                              <td>{r.createdAt ? formatDate(r.createdAt) : '—'}</td>
+                              <td>{r.returnId}</td>
+                              <td>{formatCurrency(Number(r.computedReturnAmount) || 0)}</td>
+                              <td>{formatCurrency(Number(r.postedSettlementAmount) || 0)}</td>
+                              <td>{r.refundMode || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </section>
+                  );
+                })()}
+
+                {(() => {
+                  const sup =
+                    selectedBill.supplementaryBills ?? selectedBill.originalSale?.supplementaryBills ?? [];
+                  if (!Array.isArray(sup) || sup.length === 0 || billDetailLoading) return null;
+                  return (
+                    <section style={{ marginBottom: '14px' }}>
+                      <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Supplementary bills</h4>
+                      <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '13px' }}>
+                        {sup.map((s) => (
+                          <li key={s.id}>
+                            #{s.billNumber} · {formatCurrency(s.totalAmount)} · {s.paymentStatus || '—'}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  );
+                })()}
+
+                {(() => {
+                  const events = selectedBill.billEvents ?? selectedBill.originalSale?.billEvents ?? [];
+                  if (!Array.isArray(events) || events.length === 0 || billDetailLoading) return null;
+                  return (
+                    <section style={{ marginBottom: '14px' }}>
+                      <h4 style={{ margin: '0 0 8px', fontSize: '14px' }}>Adjustment timeline</h4>
+                      <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px' }}>
+                        {events.slice(0, 20).map((e) => (
+                          <li key={e.id ?? `${e.eventType}-${e.createdAt}`}>
+                            {e.createdAt ? formatDate(e.createdAt) : '—'} — {e.eventType}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  );
+                })()}
+
                 <div className="bill-summary" style={{ marginBottom: '12px' }} />
+                </>
+                ) : null}
               </>
             )}
 
@@ -1914,15 +2872,22 @@ const Sales = ({ setActiveNav }) => {
                   </div>
                 </footer>
 
+                {!billIsReadOnlyInSalesList(selectedBill) ? (
                 <div className="bill-edit-danger bill-edit-danger--in-shell">
                   <p className="bill-edit-danger-title">Danger zone</p>
-                  <button type="button" className="btn btn-danger" disabled={paymentSubmitting} onClick={handleDeleteBill}>
-                    {paymentSubmitting ? 'Working…' : 'Delete entire bill'}
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    disabled={paymentSubmitting}
+                    onClick={() => handleOpenCancelBill(selectedBill)}
+                  >
+                    Cancel bill…
                   </button>
                   <p className="bill-edit-danger-hint">
-                    Cancels the bill and rolls back inventory and all payments (any status).
+                    Preview refund, stock restore, and advance impact before confirming cancellation.
                   </p>
                 </div>
+                ) : null}
               </div>
             )}
 
@@ -1978,6 +2943,7 @@ const Sales = ({ setActiveNav }) => {
                 </p>
               ) : null}
               <div style={{ marginTop: '10px' }}>
+                <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: '13px' }}>Payment timeline</p>
                 {(selectedBill?.originalSale?.payments || []).length === 0 ? (
                   <span style={{ color: '#64748b' }}>No payments recorded yet.</span>
                 ) : (
@@ -2059,26 +3025,111 @@ const Sales = ({ setActiveNav }) => {
             <div className="bill-summary">
               <p>
                 <strong>Discount Amount:</strong> ₹{' '}
-                {Number(selectedBill.originalSale.discountAmount || 0).toLocaleString('en-IN')}
+                {Number(
+                  selectedBill.originalSale?.discountAmount ?? selectedBill.discountAmount ?? 0
+                ).toLocaleString('en-IN')}
               </p>
               <p>
                 <strong>Labour Charge:</strong> ₹{' '}
-                {Number(selectedBill.originalSale.labourCharge || 0).toLocaleString('en-IN')}
+                {Number(
+                  selectedBill.originalSale?.labourCharge ?? selectedBill.labourCharge ?? 0
+                ).toLocaleString('en-IN')}
               </p>
               <p>
                 <strong>Transportation Charge:</strong> ₹{' '}
-                {Number(selectedBill.originalSale.transportationCharge || 0).toLocaleString('en-IN')}
+                {Number(
+                  selectedBill.originalSale?.transportationCharge ??
+                    selectedBill.transportationCharge ??
+                    0
+                ).toLocaleString('en-IN')}
               </p>
               <p>
                 <strong>Other Expense:</strong> ₹{' '}
                 {Number(
-                  selectedBill.originalSale.otherExpenses ??
-                    selectedBill.originalSale.otherExpense ??
+                  selectedBill.originalSale?.otherExpenses ??
+                    selectedBill.originalSale?.otherExpense ??
+                    selectedBill.otherExpenses ??
+                    selectedBill.otherExpense ??
                     0
                 ).toLocaleString('en-IN')}
               </p>
-              <p><strong>GST Value:</strong> ₹ {(selectedBill.isGST ? (selectedBill.gstAmount ?? selectedBill.originalSale?.taxAmount ?? 0) : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-              <p><strong>Final Amount:</strong> ₹ {selectedBill.totalAmount.toLocaleString('en-IN')}</p>
+              {selectedBill.isGST ? (() => {
+                const totalTax = Number(
+                  selectedBill.gstAmount ?? selectedBill.originalSale?.taxAmount ?? 0
+                ) || 0;
+                const ratePct = Number(
+                  selectedBill.originalSale?.taxPercentage ??
+                    selectedBill.taxPercentage ??
+                    selectedBill.gstRate ??
+                    18
+                ) || 0;
+                const deliveryState = resolveDeliveryState({
+                  deliveryState:
+                    selectedBill.originalSale?.placeOfSupplyState ??
+                    selectedBill.placeOfSupplyState,
+                  deliveryAddress:
+                    selectedBill.originalSale?.deliveryAddress ?? selectedBill.deliveryAddress,
+                  customerState:
+                    selectedBill.originalSale?.customerState ?? selectedBill.customerState,
+                  customerAddress:
+                    selectedBill.originalSale?.address ??
+                    selectedBill.address ??
+                    selectedBill.originalSale?.customerAddress,
+                });
+                const split = computeGstSplit({
+                  taxAmount: totalTax,
+                  taxRatePct: ratePct,
+                  deliveryState,
+                });
+                return (
+                  <>
+                    {split.isInterState ? (
+                      <p>
+                        <strong>IGST ({split.igstRate}%):</strong> ₹{' '}
+                        {split.igstAmount.toLocaleString('en-IN', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </p>
+                    ) : (
+                      <>
+                        <p>
+                          <strong>CGST ({split.cgstRate}%):</strong> ₹{' '}
+                          {split.cgstAmount.toLocaleString('en-IN', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </p>
+                        <p>
+                          <strong>SGST ({split.sgstRate}%):</strong> ₹{' '}
+                          {split.sgstAmount.toLocaleString('en-IN', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </p>
+                      </>
+                    )}
+                    <p>
+                      <strong>
+                        Total GST ({ratePct}%
+                        {split.isInterState ? ', inter-state' : ', intra-state'}
+                        ):
+                      </strong>{' '}
+                      ₹{' '}
+                      {totalTax.toLocaleString('en-IN', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </p>
+                    <p style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                      Place of supply: {split.resolvedState || 'unknown'} (seller: {SELLER_STATE})
+                    </p>
+                  </>
+                );
+              })() : (
+                <p><strong>GST Value:</strong> ₹ 0.00</p>
+              )}
+              <p><strong>Final Amount:</strong> ₹ {(Number(selectedBill.totalAmount) || 0).toLocaleString('en-IN')}</p>
               <p>
                 <strong>Advance (token) used:</strong>{' '}
                 ₹{' '}
@@ -2091,6 +3142,7 @@ const Sales = ({ setActiveNav }) => {
               </p>
             </div>
 
+            {!billIsReadOnlyInSalesList(selectedBill) ? (
             <div
               style={{
                 marginTop: '24px',
@@ -2103,19 +3155,191 @@ const Sales = ({ setActiveNav }) => {
                 type="button"
                 className="btn btn-danger"
                 disabled={paymentSubmitting}
-                onClick={handleDeleteBill}
+                onClick={() => handleOpenCancelBill(selectedBill)}
               >
-                {paymentSubmitting ? 'Working…' : 'Delete entire bill'}
+                Cancel bill…
               </button>
               <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#64748b', maxWidth: '520px' }}>
-                Cancels the bill and rolls back inventory and all payments (any status).
+                Opens cancellation preview with total payback to customer before you confirm.
               </p>
             </div>
+            ) : null}
             </>
             )}
           </div>
         ) : (
           <p>No bill details available.</p>
+        )}
+      </Dialog>
+
+      <CancelBillModal
+        visible={cancelBillOpen}
+        bill={cancelBillTarget}
+        onClose={() => {
+          setCancelBillOpen(false);
+          setCancelBillTarget(null);
+        }}
+        onSuccess={() => void handleCancelBillSuccess()}
+        onError={(msg) => setToast({ message: msg, type: 'error' })}
+      />
+
+      <AdjustmentExchangeDialog
+        visible={adjustExchangeOpen}
+        bill={adjustExchangeBill}
+        adjustmentSession={adjustExchangeSession}
+        loading={adjustExchangeLoading}
+        canReturn={adjustExchangeBill ? billAllowsStockReturn(adjustExchangeBill) : false}
+        onHide={() => {
+          setAdjustExchangeOpen(false);
+          setAdjustExchangeBill(null);
+          setAdjustExchangeSession(null);
+        }}
+        onSuccess={() => void refreshSales()}
+        onToast={setToast}
+      />
+
+      <Dialog
+        header={
+          selectedBill?.billNumber ? `Return items · ${selectedBill.billNumber}` : 'Return items'
+        }
+        visible={stockReturnOpen}
+        style={{ width: 'min(760px, 94vw)' }}
+        onHide={() => {
+          if (!stockReturnSubmitting) setStockReturnOpen(false);
+        }}
+        className="sales-stock-return-dialog"
+      >
+        {billDetailLoading ? (
+          <p style={{ color: '#64748b', margin: 0 }}>Loading bill lines…</p>
+        ) : stockReturnableItems.length === 0 ? (
+          <p style={{ margin: 0 }}>
+            No returnable quantity remains on this bill (fully returned or missing line ids).
+          </p>
+        ) : (
+          <>
+            <p style={{ margin: '0 0 10px', fontSize: '13px', color: '#475569' }}>
+              Enter quantities to restore to inventory. Return value is proportional to line amounts
+              {selectedBill?.isGST ? ', GST, ' : ' and '}bill discount (server is authoritative).
+            </p>
+            <div style={{ overflowX: 'auto', marginBottom: '12px' }}>
+              <table className="bill-table" style={{ marginBottom: 0 }}>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Sold</th>
+                    <th>Returned before</th>
+                    <th>Can return</th>
+                    <th style={{ minWidth: '130px' }}>Return now</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stockReturnableItems.map((it) => {
+                    const id = Number(it.itemId);
+                    const sold = Number(it.quantity) || 0;
+                    const rtd = Number(it.quantityReturnedToDate) || 0;
+                    const max = Number(it.quantityReturnable ?? it.quantity) || 0;
+                    return (
+                      <tr key={id}>
+                        <td>{it.itemName || it.description || '—'}</td>
+                        <td>
+                          {sold} {it.unit || 'unit'}
+                        </td>
+                        <td>{rtd}</td>
+                        <td>{max}</td>
+                        <td>
+                          <input
+                            type="number"
+                            min={0}
+                            max={max}
+                            step="0.01"
+                            className="bill-edit-cell-input"
+                            style={{ width: '100%', maxWidth: '120px' }}
+                            value={stockReturnQtyById[id] ?? ''}
+                            placeholder="0"
+                            onChange={(e) =>
+                              setStockReturnQtyById((prev) => ({
+                                ...prev,
+                                [id]: e.target.value
+                              }))
+                            }
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ marginBottom: '10px', fontWeight: 600 }}>
+              Estimated return value: ₹{' '}
+              {stockReturnPreviewTotal.toLocaleString('en-IN', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+              })}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px' }}>
+                Refund / settlement
+                <select
+                  className="bill-edit-cell-input"
+                  style={{ minWidth: '220px' }}
+                  value={stockReturnRefundMode}
+                  onChange={(e) => setStockReturnRefundMode(e.target.value)}
+                  disabled={stockReturnSubmitting}
+                >
+                  <option value="NO_REFUND">No refund (stock only)</option>
+                  <option value="CASH_REFUND">Cash / UPI out (ledger refund)</option>
+                  <option value="BANK_REFUND">Bank / transfer out</option>
+                  <option value="WALLET_CREDIT">Wallet credit</option>
+                  <option value="ADVANCE_RESTORE">Restore surplus to advance wallet</option>
+                </select>
+              </label>
+              {stockReturnRefundMode === 'CASH_REFUND' ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '13px' }}>
+                  Rail
+                  <select
+                    className="bill-edit-cell-input"
+                    value={stockReturnCashRail}
+                    onChange={(e) => setStockReturnCashRail(e.target.value)}
+                    disabled={stockReturnSubmitting}
+                  >
+                    <option value="CASH">Cash</option>
+                    <option value="UPI">UPI</option>
+                  </select>
+                </label>
+              ) : null}
+            </div>
+            <label style={{ display: 'block', marginBottom: '12px', fontSize: '13px' }}>
+              Notes (optional)
+              <textarea
+                className="bill-edit-cell-input"
+                rows={2}
+                style={{ width: '100%', marginTop: '4px', resize: 'vertical' }}
+                value={stockReturnNotes}
+                onChange={(e) => setStockReturnNotes(e.target.value)}
+                disabled={stockReturnSubmitting}
+                placeholder="Reason / reference…"
+              />
+            </label>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={stockReturnSubmitting}
+                onClick={() => setStockReturnOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={stockReturnSubmitting}
+                onClick={handleSubmitStockReturn}
+              >
+                {stockReturnSubmitting ? 'Saving…' : 'Save return'}
+              </button>
+            </div>
+          </>
         )}
       </Dialog>
     </div>
