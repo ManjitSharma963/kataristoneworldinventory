@@ -114,6 +114,51 @@ const CHART_COLORS = {
   otherExp: '#f97316',
   advance: '#8b5cf6',
   misc: '#ec4899',
+  dailyExpense: '#f97316',
+  loanRepay: '#0ea5e9',
+  clientPayment: '#6366f1',
+  salaryPay: '#059669',
+  salaryAdvance: '#8b5cf6',
+  expenseOther: '#94a3b8',
+};
+
+/** Bucket a closing-report expense line for the Expenses Overview donut. */
+function classifyExpenseForChart(ex) {
+  const type = String(ex?.expenseType ?? '').trim().toLowerCase();
+  const cat = String(ex?.category ?? '').trim().toLowerCase();
+  const desc = String(ex?.description ?? '').trim().toLowerCase();
+
+  if (type === 'client_payment' || cat === 'client_supplier' || cat === 'client' || cat === 'client_out') {
+    return 'Client Payment';
+  }
+  if (
+    cat === 'loan_repayment' ||
+    cat === 'loan_repay' ||
+    cat === 'loan' ||
+    cat === 'market_loan' ||
+    desc.includes('loan repay')
+  ) {
+    return 'Loan Repay';
+  }
+  if (type === 'salary' || cat === 'salary') {
+    return 'Employee Salary';
+  }
+  if (type === 'advance' && (cat === 'employee' || cat.includes('employee'))) {
+    return 'Employee Advance';
+  }
+  if (type === 'daily' || cat === 'daily' || type === '' || type === 'expense') {
+    return 'Daily Expenses';
+  }
+  return 'Other';
+}
+
+const EXPENSE_CHART_BUCKET_COLORS = {
+  'Daily Expenses': CHART_COLORS.dailyExpense,
+  'Loan Repay': CHART_COLORS.loanRepay,
+  'Client Payment': CHART_COLORS.clientPayment,
+  'Employee Salary': CHART_COLORS.salaryPay,
+  'Employee Advance': CHART_COLORS.salaryAdvance,
+  Other: CHART_COLORS.expenseOther,
 };
 
 function MetricCard({ icon, tone, label, value, hint }) {
@@ -177,20 +222,22 @@ function DonutPanel({ title, centerLabel, centerValue, data, emptyMessage }) {
           </div>
           {!hasData ? <p className="reports-donut-empty-note">{emptyMessage}</p> : null}
         </div>
-        <ul className="reports-donut-legend" aria-label={`${title} breakdown`}>
-          {legendItems.map((item) => (
-            <li key={item.name}>
-              <span className="reports-donut-legend__dot" style={{ background: item.color }} />
-              <span className="reports-donut-legend__name" title={item.name}>
-                {item.name}
-              </span>
-              <span className="reports-donut-legend__val">
-                {money(item.value)}{' '}
-                <span className="reports-donut-legend__pct">({item.pct.toFixed(0)}%)</span>
-              </span>
-            </li>
-          ))}
-        </ul>
+        {hasData ? (
+          <ul className="reports-donut-legend" aria-label={`${title} breakdown`}>
+            {legendItems.map((item) => (
+              <li key={item.name} className="reports-donut-legend__row">
+                <span className="reports-donut-legend__left">
+                  <span className="reports-donut-legend__dot" style={{ background: item.color }} />
+                  <span className="reports-donut-legend__name">{item.name}</span>
+                </span>
+                <span className="reports-donut-legend__val">
+                  {money(item.value)}
+                  <span className="reports-donut-legend__pct">{item.pct.toFixed(0)}%</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
     </section>
   );
@@ -265,13 +312,6 @@ function BudgetPanel({
         <strong>{money(finalBudgetInHand)}</strong>
       </div>
       </div>
-      <p className="reports-budget__note">
-        Opening budget is cash+UPI from the ledger for all dates before today (net of inflows and outflows on cash and UPI).
-        Final in-hand = opening + total cash/UPI inflows − sales returns − operating expenses (cash/UPI).
-        Customer advance <em>applied</em> to bills is not counted as a cash/UPI inflow (wallet liability only).
-        Loans are funding, not sales revenue; they are included in inflows and net ledger balance.
-        Returns and cancellations reverse revenue; they are never classified as expenses.
-      </p>
     </section>
   );
 }
@@ -487,15 +527,35 @@ const Reports = () => {
   ]);
 
   const expensesChartData = useMemo(() => {
-    const labour = Number(salesChargesSummary.totalLabourCharge) || 0;
-    const otherBill = Number(salesChargesSummary.totalOtherExpensesCharge) || 0;
-    const advance = Number(closingData?.totalAdvanceAppliedOnBills) || 0;
-    return [
-      { name: 'Labour Charge', value: labour, color: CHART_COLORS.labour },
-      { name: 'Other Expense', value: otherBill, color: CHART_COLORS.otherExp },
-      { name: 'Advance Applied', value: advance, color: CHART_COLORS.advance },
+    const lines = closingData?.expenseLines ?? [];
+    const buckets = {
+      'Daily Expenses': 0,
+      'Loan Repay': 0,
+      'Client Payment': 0,
+      'Employee Salary': 0,
+      'Employee Advance': 0,
+      Other: 0,
+    };
+    for (const ex of lines) {
+      const label = classifyExpenseForChart(ex);
+      buckets[label] = (buckets[label] || 0) + (Number(ex.amount) || 0);
+    }
+    const order = [
+      'Daily Expenses',
+      'Loan Repay',
+      'Client Payment',
+      'Employee Salary',
+      'Employee Advance',
+      'Other',
     ];
-  }, [closingData, salesChargesSummary]);
+    return order
+      .filter((name) => (buckets[name] || 0) > 0)
+      .map((name) => ({
+        name,
+        value: buckets[name],
+        color: EXPENSE_CHART_BUCKET_COLORS[name] || CHART_COLORS.expenseOther,
+      }));
+  }, [closingData?.expenseLines]);
 
   const billsRows = closingData?.bills ?? closingData?.billLines ?? [];
   const expenseLines = closingData?.expenseLines ?? [];

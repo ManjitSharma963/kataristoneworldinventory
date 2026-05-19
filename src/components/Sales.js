@@ -388,8 +388,9 @@ const Sales = ({ setActiveNav }) => {
         const todayIso = toIsoDate(new Date());
         const fromIso = toIsoDate(dateFrom) || todayIso;
         const toIso = toIsoDate(dateTo) || fromIso;
-        const rows = await getBillCancellations(fromIso, toIso);
-        if (!ignore) setCancellations(Array.isArray(rows) ? rows : []);
+        const raw = await getBillCancellations(fromIso, toIso);
+        const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
+        if (!ignore) setCancellations(rows);
       } catch {
         if (!ignore) setCancellations([]);
       } finally {
@@ -584,6 +585,18 @@ const Sales = ({ setActiveNav }) => {
       return name.includes(q) || phone.includes(q) || billNo.includes(q) || kind.includes(q);
     });
   }, [cancellations, debouncedSearchQuery]);
+
+  const cancelledPeriodStats = useMemo(() => {
+    const rows = Array.isArray(cancellations) ? cancellations : [];
+    let total = 0;
+    for (const row of rows) {
+      total += Number(row.totalAmount) || 0;
+    }
+    return {
+      count: rows.length,
+      total: Number(total.toFixed(2)),
+    };
+  }, [cancellations]);
 
   const kpiTotals = useMemo(() => {
     // KPIs reflect the currently selected tab (Non-GST or GST B2B). They never
@@ -877,8 +890,9 @@ const Sales = ({ setActiveNav }) => {
       const todayIso = toIsoDate(new Date());
       const fromIso = toIsoDate(dateFrom) || todayIso;
       const toIso = toIsoDate(dateTo) || fromIso;
-      const rows = await getBillCancellations(fromIso, toIso);
-      setCancellations(Array.isArray(rows) ? rows : []);
+      const raw = await getBillCancellations(fromIso, toIso);
+      const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
+      setCancellations(rows);
     } catch {
       /* best-effort */
     }
@@ -1631,11 +1645,25 @@ const Sales = ({ setActiveNav }) => {
               </span>
             </div>
             <div>
-              <span className="sales-kpi-label">Sales returns</span>
+              <span className="sales-kpi-label">Stock returns (partial)</span>
               <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
                 {formatCurrency(adjustmentKpis.returns)}
               </span>
+              <span className="sales-kpi-hint" style={{ display: 'block', fontSize: '0.7rem', marginTop: 2 }}>
+                Item returns on active bills — not bill cancellation
+              </span>
             </div>
+            {cancelledPeriodStats.count > 0 ? (
+              <div>
+                <span className="sales-kpi-label">Cancelled bills</span>
+                <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
+                  {formatCurrency(cancelledPeriodStats.total)}
+                </span>
+                <span className="sales-kpi-hint" style={{ display: 'block', fontSize: '0.7rem', marginTop: 2 }}>
+                  {cancelledPeriodStats.count} bill(s) — open Cancelled bills tab
+                </span>
+              </div>
+            ) : null}
             <div>
               <span className="sales-kpi-label">Supplementary</span>
               <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
@@ -1727,7 +1755,7 @@ const Sales = ({ setActiveNav }) => {
             className={`sales-dash-tab ${salesListTab === 'cancelled' ? 'sales-dash-tab--active' : ''}`}
             onClick={() => setSalesListTab('cancelled')}
           >
-            Cancelled bills ({Array.isArray(cancellations) ? cancellations.length : 0})
+            Cancelled bills ({cancelledPeriodStats.count})
           </button>
         </div>
 
@@ -1894,7 +1922,7 @@ const Sales = ({ setActiveNav }) => {
                 Array.isArray(cancellations) &&
                 cancellations.length > 0
                   ? 'No cancelled bills match your search.'
-                  : 'No cancelled bills in this bill-date range.'
+                  : 'No cancelled bills for this date range (by bill date or cancel date). Widen the range at the top if needed.'
               }
               showGridlines
               stripedRows

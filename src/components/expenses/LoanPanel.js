@@ -289,14 +289,17 @@ const LoanPanel = ({
         </div>
 
         <div className="loan-ledger-filters">
-          <input className="loan-ledger-filter-input" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-          <input className="loan-ledger-filter-input" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-          <select className="loan-ledger-filter-input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-            <option value="ALL">Give &amp; Take</option>
-            <option value="GIVE">I gave (money out)</option>
-            <option value="TAKE">I took (money in)</option>
-          </select>
-          <select className="loan-ledger-filter-input" value={payFilter} onChange={(e) => setPayFilter(e.target.value)}>
+          <div className="loan-ledger-filters-row">
+            <input className="loan-ledger-filter-input" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+            <input className="loan-ledger-filter-input" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            <select className="loan-ledger-filter-input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              <option value="ALL">Give &amp; Take</option>
+              <option value="GIVE">I gave (money out)</option>
+              <option value="TAKE">I took (money in)</option>
+            </select>
+          </div>
+          <div className="loan-ledger-filters-row">
+            <select className="loan-ledger-filter-input" value={payFilter} onChange={(e) => setPayFilter(e.target.value)}>
             <option value="ALL">All Payment Modes</option>
             <option value="CASH">Cash</option>
             <option value="UPI">UPI</option>
@@ -310,6 +313,7 @@ const LoanPanel = ({
           <button type="button" className="btn btn-secondary loan-ledger-reset-btn" onClick={() => { setFromDate(''); setToDate(''); setTypeFilter('ALL'); setPayFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}>
             Reset
           </button>
+          </div>
         </div>
 
         <div

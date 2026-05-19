@@ -291,31 +291,31 @@
   color: #0f172a;
 }
 
-/* Donut: chart left, legend right */
+/* Donut: chart on top, category breakdown below */
 .reports-donut-panel {
-  min-height: 240px;
+  min-height: 280px;
 }
 
 .reports-donut-layout {
   display: flex;
+  flex-direction: column;
   align-items: stretch;
-  gap: 16px;
-  min-height: 220px;
+  gap: 14px;
 }
 
 .reports-donut-chart {
-  flex: 1 1 50%;
-  min-width: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  padding-bottom: 4px;
 }
 
 .reports-donut-viz {
   position: relative;
   width: 100%;
-  max-width: 200px;
+  max-width: 220px;
   aspect-ratio: 1;
   margin: 0 auto;
 }
@@ -361,7 +361,7 @@
 
 .reports-donut-center__value {
   display: block;
-  font-size: 0.85rem;
+  font-size: 0.95rem;
   font-weight: 700;
   color: #0f172a;
   margin-top: 4px;
@@ -394,57 +394,64 @@
 .reports-donut-legend {
   list-style: none;
   margin: 0;
-  padding: 4px 0;
-  flex: 1 1 50%;
-  min-width: 148px;
+  padding: 12px 0 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 10px;
+  gap: 8px;
+  border-top: 1px solid #e8edf3;
 }
 
-.reports-donut-legend li {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
-  column-gap: 10px;
+.reports-donut-legend__row {
+  display: flex;
   align-items: center;
-  font-size: 0.72rem;
-  line-height: 1.2;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e8edf3;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
+.reports-donut-legend__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
 }
 
 .reports-donut-legend__dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   flex-shrink: 0;
-  grid-column: 1;
-  grid-row: 1;
 }
 
 .reports-donut-legend__name {
-  grid-column: 2;
-  grid-row: 1;
-  color: #475569;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: #334155;
+  font-weight: 600;
+  word-break: break-word;
 }
 
 .reports-donut-legend__val {
-  grid-column: 3;
-  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
   color: #0f172a;
-  font-weight: 600;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  text-align: right;
+  flex-shrink: 0;
 }
 
 .reports-donut-legend__pct {
-  font-weight: 500;
+  font-weight: 600;
   color: #64748b;
-  font-size: 0.68rem;
+  font-size: 0.72rem;
 }
 
 /* Budget panel — green header */
@@ -511,16 +518,6 @@
 
 .reports-budget__row--final.is-negative strong {
   color: #dc2626;
-}
-
-.reports-budget__note {
-  margin: 0;
-  padding: 10px 16px 14px;
-  font-size: 0.68rem;
-  color: #94a3b8;
-  line-height: 1.45;
-  background: #fafafa;
-  border-top: 1px solid #f1f5f9;
 }
 
 /* Bottom — 3 columns: bills | expenses | sidebar */
@@ -850,10 +847,6 @@
   .reports-col-bills .reports-table-scroll--tall,
   .reports-col-expenses .reports-table-scroll--tall {
     min-height: 300px;
-  }
-
-  .reports-donut-layout {
-    flex-direction: column;
   }
 
   .reports-filters__actions {

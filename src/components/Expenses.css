@@ -240,15 +240,28 @@
   color: #555;
 }
 
-/* Loan ledger filters */
+/* Loan ledger filters — two rows */
 .loan-ledger-filters {
-  display: grid;
-  grid-template-columns: 150px 150px 160px 180px 140px minmax(220px, 1fr) 92px;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 10px;
+  width: 100%;
+}
+
+.loan-ledger-filters-row {
+  display: grid;
+  gap: 8px;
   align-items: center;
   width: 100%;
-  overflow: visible;
+}
+
+.loan-ledger-filters-row:first-child {
+  grid-template-columns: 150px 150px minmax(160px, 1fr);
+}
+
+.loan-ledger-filters-row:last-child {
+  grid-template-columns: minmax(160px, 1fr) 140px minmax(200px, 1.5fr) 92px;
 }
 
 .loan-ledger-filter-input {
@@ -285,14 +298,9 @@
   justify-content: center;
 }
 
-@media (max-width: 1200px) {
-  .loan-ledger-filters {
-    grid-template-columns: repeat(3, minmax(160px, 1fr));
-  }
-}
-
 @media (max-width: 768px) {
-  .loan-ledger-filters {
+  .loan-ledger-filters-row:first-child,
+  .loan-ledger-filters-row:last-child {
     grid-template-columns: 1fr;
   }
 }

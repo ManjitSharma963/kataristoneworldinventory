@@ -2015,8 +2015,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       if (m === 'CHEQUE' || m === 'CHECK') return 'cheque';
       return String(mode).toLowerCase().replace(/_/g, ' ');
     };
+    // Only receivable "loan given" (borrower disbursements). Market-loan repayments already
+    // appear as daily expenses (loan_repayment) — lender ledger REPAYMENT rows use giveTake=GIVE
+    // but must not be duplicated here.
     return (Array.isArray(loanTransactions) ? loanTransactions : [])
       .filter((r) => String(r.giveTake || '').toUpperCase() === 'GIVE')
+      .filter((r) => String(r.id || '').startsWith('b-'))
       .map((r) => {
         const dateRaw = r.date || '';
         let dateStr = getLocalDateString();

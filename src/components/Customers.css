@@ -185,6 +185,13 @@
   color: #334155;
 }
 
+.advance-refund-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #666;
+}
+
 .advance-add-form {
   margin-bottom: 8px;
 }

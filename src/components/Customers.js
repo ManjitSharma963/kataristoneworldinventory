@@ -48,10 +48,21 @@ const Customers = () => {
   const [remainingAdvanceByCustomerId, setRemainingAdvanceByCustomerId] = useState({});
   const [advanceAmount, setAdvanceAmount] = useState('');
   const [refundAmount, setRefundAmount] = useState('');
+  const [refundDesc, setRefundDesc] = useState('');
   const [advanceDesc, setAdvanceDesc] = useState('');
   const [advancePaymentMode, setAdvancePaymentMode] = useState(
     () => localStorage.getItem('lastAdvancePaymentMode') || 'CASH'
   );
+  const [refundPaymentMode, setRefundPaymentMode] = useState(
+    () => localStorage.getItem('lastAdvanceRefundPaymentMode') || 'CASH'
+  );
+
+  const ADVANCE_PAYMENT_MODES = [
+    { value: 'CASH', label: 'Cash' },
+    { value: 'UPI', label: 'UPI' },
+    { value: 'BANK_TRANSFER', label: 'Bank transfer' },
+    { value: 'CHEQUE', label: 'Cheque' },
+  ];
 
   const unwrapEntity = (value) =>
     value && typeof value === 'object' && value.data && typeof value.data === 'object'
@@ -137,7 +148,9 @@ const Customers = () => {
     setAdvanceAmount('');
     setRefundAmount('');
     setAdvanceDesc('');
-    setAdvancePaymentMode('CASH');
+    setRefundDesc('');
+    setAdvancePaymentMode(localStorage.getItem('lastAdvancePaymentMode') || 'CASH');
+    setRefundPaymentMode(localStorage.getItem('lastAdvanceRefundPaymentMode') || 'CASH');
     loadAdvanceData(customer.id);
   };
 
@@ -182,15 +195,28 @@ const Customers = () => {
       alert('Enter a positive refund amount');
       return;
     }
+    const mode = (refundPaymentMode || '').trim();
+    if (!mode) {
+      alert('Select how the refund was paid (cash, UPI, bank, etc.)');
+      return;
+    }
+    const modeLabel =
+      ADVANCE_PAYMENT_MODES.find((m) => m.value === mode)?.label || mode.replace(/_/g, ' ');
+    const confirmed = window.confirm(
+      `Refund ₹${amt.toLocaleString('en-IN')} to customer via ${modeLabel}? This will reduce today's ${mode === 'CASH' || mode === 'UPI' ? 'cash/UPI' : 'bank'} balance.`
+    );
+    if (!confirmed) return;
     try {
       setAdvanceLoading(true);
       await createCustomerAdvanceRefund({
         customerId: advanceModalCustomer.id,
         amount: amt,
-        paymentMode: advancePaymentMode || 'CASH',
-        description: advanceDesc || undefined,
+        paymentMode: mode,
+        description: refundDesc.trim() || undefined,
       });
+      localStorage.setItem('lastAdvanceRefundPaymentMode', mode);
       setRefundAmount('');
+      setRefundDesc('');
       await loadAdvanceData(advanceModalCustomer.id);
     } catch (err) {
       alert(err.message || 'Could not refund advance');
@@ -469,10 +495,11 @@ const Customers = () => {
                             onChange={(e) => setAdvancePaymentMode(e.target.value)}
                             className="form-select"
                           >
-                            <option value="CASH">Cash</option>
-                            <option value="UPI">UPI</option>
-                            <option value="BANK_TRANSFER">Bank transfer</option>
-                            <option value="CHEQUE">Cheque</option>
+                            {ADVANCE_PAYMENT_MODES.map((m) => (
+                              <option key={m.value} value={m.value}>
+                                {m.label}
+                              </option>
+                            ))}
                           </select>
                         </div>
                         <div className="form-group">
@@ -492,6 +519,10 @@ const Customers = () => {
 
                     <form onSubmit={handleRefundAdvance} className="advance-add-form advance-action-card">
                       <h4 className="advance-section-title">Refund advance</h4>
+                      <p className="advance-refund-hint">
+                        Choose how you paid the customer back. Cash/UPI refunds reduce today&apos;s in-hand balance;
+                        bank/cheque refunds reduce the bank side in reports.
+                      </p>
                       <div className="form-row">
                         <div className="form-group">
                           <label>Refund Amount (₹) *</label>
@@ -501,6 +532,29 @@ const Customers = () => {
                             value={refundAmount}
                             onChange={(e) => setRefundAmount(e.target.value)}
                             placeholder="e.g. 1000"
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Refund via *</label>
+                          <select
+                            value={refundPaymentMode}
+                            onChange={(e) => setRefundPaymentMode(e.target.value)}
+                            className="form-select"
+                          >
+                            {ADVANCE_PAYMENT_MODES.map((m) => (
+                              <option key={m.value} value={m.value}>
+                                {m.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>Note</label>
+                          <input
+                            type="text"
+                            value={refundDesc}
+                            onChange={(e) => setRefundDesc(e.target.value)}
+                            placeholder="Optional note"
                           />
                         </div>
                       </div>
@@ -547,7 +601,12 @@ const Customers = () => {
                               <td>
                                 {row.type === 'USAGE' && row.billId
                                   ? `${row.billKind || ''} bill #${row.billId}`
-                                  : [row.description || '—', row.paymentMode ? `(Mode: ${String(row.paymentMode).replace('_', ' ')})` : null]
+                                  : [
+                                      row.description || '—',
+                                      row.paymentMode
+                                        ? `(via ${String(row.paymentMode).replace(/_/g, ' ')})`
+                                        : null,
+                                    ]
                                       .filter(Boolean)
                                       .join(' ')}
                               </td>

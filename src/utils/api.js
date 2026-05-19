@@ -1222,12 +1222,16 @@ export const createCustomerAdvance = async ({ customerId, amount, description, p
 
 /** Refund token / advance for a customer (POST /api/customer/advance/refund). */
 export const createCustomerAdvanceRefund = async ({ customerId, amount, description, paymentMode }) => {
+  const mode = paymentMode != null ? String(paymentMode).trim() : '';
+  if (!mode) {
+    throw new Error('Payment mode is required for advance refund');
+  }
   return await apiCall('/customer/advance/refund', {
     method: 'POST',
     body: JSON.stringify({
       customerId,
       amount: Number(amount),
-      paymentMode: paymentMode || 'CASH',
+      paymentMode: mode,
       description: description || undefined,
     }),
   });
