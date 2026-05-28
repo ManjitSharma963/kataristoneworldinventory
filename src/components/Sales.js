@@ -3,6 +3,7 @@ import {
   downloadBillPDF,
   addBillPayment,
   deleteBillPayment,
+  updateBillPayment,
   getBillCancellations,
   updateBill,
   fetchBillByTypeAndId,
@@ -102,6 +103,17 @@ function mergeBillWithFullDetail(row, detail) {
     subtotal: Number(d.subtotal ?? row.subtotal) || 0,
     gstAmount: Number(d.taxAmount ?? d.gstAmount ?? row.gstAmount) || 0,
     totalAmount: Number(d.totalAmount ?? row.totalAmount) || 0,
+    effectiveTotal: (() => {
+      const rs = d.returnSummary ?? row.returnSummary ?? originalSale?.returnSummary;
+      const hasRet = rs && Number(rs.cumulativeReturnedValue ?? 0) > 0;
+      return hasRet
+        ? Number(rs.effectiveBillTotal ?? d.totalAmount ?? row.totalAmount ?? 0)
+        : Number(d.totalAmount ?? row.totalAmount ?? 0);
+    })(),
+    hasReturns: (() => {
+      const rs = d.returnSummary ?? row.returnSummary ?? originalSale?.returnSummary;
+      return Boolean(rs && Number(rs.cumulativeReturnedValue ?? 0) > 0);
+    })(),
     advanceUsed: Number(d.advanceUsed ?? row.advanceUsed) || 0,
     paidAmount: Number(d.paidAmount ?? row.paidAmount) || 0,
     paidDisplay: Number(d.totalPaid ?? d.paidAmount ?? row.paidDisplay) || 0,
@@ -111,14 +123,31 @@ function mergeBillWithFullDetail(row, detail) {
         Number(d.totalPaid ?? d.paidAmount ?? 0) + Number(d.advanceUsed ?? row.advanceUsed ?? 0)
       ).toFixed(2)
     ),
-    balanceDue:
-      d.amountDue != null && d.amountDue !== ''
-        ? Number(d.amountDue)
-        : d.balanceDue != null && d.balanceDue !== ''
-          ? Number(d.balanceDue)
-          : row.balanceDue != null
-            ? Number(row.balanceDue)
-            : row.balanceDue,
+    ...(() => {
+      const rs2 = d.returnSummary ?? row.returnSummary ?? originalSale?.returnSummary;
+      const hasRet = rs2 && Number(rs2.cumulativeReturnedValue ?? 0) > 0;
+      const effTotal = hasRet
+        ? Number(rs2.effectiveBillTotal ?? d.totalAmount ?? row.totalAmount ?? 0)
+        : Number(d.totalAmount ?? row.totalAmount ?? 0);
+      const actualPaid = Number(
+        (Number(d.totalPaid ?? d.paidAmount ?? 0) + Number(d.advanceUsed ?? row.advanceUsed ?? 0)).toFixed(2)
+      );
+      if (hasRet) {
+        return {
+          effectivePaid: Number(Math.min(actualPaid, effTotal).toFixed(2)),
+          refundDue: Math.max(0, Number((actualPaid - effTotal).toFixed(2))),
+          balanceDue: Math.max(0, Number((effTotal - actualPaid).toFixed(2))),
+        };
+      }
+      const fromApi = Number(d.amountDue ?? d.balanceDue);
+      return {
+        effectivePaid: actualPaid,
+        refundDue: 0,
+        balanceDue: Number.isFinite(fromApi) && fromApi >= 0
+          ? fromApi
+          : row.balanceDue != null ? Number(row.balanceDue) : row.balanceDue,
+      };
+    })(),
     paymentStatus: d.paymentStatus != null && d.paymentStatus !== '' ? d.paymentStatus : row.paymentStatus,
     paymentMode: d.paymentMode ?? d.paymentMethod ?? row.paymentMode,
     paymentModeRaw: d.paymentMode ?? d.paymentMethod ?? row.paymentModeRaw,
@@ -134,12 +163,12 @@ function mergeBillWithFullDetail(row, detail) {
   };
 }
 
-/** Amount still owed: prefer API amountDue/balanceDue, else total − advance − paid. */
+/** Amount still owed: prefer API amountDue/balanceDue, else effectiveTotal − advance − paid. */
 function computeBalanceDueForBill(bill) {
   if (!bill) return 0;
   const fromApi = Number(bill.amountDue ?? bill.balanceDue);
   if (Number.isFinite(fromApi) && fromApi >= 0) return fromApi;
-  const total = Number(bill.totalAmount) || 0;
+  const total = Number(bill.effectiveTotal ?? bill.totalAmount) || 0;
   const paid =
     Number(bill.totalPaid ?? bill.paidDisplay ?? bill.paidAmount) || 0;
   const adv = Number(bill.advanceUsed ?? bill.originalSale?.advanceUsed) || 0;
@@ -262,6 +291,7 @@ function SalesRowActionsMenu({
   onAdjustExchange,
   onPdf,
   onCancel,
+  onChangePaymentMode,
   readOnly = false
 }) {
   const menuRef = useRef(null);
@@ -273,6 +303,13 @@ function SalesRowActionsMenu({
         label: 'Adjust bill / Exchange',
         icon: 'pi pi-sync',
         command: () => void onAdjustExchange(row)
+      });
+    }
+    if (!locked && typeof onChangePaymentMode === 'function') {
+      base.push({
+        label: 'Change payment mode',
+        icon: 'pi pi-credit-card',
+        command: () => void onChangePaymentMode(row)
       });
     }
     base.push({ label: 'Download PDF', icon: 'pi pi-file-pdf', command: () => void onPdf(row) });
@@ -288,7 +325,7 @@ function SalesRowActionsMenu({
       );
     }
     return base;
-  }, [row, readOnly, onView, onAdjustExchange, onPdf, onCancel]);
+  }, [row, readOnly, onView, onAdjustExchange, onPdf, onCancel, onChangePaymentMode]);
 
   return (
     <div className="sales-dash-actions-menu">
@@ -354,6 +391,9 @@ const Sales = ({ setActiveNav }) => {
   const [stockReturnQtyById, setStockReturnQtyById] = useState({});
   const [stockReturnNotes, setStockReturnNotes] = useState('');
   const [stockReturnSubmitting, setStockReturnSubmitting] = useState(false);
+
+  const [changePaymentModeTarget, setChangePaymentModeTarget] = useState(null);
+  const [changePaymentNewMode, setChangePaymentNewMode] = useState('CASH');
 
   const [cancelBillOpen, setCancelBillOpen] = useState(false);
   const [cancelBillTarget, setCancelBillTarget] = useState(null);
@@ -462,6 +502,11 @@ const Sales = ({ setActiveNav }) => {
         }
 
         const totalAmount = Number(sale.totalAmount) || 0;
+        const rs = sale.returnSummary ?? sale.originalSale?.returnSummary;
+        const hasReturns = rs && Number(rs.cumulativeReturnedValue ?? 0) > 0;
+        const effectiveTotal = hasReturns
+          ? Number(rs.effectiveBillTotal ?? totalAmount)
+          : totalAmount;
         const advanceUsed = Number(sale.advanceUsed) || 0;
         const paidDisplay =
           Number(sale.totalPaid ?? sale.paidDisplay ?? sale.paidAmount) || 0;
@@ -471,11 +516,23 @@ const Sales = ({ setActiveNav }) => {
         const paidIncludingAdvance = Number(
           (paidBillPaymentsOnly + advanceUsed).toFixed(2)
         );
-        const fromApiDue = Number(sale.amountDue ?? sale.balanceDue);
-        const balanceDue =
-          Number.isFinite(fromApiDue) && fromApiDue >= 0
-            ? fromApiDue
-            : Math.max(0, Number((totalAmount - advanceUsed - paidDisplay).toFixed(2)));
+
+        const actualTotalPaid = Number(paidIncludingAdvance) || 0;
+        const refundDue = hasReturns
+          ? Math.max(0, Number((actualTotalPaid - effectiveTotal).toFixed(2)))
+          : 0;
+        const effectivePaid = hasReturns
+          ? Number(Math.min(actualTotalPaid, effectiveTotal).toFixed(2))
+          : actualTotalPaid;
+
+        const balanceDue = hasReturns
+          ? Math.max(0, Number((effectiveTotal - actualTotalPaid).toFixed(2)))
+          : (() => {
+              const fromApiDue = Number(sale.amountDue ?? sale.balanceDue);
+              return Number.isFinite(fromApiDue) && fromApiDue >= 0
+                ? fromApiDue
+                : Math.max(0, Number((totalAmount - advanceUsed - paidDisplay).toFixed(2)));
+            })();
         const isGST = billType === 'GST';
         const gstRate =
           sale.taxPercentage != null && sale.taxPercentage !== ''
@@ -501,7 +558,11 @@ const Sales = ({ setActiveNav }) => {
           paidDisplay,
           paidBillPaymentsOnly,
           paidIncludingAdvance,
-          balanceDue
+          effectivePaid,
+          refundDue,
+          balanceDue,
+          effectiveTotal,
+          hasReturns,
         };
       });
   }, [sales]);
@@ -563,6 +624,15 @@ const Sales = ({ setActiveNav }) => {
     [commonFilteredSales]
   );
 
+  /** Bills with outstanding balance (pending / partial / due). */
+  const pendingFilteredSales = useMemo(
+    () => commonFilteredSales.filter((r) => {
+      const due = Number(r.balanceDue) || 0;
+      return due > 0.005 && !r.isCancelled && getBillPaymentStatusKey(r) !== 'CANCELLED';
+    }),
+    [commonFilteredSales]
+  );
+
   /**
    * The slice of sales the active tab is responsible for. KPIs and the payment-
    * method breakdown both follow this so the cards always describe the table
@@ -570,8 +640,9 @@ const Sales = ({ setActiveNav }) => {
    */
   const activeTabSales = useMemo(() => {
     if (salesListTab === 'gst') return gstFilteredSales;
+    if (salesListTab === 'pending') return pendingFilteredSales;
     return nonGstFilteredSales;
-  }, [salesListTab, nonGstFilteredSales, gstFilteredSales]);
+  }, [salesListTab, nonGstFilteredSales, gstFilteredSales, pendingFilteredSales]);
 
   const filteredCancellations = useMemo(() => {
     const q = normalizeSearchText(debouncedSearchQuery);
@@ -608,18 +679,21 @@ const Sales = ({ setActiveNav }) => {
     /** Customer wallet applied on bills in period. */
     let totalAdvanceOnBills = 0;
     let totalPending = 0;
+    let totalRefunds = 0;
     for (const r of rows) {
-      const totalAmount = Number(r.totalAmount) || 0;
+      const totalAmount = Number(r.effectiveTotal ?? r.totalAmount) || 0;
       const billPayments = Number(r.paidBillPaymentsOnly ?? r.paidDisplay) || 0;
       const advanceUsed = Number(r.advanceUsed) || 0;
       const balanceDue = Number(r.balanceDue) || 0;
+      const refund = Number(r.refundDue) || 0;
 
       totalSales += totalAmount;
       totalBillPayments += billPayments;
       totalAdvanceOnBills += advanceUsed;
       totalPending += balanceDue;
+      totalRefunds += refund;
     }
-    const totalReceived = Number((totalBillPayments + totalAdvanceOnBills).toFixed(2));
+    const totalReceived = Number((totalBillPayments + totalAdvanceOnBills - totalRefunds).toFixed(2));
     const coveredByPayments = Number((totalReceived + totalPending).toFixed(2));
     const salesVsCoveredDelta = Number((totalSales - coveredByPayments).toFixed(2));
     return {
@@ -650,7 +724,8 @@ const Sales = ({ setActiveNav }) => {
         String(r.billStatus || '').toUpperCase() === 'SUPPLEMENTARY';
       if (isSupp) supplementary += amt;
       else gross += amt;
-      returns += Number(r.returnSummary?.cumulativeReturnedValue ?? 0);
+      const retValue = Number(r.returnSummary?.cumulativeReturnedValue ?? 0);
+      returns += retValue;
     }
     return {
       gross: Number(gross.toFixed(2)),
@@ -786,8 +861,8 @@ const Sales = ({ setActiveNav }) => {
   const handleExportCsv = () => {
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const lines = [];
-    if (salesListTab === 'active' || salesListTab === 'gst') {
-      const rows = salesListTab === 'gst' ? gstFilteredSales : nonGstFilteredSales;
+    if (salesListTab === 'active' || salesListTab === 'gst' || salesListTab === 'pending') {
+      const rows = salesListTab === 'gst' ? gstFilteredSales : salesListTab === 'pending' ? pendingFilteredSales : nonGstFilteredSales;
       lines.push(['BillNo', 'Customer', 'Phone', 'Date', 'Items', 'Type', 'Amount', 'Paid', 'Balance', 'PaidVia'].join(','));
       for (const r of rows) {
         lines.push(
@@ -798,7 +873,7 @@ const Sales = ({ setActiveNav }) => {
             r.billDate ? new Date(r.billDate).toISOString() : '',
             r.itemsCount,
             esc(r.billType),
-            Number(r.totalAmount) || 0,
+            Number(r.effectiveTotal ?? r.totalAmount) || 0,
             Number(r.paidIncludingAdvance ?? r.paidDisplay) || 0,
             Number(r.balanceDue) || 0,
             esc(r.paymentModeRaw || formatPaymentModeLabel(r.paymentMode) || '')
@@ -829,9 +904,11 @@ const Sales = ({ setActiveNav }) => {
     a.download =
       salesListTab === 'gst'
         ? 'gst-bills.csv'
-        : salesListTab === 'cancelled'
-          ? 'cancelled-bills.csv'
-          : 'sales-bills.csv';
+        : salesListTab === 'pending'
+          ? 'pending-bills.csv'
+          : salesListTab === 'cancelled'
+            ? 'cancelled-bills.csv'
+            : 'sales-bills.csv';
     a.click();
     URL.revokeObjectURL(url);
     setToast({ message: 'CSV file downloaded.', type: 'success' });
@@ -857,9 +934,25 @@ const Sales = ({ setActiveNav }) => {
   };
 
   const totalAmountBodyTemplate = (rowData) => {
+    const original = Number(rowData.totalAmount) || 0;
+    const effective = Number(rowData.effectiveTotal ?? original);
+    const changed = rowData.hasReturns && Math.abs(original - effective) >= 0.01;
+    if (!changed) {
+      return (
+        <span className="total-amount-cell">
+          {formatCurrency(original)}
+        </span>
+      );
+    }
     return (
-      <span className="total-amount-cell">
-        {amountBodyTemplate(rowData, 'totalAmount')}
+      <span className="total-amount-cell" style={{ lineHeight: 1.35 }}>
+        <span style={{ textDecoration: 'line-through', color: '#94a3b8', fontSize: '0.85em' }}>
+          {formatCurrency(original)}
+        </span>
+        <br />
+        <span style={{ fontWeight: 600, color: '#0f172a' }}>
+          {formatCurrency(effective)}
+        </span>
       </span>
     );
   };
@@ -906,6 +999,10 @@ const Sales = ({ setActiveNav }) => {
     setCancelBillTarget(null);
   };
 
+  const handleChangePaymentModeFromRow = async (bill) => {
+    await handleViewBillDetails(bill);
+  };
+
   const actionsBodyTemplate = (rowData) => (
     <SalesRowActionsMenu
       row={rowData}
@@ -914,6 +1011,7 @@ const Sales = ({ setActiveNav }) => {
       onAdjustExchange={handleOpenAdjustExchangeGuide}
       onPdf={handlePdfFromRow}
       onCancel={handleOpenCancelBill}
+      onChangePaymentMode={handleChangePaymentModeFromRow}
     />
   );
 
@@ -1422,6 +1520,33 @@ const Sales = ({ setActiveNav }) => {
     }
   };
 
+  const handleChangePaymentMode = async () => {
+    const t = changePaymentModeTarget;
+    if (!t || !selectedBill?.id || !selectedBill?.billType) return;
+    if (changePaymentNewMode === t.paymentMode) {
+      setToast({ message: 'Payment mode is already ' + formatPaymentModeLabel(t.paymentMode), type: 'info' });
+      return;
+    }
+    try {
+      setPaymentSubmitting(true);
+      await updateBillPayment(selectedBill.id, selectedBill.billType, t.paymentId, {
+        amount: t.amount,
+        paymentMode: changePaymentNewMode,
+        paymentDate: t.paymentDate,
+      });
+      await refreshSales();
+      await reloadBillDetailInDialog(selectedBill.id, selectedBill.billType);
+      setToast({
+        message: `Payment mode changed from ${formatPaymentModeLabel(t.paymentMode)} to ${formatPaymentModeLabel(changePaymentNewMode)}.`,
+        type: 'success'
+      });
+      setChangePaymentModeTarget(null);
+    } catch (e) {
+      setToast({ message: e?.message || 'Could not change payment mode.', type: 'error' });
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  };
 
   // Filter templates for row-based filtering. The bill-type dropdown was
   // removed in favour of the GST / Non-GST tab split, so the options array
@@ -1751,6 +1876,16 @@ const Sales = ({ setActiveNav }) => {
           <button
             type="button"
             role="tab"
+            aria-selected={salesListTab === 'pending'}
+            className={`sales-dash-tab ${salesListTab === 'pending' ? 'sales-dash-tab--active' : ''}`}
+            onClick={() => setSalesListTab('pending')}
+            title="Bills with outstanding balance — partially paid or unpaid"
+          >
+            Pending bills ({pendingFilteredSales.length})
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={salesListTab === 'cancelled'}
             className={`sales-dash-tab ${salesListTab === 'cancelled' ? 'sales-dash-tab--active' : ''}`}
             onClick={() => setSalesListTab('cancelled')}
@@ -1780,16 +1915,18 @@ const Sales = ({ setActiveNav }) => {
         ) : null}
 
         <div className="sales-dash-table-container">
-          {salesListTab === 'active' || salesListTab === 'gst' ? (
+          {salesListTab === 'active' || salesListTab === 'gst' || salesListTab === 'pending' ? (
             <DataTable
-              value={salesListTab === 'gst' ? gstFilteredSales : nonGstFilteredSales}
+              value={salesListTab === 'gst' ? gstFilteredSales : salesListTab === 'pending' ? pendingFilteredSales : nonGstFilteredSales}
               paginator
               rows={10}
               rowsPerPageOptions={[10, 25, 50]}
               loading={loading}
               dataKey="id"
               emptyMessage={
-                salesListTab === 'gst'
+                salesListTab === 'pending'
+                  ? 'No pending bills in this period — all bills are fully paid!'
+                  : salesListTab === 'gst'
                   ? (debouncedSearchQuery.trim() && gstFilteredSales.length === 0 && dateRangeFilteredSales.length > 0
                       ? 'No GST bills match your search for this date range.'
                       : 'No GST bills in this period.')
@@ -1829,26 +1966,43 @@ const Sales = ({ setActiveNav }) => {
               />
               <Column field="billType" header="Type" style={{ minWidth: '7rem' }} body={billTypeBodyTemplate} />
               <Column
-                field="totalAmount"
+                field="effectiveTotal"
                 header="Amount"
                 align="right"
                 alignHeader="right"
                 style={{ minWidth: '8rem' }}
-                body={(rowData) => <span className="sales-dash-amt">{amountBodyTemplate(rowData, 'totalAmount')}</span>}
+                sortable
+                body={totalAmountBodyTemplate}
               />
               <Column
-                field="paidIncludingAdvance"
+                field="effectivePaid"
                 header="Paid"
                 align="right"
                 alignHeader="right"
                 style={{ minWidth: '8rem' }}
+                sortable
                 body={(rowData) => {
-                  const total = Number(rowData.paidIncludingAdvance) || 0;
+                  const originalPaid = Number(rowData.paidIncludingAdvance) || 0;
+                  const effPaid = Number(rowData.effectivePaid ?? originalPaid);
                   const adv = Number(rowData.advanceUsed) || 0;
-                  const paymentsOnly = Number(rowData.paidBillPaymentsOnly ?? rowData.paidDisplay) || 0;
+                  const changed = rowData.hasReturns && Math.abs(originalPaid - effPaid) >= 0.01;
+                  if (!changed) {
+                    return (
+                      <span className="sales-dash-paid" title={adv > 0 ? `Payments ${formatCurrency(originalPaid - adv)} + Advance ${formatCurrency(adv)}` : undefined}>
+                        {formatCurrency(originalPaid)}
+                      </span>
+                    );
+                  }
                   return (
-                    <span className="sales-dash-paid" title={adv > 0 ? `Payments ${formatCurrency(paymentsOnly)} + Advance ${formatCurrency(adv)}` : undefined}>
-                      {formatCurrency(total)}
+                    <span className="sales-dash-paid" style={{ lineHeight: 1.35 }}
+                      title={`Originally paid ${formatCurrency(originalPaid)}, adjusted to ${formatCurrency(effPaid)} after return`}>
+                      <span style={{ textDecoration: 'line-through', color: '#94a3b8', fontSize: '0.85em' }}>
+                        {formatCurrency(originalPaid)}
+                      </span>
+                      <br />
+                      <span style={{ fontWeight: 600, color: '#0f172a' }}>
+                        {formatCurrency(effPaid)}
+                      </span>
                     </span>
                   );
                 }}
@@ -1861,6 +2015,16 @@ const Sales = ({ setActiveNav }) => {
                 style={{ minWidth: '8rem' }}
                 body={(rowData) => {
                   const b = Number(rowData.balanceDue) || 0;
+                  const refund = Number(rowData.refundDue) || 0;
+                  if (refund > 0.005 && b <= 0.005) {
+                    return (
+                      <span style={{ lineHeight: 1.35 }}>
+                        <span style={{ fontSize: '0.85em', color: '#dc2626', fontWeight: 600 }}>
+                          Refund {formatCurrency(refund)}
+                        </span>
+                      </span>
+                    );
+                  }
                   return (
                     <span className={b <= 0.005 ? 'sales-dash-balance sales-dash-balance--zero' : 'sales-dash-balance sales-dash-balance--due'}>
                       {formatCurrency(b)}
@@ -1973,11 +2137,11 @@ const Sales = ({ setActiveNav }) => {
               }
             />
             <Column
-              field="totalAmount"
+              field="effectiveTotal"
               header="Bill total"
               align="right"
               alignHeader="right"
-              body={(row) => formatCurrency(Number(row.totalAmount) || 0)}
+              body={totalAmountBodyTemplate}
             />
             <Column
               field="paidFromPayments"
@@ -2664,20 +2828,68 @@ const Sales = ({ setActiveNav }) => {
                               <tr key={p.paymentId || pidx}>
                                 <td>{pidx + 1}</td>
                                 <td>{String(p.paymentDate || '—').slice(0, 10)}</td>
-                                <td>{formatPaymentModeLabel(p.paymentMode)}</td>
+                                <td>
+                                  {changePaymentModeTarget?.paymentId === p.paymentId ? (
+                                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                      <select
+                                        className="bill-edit-cell-input"
+                                        style={{ minWidth: '100px', padding: '2px 4px', fontSize: '13px' }}
+                                        value={changePaymentNewMode}
+                                        onChange={(e) => setChangePaymentNewMode(e.target.value)}
+                                        disabled={paymentSubmitting}
+                                      >
+                                        <option value="CASH">Cash</option>
+                                        <option value="UPI">UPI</option>
+                                        <option value="BANK_TRANSFER">Bank transfer</option>
+                                        <option value="CHEQUE">Cheque</option>
+                                        <option value="OTHER">Other</option>
+                                      </select>
+                                      <Button type="button" icon="pi pi-check" rounded text severity="success"
+                                        disabled={paymentSubmitting}
+                                        onClick={handleChangePaymentMode}
+                                        aria-label="Confirm mode change"
+                                        style={{ width: '28px', height: '28px' }} />
+                                      <Button type="button" icon="pi pi-times" rounded text severity="secondary"
+                                        disabled={paymentSubmitting}
+                                        onClick={() => setChangePaymentModeTarget(null)}
+                                        aria-label="Cancel mode change"
+                                        style={{ width: '28px', height: '28px' }} />
+                                    </div>
+                                  ) : (
+                                    formatPaymentModeLabel(p.paymentMode)
+                                  )}
+                                </td>
                                 <td>₹ {Number(p.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                                 <td className="bill-edit-cell-muted">—</td>
                                 <td>
-                                  <Button
-                                    type="button"
-                                    icon="pi pi-trash"
-                                    rounded
-                                    text
-                                    severity="danger"
-                                    disabled={paymentSubmitting || editSaving}
-                                    onClick={() => handleDeletePaymentFromBill(p.paymentId)}
-                                    aria-label="Delete payment"
-                                  />
+                                  <div style={{ display: 'flex', gap: '2px' }}>
+                                    <Button
+                                      type="button"
+                                      icon="pi pi-pencil"
+                                      rounded
+                                      text
+                                      severity="info"
+                                      disabled={paymentSubmitting || editSaving}
+                                      onClick={() => {
+                                        setChangePaymentModeTarget(p);
+                                        setChangePaymentNewMode(p.paymentMode || 'CASH');
+                                      }}
+                                      aria-label="Change payment mode"
+                                      title="Change payment mode"
+                                      style={{ width: '28px', height: '28px' }}
+                                    />
+                                    <Button
+                                      type="button"
+                                      icon="pi pi-trash"
+                                      rounded
+                                      text
+                                      severity="danger"
+                                      disabled={paymentSubmitting || editSaving}
+                                      onClick={() => handleDeletePaymentFromBill(p.paymentId)}
+                                      aria-label="Delete payment"
+                                      style={{ width: '28px', height: '28px' }}
+                                    />
+                                  </div>
                                 </td>
                               </tr>
                             ))}
@@ -2977,17 +3189,63 @@ const Sales = ({ setActiveNav }) => {
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: '18px' }}>
                     {(selectedBill.originalSale.payments || []).map((p) => (
-                      <li key={p.paymentId} style={{ marginBottom: '4px' }}>
-                        {p.paymentDate} - {p.paymentMode} - ₹{Number(p.amount || 0).toFixed(2)}{' '}
-                        <button
-                          type="button"
-                          className="btn btn-danger"
-                          style={{ marginLeft: '8px', padding: '2px 8px' }}
-                          onClick={() => handleDeletePaymentFromBill(p.paymentId)}
-                          disabled={paymentSubmitting}
-                        >
-                          Delete
-                        </button>
+                      <li key={p.paymentId} style={{ marginBottom: '6px' }}>
+                        {changePaymentModeTarget?.paymentId === p.paymentId ? (
+                          <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            {p.paymentDate} -
+                            <select
+                              style={{ padding: '2px 6px', fontSize: '13px' }}
+                              value={changePaymentNewMode}
+                              onChange={(e) => setChangePaymentNewMode(e.target.value)}
+                              disabled={paymentSubmitting}
+                            >
+                              <option value="CASH">Cash</option>
+                              <option value="UPI">UPI</option>
+                              <option value="BANK_TRANSFER">Bank transfer</option>
+                              <option value="CHEQUE">Cheque</option>
+                              <option value="OTHER">Other</option>
+                            </select>
+                            - ₹{Number(p.amount || 0).toFixed(2)}{' '}
+                            <button type="button" className="btn btn-primary"
+                              style={{ padding: '2px 8px' }}
+                              disabled={paymentSubmitting}
+                              onClick={handleChangePaymentMode}>
+                              {paymentSubmitting ? 'Saving...' : 'Save'}
+                            </button>
+                            <button type="button" className="btn btn-secondary"
+                              style={{ padding: '2px 8px' }}
+                              disabled={paymentSubmitting}
+                              onClick={() => setChangePaymentModeTarget(null)}>
+                              Cancel
+                            </button>
+                          </span>
+                        ) : (
+                          <>
+                            {p.paymentDate} - {formatPaymentModeLabel(p.paymentMode)} - ₹{Number(p.amount || 0).toFixed(2)}{' '}
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ marginLeft: '4px', padding: '2px 8px' }}
+                              onClick={() => {
+                                setChangePaymentModeTarget(p);
+                                setChangePaymentNewMode(p.paymentMode || 'CASH');
+                              }}
+                              disabled={paymentSubmitting}
+                              title="Change payment mode"
+                            >
+                              Change mode
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-danger"
+                              style={{ marginLeft: '4px', padding: '2px 8px' }}
+                              onClick={() => handleDeletePaymentFromBill(p.paymentId)}
+                              disabled={paymentSubmitting}
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -3157,7 +3415,24 @@ const Sales = ({ setActiveNav }) => {
               })() : (
                 <p><strong>GST Value:</strong> ₹ 0.00</p>
               )}
-              <p><strong>Final Amount:</strong> ₹ {(Number(selectedBill.totalAmount) || 0).toLocaleString('en-IN')}</p>
+              <p>
+                <strong>Final Amount:</strong>{' '}
+                {selectedBill.hasReturns && Math.abs((Number(selectedBill.totalAmount) || 0) - (Number(selectedBill.effectiveTotal) || 0)) >= 0.01 ? (
+                  <>
+                    <span style={{ textDecoration: 'line-through', color: '#94a3b8' }}>
+                      ₹ {(Number(selectedBill.totalAmount) || 0).toLocaleString('en-IN')}
+                    </span>{' '}
+                    <span style={{ fontWeight: 700 }}>
+                      ₹ {(Number(selectedBill.effectiveTotal) || 0).toLocaleString('en-IN')}
+                    </span>
+                    <span style={{ fontSize: '12px', color: '#dc2626', marginLeft: '6px' }}>
+                      (after ₹{(Number(selectedBill.returnSummary?.cumulativeReturnedValue ?? 0)).toLocaleString('en-IN')} return)
+                    </span>
+                  </>
+                ) : (
+                  <>₹ {(Number(selectedBill.totalAmount) || 0).toLocaleString('en-IN')}</>
+                )}
+              </p>
               <p>
                 <strong>Advance (token) used:</strong>{' '}
                 ₹{' '}

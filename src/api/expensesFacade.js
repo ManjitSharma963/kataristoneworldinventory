@@ -14,6 +14,7 @@ export {
   fetchClientPurchases,
   createClientPurchase,
   updateClientPurchase,
+  addClientPurchaseAmount,
   deleteClientPurchase,
   addClientPayment,
   fetchAllPayments,

@@ -1,11 +1,24 @@
 import * as yup from 'yup';
 
+/** End of today (23:59:59.999) — evaluated fresh each time so today always passes. */
+const endOfToday = () => {
+  const d = new Date();
+  d.setHours(23, 59, 59, 999);
+  return d;
+};
+
+const notFutureDate = (label = 'Date') =>
+  yup
+    .date()
+    .required(`${label} is required`)
+    .test('not-future', `${label} cannot be in the future`, (value) => {
+      if (!value) return true;
+      return value <= endOfToday();
+    });
+
 // Expense Form Validation Schema
 export const expenseSchema = yup.object().shape({
-  date: yup
-    .date()
-    .required('Date is required')
-    .max(new Date(), 'Date cannot be in the future'),
+  date: notFutureDate('Date'),
   category: yup
     .string()
     .required('Category is required'),
@@ -36,10 +49,7 @@ export const employeeSchema = yup.object().shape({
     .required('Salary amount is required')
     .positive('Salary must be positive')
     .typeError('Salary must be a valid number'),
-  joiningDate: yup
-    .date()
-    .required('Joining date is required')
-    .max(new Date(), 'Joining date cannot be in the future')
+  joiningDate: notFutureDate('Joining date'),
 });
 
 // Customer Form Validation Schema
@@ -104,10 +114,7 @@ export const salaryPaymentSchema = yup.object().shape({
     .required('Amount is required')
     .positive('Amount must be positive')
     .typeError('Amount must be a valid number'),
-  date: yup
-    .date()
-    .required('Payment date is required')
-    .max(new Date(), 'Date cannot be in the future'),
+  date: notFutureDate('Payment date'),
   paymentMethod: yup
     .string()
     .required('Payment method is required')
@@ -120,10 +127,7 @@ export const advancePaymentSchema = yup.object().shape({
     .required('Amount is required')
     .positive('Amount must be positive')
     .typeError('Amount must be a valid number'),
-  date: yup
-    .date()
-    .required('Payment date is required')
-    .max(new Date(), 'Date cannot be in the future')
+  date: notFutureDate('Payment date'),
 });
 
 // Client Purchase Schema
@@ -141,10 +145,7 @@ export const clientPurchaseSchema = yup.object().shape({
     .required('Total amount is required')
     .positive('Amount must be positive')
     .typeError('Amount must be a valid number'),
-  purchaseDate: yup
-    .date()
-    .required('Purchase date is required')
-    .max(new Date(), 'Date cannot be in the future'),
+  purchaseDate: notFutureDate('Purchase date'),
   notes: yup
     .string()
     .max(1000, 'Notes must be less than 1000 characters')
@@ -160,12 +161,8 @@ export const clientPaymentSchema = yup.object().shape({
     .required('Payment amount is required')
     .positive('Amount must be positive')
     .typeError('Amount must be a valid number'),
-  date: yup
-    .date()
-    .required('Payment date is required')
-    .max(new Date(), 'Date cannot be in the future'),
+  date: notFutureDate('Payment date'),
   paymentMethod: yup
     .string()
     .required('Payment method is required')
 });
-

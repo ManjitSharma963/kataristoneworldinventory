@@ -156,19 +156,23 @@ export const normalizeClientPurchase = (raw) => {
   const totalAmount = Number(p.totalAmount ?? p.total_amount ?? 0);
   const amountPaid = Number(p.amountPaid ?? p.amount_paid ?? 0);
   const amountOutstanding = Number(p.amountOutstanding ?? p.amount_outstanding ?? NaN);
+  const amountOverpaid = Number(p.amountOverpaid ?? p.amount_overpaid ?? NaN);
+  const paid = Number.isFinite(amountPaid) ? amountPaid : 0;
+  const total = Number.isFinite(totalAmount) ? totalAmount : 0;
+  const computedOverpaid = Math.max(0, paid - total);
+  const computedOutstanding = Math.max(0, total - paid);
   if (!clientName && totalAmount <= 0 && !p.id) return null;
   return {
     ...p,
     id: p.id,
     clientName,
     purchaseDescription,
-    totalAmount: Number.isFinite(totalAmount) ? totalAmount : 0,
+    totalAmount: total,
     purchaseDate: p.purchaseDate ?? p.purchase_date ?? null,
     dueDate: p.dueDate ?? p.due_date ?? null,
-    amountPaid: Number.isFinite(amountPaid) ? amountPaid : 0,
-    amountOutstanding: Number.isFinite(amountOutstanding)
-      ? amountOutstanding
-      : Math.max(0, (Number.isFinite(totalAmount) ? totalAmount : 0) - (Number.isFinite(amountPaid) ? amountPaid : 0)),
+    amountPaid: paid,
+    amountOutstanding: Number.isFinite(amountOutstanding) ? Math.max(0, amountOutstanding) : computedOutstanding,
+    amountOverpaid: Number.isFinite(amountOverpaid) ? Math.max(0, amountOverpaid) : computedOverpaid,
     payments: Array.isArray(p.payments) ? p.payments : [],
   };
 };
@@ -1340,6 +1344,20 @@ export const updateClientPurchase = async (id, updates) => {
     method: 'PUT',
     body: JSON.stringify(updates),
   });
+};
+
+/**
+ * Add more amount to an existing client purchase (increases total owed / pending).
+ * @param {string|number} purchaseId
+ * @param {{ additionalAmount: number, description?: string, purchaseDate?: string, notes?: string }} body
+ */
+export const addClientPurchaseAmount = async (purchaseId, body) => {
+  const pid = encodeURIComponent(String(purchaseId ?? '').trim());
+  const raw = await apiCall(`/client-purchases/${pid}/add-amount`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return normalizeClientPurchase(raw);
 };
 
 /**

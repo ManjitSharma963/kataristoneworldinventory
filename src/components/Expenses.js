@@ -18,6 +18,7 @@ import {
   fetchClientPurchases,
   createClientPurchase,
   updateClientPurchase,
+  addClientPurchaseAmount,
   deleteClientPurchase,
   addClientPayment,
   fetchAllPayments,
@@ -198,6 +199,15 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [allPayments, setAllPayments] = useState([]); // All payments from API
   const [showClientPurchaseForm, setShowClientPurchaseForm] = useState(false);
   const [showClientPaymentForm, setShowClientPaymentForm] = useState(false);
+  const [showClientAddAmountForm, setShowClientAddAmountForm] = useState(false);
+  const [submittingClientAddAmount, setSubmittingClientAddAmount] = useState(false);
+  const [clientAddAmountFormData, setClientAddAmountFormData] = useState({
+    purchaseId: '',
+    additionalAmount: '',
+    description: '',
+    purchaseDate: '',
+    notes: '',
+  });
   const [selectedClientPurchase, setSelectedClientPurchase] = useState(null);
   const [clientFilter, setClientFilter] = useState(''); // Filter by client name
   const [clientDueAlerts, setClientDueAlerts] = useState([]);
@@ -1311,6 +1321,58 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       notes: '',
     });
   }, []);
+
+  const getClientPurchasePaid = useCallback((purchase) => {
+    if (!purchase) return 0;
+    const payments = purchase?.payments || [];
+    const paidFromLines = Number(
+      (Array.isArray(payments) ? payments.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0) : 0) || 0
+    ) || 0;
+    return Math.max(paidFromLines, Number(purchase?.amountPaid ?? purchase?.amount_paid ?? 0) || 0);
+  }, []);
+
+  const getClientPurchasePending = useCallback(
+    (purchase) => {
+      if (!purchase) return 0;
+      const outstandingRaw = purchase?.amountOutstanding ?? purchase?.amount_outstanding;
+      if (outstandingRaw != null && Number.isFinite(Number(outstandingRaw))) {
+        return Math.max(0, Number(outstandingRaw));
+      }
+      const totalAmount = Number(parseFloat(purchase?.totalAmount || 0) || 0) || 0;
+      return Math.max(0, totalAmount - getClientPurchasePaid(purchase));
+    },
+    [getClientPurchasePaid]
+  );
+
+  const getClientPurchaseOverpaid = useCallback(
+    (purchase) => {
+      if (!purchase) return 0;
+      const overRaw = purchase?.amountOverpaid ?? purchase?.amount_overpaid;
+      if (overRaw != null && Number.isFinite(Number(overRaw))) {
+        return Math.max(0, Number(overRaw));
+      }
+      const totalAmount = Number(parseFloat(purchase?.totalAmount || 0) || 0) || 0;
+      return Math.max(0, getClientPurchasePaid(purchase) - totalAmount);
+    },
+    [getClientPurchasePaid]
+  );
+
+  const openClientAddAmountForm = useCallback((purchase) => {
+    setSelectedClientPurchase(purchase || null);
+    setClientAddAmountFormData({
+      purchaseId: purchase?.id != null ? String(purchase.id) : '',
+      additionalAmount: '',
+      description: '',
+      purchaseDate: getLocalDateString(),
+      notes: '',
+    });
+    setShowClientAddAmountForm(true);
+  }, []);
+
+  const purchasesWithPending = useMemo(
+    () => (clientPayments || []).filter((p) => getClientPurchasePending(p) > 0),
+    [clientPayments, getClientPurchasePending]
+  );
 
   const loadClientPayments = async () => {
     try {
@@ -2675,6 +2737,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           <div className="expenses-tab-navigation__actions">
             <button type="button" className="btn btn-secondary" onClick={openClientPaymentForm}>
               💰 Make Payment
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => openClientAddAmountForm(null)}
+              title="Add more amount owed on an existing purchase"
+            >
+              ➕ Buy more (add amount)
             </button>
             <button type="button" className="btn btn-primary" onClick={() => setShowClientPurchaseForm(true)}>
               + Add Client Purchase
@@ -4096,26 +4166,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         />
                       </div>
                     </div>
-                    <div className="form-group">
-                      <label>Due date (optional)</label>
-                      <input
-                        type="date"
-                        value={clientPurchaseFormData.dueDate}
-                        onChange={(e) => setClientPurchaseFormData({ ...clientPurchaseFormData, dueDate: e.target.value })}
-                      />
-                      <p style={{ marginTop: '6px', fontSize: '12px', color: '#64748b' }}>
-                        Leave blank to use payment terms from Credit &amp; terms (days after purchase date).
-                      </p>
-                    </div>
-                    <div className="form-group">
-                      <label>Notes</label>
-                      <textarea
-                        value={clientPurchaseFormData.notes}
-                        onChange={(e) => setClientPurchaseFormData({ ...clientPurchaseFormData, notes: e.target.value })}
-                        placeholder="Additional notes (optional)"
-                        rows="3"
-                      />
-                    </div>
+                    
                     <div className="form-actions">
                       <button type="submit" className="btn btn-primary">
                         Add Purchase
@@ -4134,6 +4185,202 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         setClientPurchaseSupplierSearchQuery('');
                       }}>
                         Cancel
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Add more amount to existing purchase */}
+          {showClientAddAmountForm && (
+            <div
+              className="modal-overlay"
+              onClick={() => {
+                setShowClientAddAmountForm(false);
+                setSelectedClientPurchase(null);
+                setClientAddAmountFormData({
+                  purchaseId: '',
+                  additionalAmount: '',
+                  description: '',
+                  purchaseDate: getLocalDateString(),
+                  notes: '',
+                });
+              }}
+            >
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>Add more purchase amount</h3>
+                  <button
+                    type="button"
+                    className="modal-close"
+                    onClick={() => {
+                      setShowClientAddAmountForm(false);
+                      setSelectedClientPurchase(null);
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="modal-body">
+                  <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '12px' }}>
+                    Use when you buy more from the same client. Pending increases by the amount you add
+                    (e.g. ₹15,000 pending + ₹10,000 more → ₹25,000 pending).
+                  </p>
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (submittingClientAddAmount) return;
+                      const purchase =
+                        clientPayments.find((p) => String(p?.id) === String(clientAddAmountFormData.purchaseId)) ||
+                        selectedClientPurchase;
+                      if (!purchase) {
+                        showToast('Select a purchase to add amount to.', 'error');
+                        return;
+                      }
+                      const addAmt = Number(parseFloat(clientAddAmountFormData.additionalAmount) || 0);
+                      if (!addAmt || addAmt <= 0) {
+                        showToast('Enter a valid additional amount.', 'error');
+                        return;
+                      }
+                      if (!String(clientAddAmountFormData.description || '').trim()) {
+                        showToast('Describe what you bought (required).', 'error');
+                        return;
+                      }
+                      setSubmittingClientAddAmount(true);
+                      try {
+                        const updated = await addClientPurchaseAmount(purchase.id, {
+                          additionalAmount: addAmt,
+                          description: String(clientAddAmountFormData.description).trim(),
+                          purchaseDate: clientAddAmountFormData.purchaseDate || getLocalDateString(),
+                          notes: clientAddAmountFormData.notes || undefined,
+                        });
+                        await loadClientPayments();
+                        await refreshClientDueAlerts();
+                        const newPending =
+                          updated?.amountOutstanding ??
+                          updated?.amount_outstanding ??
+                          getClientPurchasePending(purchase) + addAmt;
+                        showToast(
+                          `Added ₹${addAmt.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. New pending ₹${Number(newPending).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`,
+                          'success'
+                        );
+                        setShowClientAddAmountForm(false);
+                        setSelectedClientPurchase(null);
+                      } catch (err) {
+                        showToast(err?.message || 'Could not add amount', 'error');
+                      } finally {
+                        setSubmittingClientAddAmount(false);
+                      }
+                    }}
+                  >
+                    <div className="form-group">
+                      <label>Purchase *</label>
+                      <select
+                        value={clientAddAmountFormData.purchaseId}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          const p = clientPayments.find((row) => String(row?.id) === String(id));
+                          setSelectedClientPurchase(p || null);
+                          setClientAddAmountFormData({ ...clientAddAmountFormData, purchaseId: id });
+                        }}
+                        required
+                      >
+                        <option value="">Select purchase…</option>
+                        {(purchasesWithPending.length > 0 ? purchasesWithPending : clientPayments).map((p) => {
+                          const pending = getClientPurchasePending(p);
+                          return (
+                            <option key={p.id} value={String(p.id)}>
+                              {p.clientName} — pending ₹{pending.toLocaleString('en-IN')} —{' '}
+                              {(p.purchaseDescription || '').slice(0, 40)}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    {selectedClientPurchase && (
+                      <div
+                        style={{
+                          marginBottom: '12px',
+                          padding: '10px 12px',
+                          background: '#f8fafc',
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                        }}
+                      >
+                        <strong>Current pending:</strong> ₹
+                        {getClientPurchasePending(selectedClientPurchase).toLocaleString('en-IN', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                        {Number(parseFloat(clientAddAmountFormData.additionalAmount) || 0) > 0 && (
+                          <>
+                            <br />
+                            <strong>After add:</strong> ₹
+                            {(
+                              getClientPurchasePending(selectedClientPurchase) +
+                              Number(parseFloat(clientAddAmountFormData.additionalAmount) || 0)
+                            ).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </>
+                        )}
+                      </div>
+                    )}
+                    <div className="form-group">
+                      <label>Additional amount (₹) *</label>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        value={clientAddAmountFormData.additionalAmount}
+                        onChange={(e) =>
+                          setClientAddAmountFormData({ ...clientAddAmountFormData, additionalAmount: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>What you bought *</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. More marble slabs"
+                        value={clientAddAmountFormData.description}
+                        onChange={(e) =>
+                          setClientAddAmountFormData({ ...clientAddAmountFormData, description: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Purchase date</label>
+                      <input
+                        type="date"
+                        value={clientAddAmountFormData.purchaseDate || getLocalDateString()}
+                        onChange={(e) =>
+                          setClientAddAmountFormData({ ...clientAddAmountFormData, purchaseDate: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Notes</label>
+                      <textarea
+                        rows={2}
+                        value={clientAddAmountFormData.notes}
+                        onChange={(e) =>
+                          setClientAddAmountFormData({ ...clientAddAmountFormData, notes: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => setShowClientAddAmountForm(false)}
+                      >
+                        Cancel
+                      </button>
+                      <button type="submit" className="btn btn-primary" disabled={submittingClientAddAmount}>
+                        {submittingClientAddAmount ? 'Saving…' : 'Add amount'}
                       </button>
                     </div>
                   </form>
@@ -4222,25 +4469,16 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       setSubmittingPayment(false);
                       return;
                     }
-                    
-                    if (safePayment > safePending) {
-                      showToast(`Payment amount (₹${safePayment.toLocaleString('en-IN')}) exceeds pending amount (₹${safePending.toLocaleString('en-IN')})`, 'error');
-                      console.error('Payment exceeds pending:', { safePayment, safePending });
-                      setSubmittingPayment(false);
-                      return;
-                    }
-                    
-                    console.log('Validation passed. Proceeding with payment...');
-                    
+
+                    const proceedPayment = async () => {
+                    setSubmittingPayment(true);
                     try {
-                      // Simple API call to track payment transaction
-                      // Ensure data format matches API requirements
                       const paymentData = {
                         clientId: purchase.clientId || purchase.clientName,
-                        amount: Number(paymentAmount), // Ensure it's a number, not string
-                        date: clientPaymentFormData.date, // Already in YYYY-MM-DD format from date input
-                        paymentMethod: clientPaymentFormData.paymentMethod.toLowerCase(), // Ensure lowercase
-                        notes: clientPaymentFormData.notes || ''
+                        amount: Number(paymentAmount),
+                        date: clientPaymentFormData.date,
+                        paymentMethod: clientPaymentFormData.paymentMethod.toLowerCase(),
+                        notes: clientPaymentFormData.notes || '',
                       };
                       
                       console.log('Adding payment to API:', {
@@ -4319,9 +4557,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       await loadExpenses();
                       await loadBudgetState();
                       if (onExpenseUpdate) onExpenseUpdate();
-                      showToast(`Payment of ₹${paymentAmount.toLocaleString('en-IN')} recorded.`, 'success');
-                      
-                      // Only close modal on success
+                      const overBy = Math.max(0, safePayment - Math.max(0, safePending));
+                      showToast(
+                        overBy > 0
+                          ? `Payment of ₹${safePayment.toLocaleString('en-IN')} recorded (₹${overBy.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} over pending).`
+                          : `Payment of ₹${safePayment.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} recorded.`,
+                        'success'
+                      );
                       setShowClientPaymentForm(false);
                       setSelectedClientPurchase(null);
                       setClientPaymentFormData({
@@ -4343,6 +4585,22 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     } finally {
                       setSubmittingPayment(false);
                     }
+                    };
+
+                    if (safePayment > safePending) {
+                      const overBy = safePayment - Math.max(0, safePending);
+                      showConfirm(
+                        'Overpayment',
+                        safePending > 0
+                          ? `Pending is ₹${safePending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. You are paying ₹${safePayment.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (₹${overBy.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} extra). Continue?`
+                          : `This purchase is already settled. You are paying ₹${safePayment.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} as an advance/overpayment. Continue?`,
+                        () => proceedPayment()
+                      );
+                      setSubmittingPayment(false);
+                      return;
+                    }
+
+                    await proceedPayment();
                   }}>
                     <div className="form-group">
                       <label>Select Purchase *</label>
@@ -4360,15 +4618,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       >
                         <option value="">Select Purchase</option>
                         {clientPayments.map((purchase) => {
-                          const payments = purchase?.payments || [];
-                          const paidAmount = Number((Array.isArray(payments) ? payments.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0) : 0) || 0) || 0;
-                          const totalAmount = Number(parseFloat(purchase?.totalAmount || 0) || 0) || 0;
-                          const pendingAmount = Number((totalAmount - paidAmount) || 0) || 0;
-                          const safePending = isNaN(pendingAmount) ? 0 : pendingAmount;
-                          if (safePending <= 0) return null;
+                          const safePending = getClientPurchasePending(purchase);
+                          const safeOverpaid = getClientPurchaseOverpaid(purchase);
+                          const statusLabel =
+                            safeOverpaid > 0
+                              ? `Overpaid ₹${safeOverpaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                              : safePending > 0
+                                ? `Pending ₹${safePending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                : 'Settled';
                           return (
                             <option key={purchase?.id} value={purchase?.id}>
-                              {purchase?.clientName || '-'} - {purchase?.purchaseDescription || '-'} (Pending: ₹{safePending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                              {purchase?.clientName || '-'} — {(purchase?.purchaseDescription || '-').slice(0, 36)} ({statusLabel})
                             </option>
                           );
                         })}
@@ -4378,9 +4638,35 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       <div className="form-group" style={{ background: '#f8f9fa', padding: '10px', borderRadius: '8px', marginBottom: '15px' }}>
                         <strong>Total Amount:</strong> ₹{(Number(parseFloat(selectedClientPurchase?.totalAmount || 0) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<br />
                         <strong>Paid Amount:</strong> ₹{(Number(selectedClientPurchase?.payments?.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<br />
-                        <strong>Pending Amount:</strong> ₹{(Number((selectedClientPurchase?.totalAmount || 0) - (selectedClientPurchase?.payments?.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0) || 0) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        <strong>Pending:</strong> ₹{getClientPurchasePending(selectedClientPurchase).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {getClientPurchaseOverpaid(selectedClientPurchase) > 0 && (
+                          <>
+                            <br />
+                            <strong style={{ color: '#059669' }}>Overpaid:</strong> ₹
+                            {getClientPurchaseOverpaid(selectedClientPurchase).toLocaleString('en-IN', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </>
+                        )}
+                        <br />
+                        <span style={{ fontSize: '12px', color: '#64748b' }}>
+                          You may pay more than pending (overpayment / advance to client).
+                        </span>
                       </div>
                     )}
+                    {selectedClientPurchase &&
+                      Number(parseFloat(clientPaymentFormData.amount) || 0) >
+                        getClientPurchasePending(selectedClientPurchase) && (
+                        <p style={{ fontSize: '12px', color: '#b45309', marginBottom: '10px' }}>
+                          This payment is ₹
+                          {(
+                            Number(parseFloat(clientPaymentFormData.amount) || 0) -
+                            getClientPurchasePending(selectedClientPurchase)
+                          ).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
+                          above pending.
+                        </p>
+                      )}
                     <div className="form-row">
                       <div className="form-group">
                         <label>Payment Amount (₹) *</label>
@@ -4497,16 +4783,11 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           Number(purchase?.amountPaid ?? purchase?.amount_paid ?? 0) || 0
                         );
                         const totalAmount = Number(parseFloat(purchase?.totalAmount || 0) || 0) || 0;
-                        const outstandingRaw =
-                          purchase?.amountOutstanding ?? purchase?.amount_outstanding;
-                        const pendingAmount =
-                          outstandingRaw != null && Number.isFinite(Number(outstandingRaw))
-                            ? Math.max(0, Number(outstandingRaw))
-                            : Math.max(0, totalAmount - paidAmount);
-                        const isFullyPaid = pendingAmount <= 0;
+                        const safePending = getClientPurchasePending(purchase);
+                        const safeOverpaid = getClientPurchaseOverpaid(purchase);
+                        const isFullyPaid = safePending <= 0 && safeOverpaid <= 0;
                         const safePaid = isNaN(paidAmount) ? 0 : paidAmount;
                         const safeTotal = isNaN(totalAmount) ? 0 : totalAmount;
-                        const safePending = isNaN(pendingAmount) ? 0 : pendingAmount;
                         const dueStr = purchase?.dueDate ? String(purchase.dueDate).slice(0, 10) : '';
                         const todayStr = getLocalDateString();
                         const overdue = Boolean(dueStr && safePending > 0 && dueStr < todayStr);
@@ -4531,9 +4812,15 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                               <span className="expense-amount" style={{ color: '#28a745' }}>₹{safePaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             </td>
                             <td className="amount-cell">
-                              <span className="expense-amount" style={{ color: safePending > 0 ? '#dc3545' : '#28a745' }}>
-                                ₹{safePending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              </span>
+                              {safeOverpaid > 0 ? (
+                                <span className="expense-amount" style={{ color: '#059669', fontSize: '12px' }}>
+                                  Overpaid ₹{safeOverpaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              ) : (
+                                <span className="expense-amount" style={{ color: safePending > 0 ? '#dc3545' : '#28a745' }}>
+                                  ₹{safePending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              )}
                             </td>
                             <td className="client-purchase-status-cell">
                               <span className="client-purchase-status-badge" style={{
@@ -4541,10 +4828,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                 borderRadius: '4px',
                                 fontSize: '12px',
                                 fontWeight: '600',
-                                background: isFullyPaid ? '#d4edda' : '#fff3cd',
-                                color: isFullyPaid ? '#155724' : '#856404'
+                                background: safeOverpaid > 0 ? '#d1fae5' : isFullyPaid ? '#d4edda' : '#fff3cd',
+                                color: safeOverpaid > 0 ? '#065f46' : isFullyPaid ? '#155724' : '#856404'
                               }}>
-                                {isFullyPaid ? 'Paid' : 'Pending'}
+                                {safeOverpaid > 0 ? 'Overpaid' : isFullyPaid ? 'Paid' : 'Pending'}
                               </span>
                             </td>
                             <td className="client-purchase-actions-cell">
@@ -4574,19 +4861,26 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                 </button>
                                 <button
                                   className="action-btn"
+                                  type="button"
+                                  onClick={() => openClientAddAmountForm(purchase)}
+                                  title="Buy more on credit (add to pending)"
+                                >
+                                  ➕
+                                </button>
+                                <button
+                                  className="action-btn"
                                   onClick={() => {
                                     setSelectedClientPurchase(purchase);
                                     setClientPaymentFormData({
                                       purchaseId: purchase.id,
-                                      amount: pendingAmount > 0 ? pendingAmount.toString() : '',
+                                      amount: safePending > 0 ? String(safePending) : '',
                                       date: getLocalDateString(),
                                       paymentMethod: 'cash',
                                       notes: ''
                                     });
                                     setShowClientPaymentForm(true);
                                   }}
-                                  title="Make Payment"
-                                  disabled={isFullyPaid}
+                                  title="Make payment (overpayment allowed)"
                                 >
                                   💰
                                 </button>

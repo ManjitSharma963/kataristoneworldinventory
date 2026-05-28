@@ -36,6 +36,16 @@ function getRawPaymentModeFromBill(bill) {
   return '';
 }
 
+/** Effective bill total after stock returns. Falls back to totalAmount when no returns. */
+function billEffectiveTotal(bill) {
+  if (!bill) return 0;
+  const rs = bill.returnSummary;
+  if (rs && Number(rs.cumulativeReturnedValue ?? 0) > 0) {
+    return Number(rs.effectiveBillTotal ?? bill.totalAmount ?? 0);
+  }
+  return Number(bill.totalAmount ?? 0);
+}
+
 /** Map API/display strings to analytics buckets (UPI, Cash, Bank Transfer, Cheque, Other) */
 function normalizePaymentModeCategory(raw) {
   if (raw === undefined || raw === null) return 'OTHER';
@@ -202,12 +212,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       };
     }
 
-    const totalSales = list.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0);
+    const totalSales = list.reduce((sum, bill) => sum + billEffectiveTotal(bill), 0);
     const salesWithGST = list.filter(bill => bill.billType === 'GST');
     const salesWithoutGST = list.filter(bill => bill.billType !== 'GST');
     
-    const totalWithGST = salesWithGST.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0);
-    const totalWithoutGST = salesWithoutGST.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0);
+    const totalWithGST = salesWithGST.reduce((sum, bill) => sum + billEffectiveTotal(bill), 0);
+    const totalWithoutGST = salesWithoutGST.reduce((sum, bill) => sum + billEffectiveTotal(bill), 0);
     const totalGSTCollected = salesWithGST.reduce((sum, bill) => sum + (bill.taxAmount || 0), 0);
     
     return {
@@ -480,12 +490,12 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       }
       
       const data = dataMap.get(key);
-      data.total += bill.totalAmount || 0;
+      data.total += billEffectiveTotal(bill);
       
       if (bill.billType === 'GST') {
-        data.withGST += bill.totalAmount || 0;
+        data.withGST += billEffectiveTotal(bill);
       } else {
-        data.withoutGST += bill.totalAmount || 0;
+        data.withoutGST += billEffectiveTotal(bill);
       }
     });
     
@@ -532,7 +542,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       }
       
       const data = dataMap.get(key);
-      data.gstSales += bill.totalAmount || 0;
+      data.gstSales += billEffectiveTotal(bill);
     });
     
     return Array.from(dataMap.values()).sort((a, b) => {
@@ -740,15 +750,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
         });
         return;
       }
-      const amt =
-        Number(
-          bill.totalAmount ??
-            bill.grandTotal ??
-            bill.grand_total ??
-            bill.total ??
-            bill.amount ??
-            0
-        ) || 0;
+      const amt = billEffectiveTotal(bill);
       const raw = getRawPaymentModeFromBill(bill);
       const cat = normalizePaymentModeCategory(raw);
       totals[cat] += amt;
@@ -1101,7 +1103,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
               ` : ''}
               <tr class="total-row">
                 <td colspan="4" class="text-right"><strong>Total:</strong></td>
-                <td><strong>₹${(Number(parseFloat(selectedBill?.totalAmount) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></td>
+                <td><strong>₹${billEffectiveTotal(selectedBill).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></td>
               </tr>
             </tfoot>
           </table>
@@ -1600,7 +1602,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       'Subtotal': bill.subtotal || 0,
       'Tax': bill.taxAmount || 0,
       'Discount': bill.discountAmount || 0,
-      'Total': bill.totalAmount || 0
+      'Total': billEffectiveTotal(bill)
     }));
     exportToCSV(csvData, `sales_${new Date().toISOString().split('T')[0]}.csv`, headers);
   };
@@ -2198,7 +2200,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
               {!loadingBills && filteredBills.length > 0 && (
                 <div className="section-summary">
                   <span className="summary-item">
-                    Total: ₹{filteredBills.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    Total: ₹{filteredBills.reduce((sum, bill) => sum + billEffectiveTotal(bill), 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
               )}
@@ -2366,7 +2368,19 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                         <td className="tax-cell">₹{bill.taxAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                         <td className="discount-cell">₹{bill.discountAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                         <td className="total-cell total-col">
-                          <span className="total-amount">₹{bill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          {bill.returnSummary && Number(bill.returnSummary.cumulativeReturnedValue ?? 0) > 0 ? (
+                            <span className="total-amount" style={{ lineHeight: 1.35 }}>
+                              <span style={{ textDecoration: 'line-through', color: '#94a3b8', fontSize: '0.85em' }}>
+                                ₹{bill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                              <br />
+                              <span style={{ fontWeight: 600 }}>
+                                ₹{billEffectiveTotal(bill).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="total-amount">₹{bill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          )}
                         </td>
                         <td>
                           <div className="action-buttons" onClick={(e) => e.stopPropagation()}>
@@ -2442,7 +2456,18 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                       )}
                       <div className="sales-card-total">
                         <span className="sales-card-label">Total:</span>
-                        <span className="sales-card-value">₹{bill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        {bill.returnSummary && Number(bill.returnSummary.cumulativeReturnedValue ?? 0) > 0 ? (
+                          <span className="sales-card-value" style={{ lineHeight: 1.35 }}>
+                            <span style={{ textDecoration: 'line-through', color: '#94a3b8', fontSize: '0.85em' }}>
+                              ₹{bill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>{' '}
+                            <span style={{ fontWeight: 600 }}>
+                              ₹{billEffectiveTotal(bill).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="sales-card-value">₹{bill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        )}
                       </div>
                       <div className="sales-card-actions" onClick={(e) => e.stopPropagation()}>
                         <button
@@ -3239,7 +3264,22 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                         <tr className="bill-totals-row final-total">
                           <td colSpan="4" className="totals-label">Total Amount:</td>
                           <td className="total-cell total-col">
-                            <span className="total-amount">₹{selectedBill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            {selectedBill.returnSummary && Number(selectedBill.returnSummary.cumulativeReturnedValue ?? 0) > 0 ? (
+                              <span className="total-amount" style={{ lineHeight: 1.4 }}>
+                                <span style={{ textDecoration: 'line-through', color: '#94a3b8', fontSize: '0.85em' }}>
+                                  ₹{selectedBill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                                <br />
+                                <span style={{ fontWeight: 700 }}>
+                                  ₹{billEffectiveTotal(selectedBill).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                                <span style={{ fontSize: '0.8em', color: '#dc2626', marginLeft: 6 }}>
+                                  (−₹{Number(selectedBill.returnSummary.cumulativeReturnedValue).toLocaleString('en-IN', { minimumFractionDigits: 2 })} return)
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="total-amount">₹{selectedBill.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            )}
                           </td>
                         </tr>
                       </tfoot>

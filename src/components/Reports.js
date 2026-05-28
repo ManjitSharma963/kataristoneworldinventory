@@ -325,6 +325,35 @@ function TableEmpty({ message }) {
   );
 }
 
+const ROWS_PER_PAGE = 10;
+
+function TablePagination({ page, totalPages, onPageChange }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="reports-table-pagination">
+      <button
+        type="button"
+        disabled={page === 0}
+        onClick={() => onPageChange(page - 1)}
+        className="reports-table-pagination__btn"
+      >
+        <i className="pi pi-chevron-left" />
+      </button>
+      <span className="reports-table-pagination__info">
+        {page + 1} / {totalPages}
+      </span>
+      <button
+        type="button"
+        disabled={page >= totalPages - 1}
+        onClick={() => onPageChange(page + 1)}
+        className="reports-table-pagination__btn"
+      >
+        <i className="pi pi-chevron-right" />
+      </button>
+    </div>
+  );
+}
+
 const Reports = () => {
   const today = localISODate();
   const [dateFrom, setDateFrom] = useState(today);
@@ -346,6 +375,8 @@ const Reports = () => {
   const [closingLoading, setClosingLoading] = useState(false);
   const [closingError, setClosingError] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [billsPage, setBillsPage] = useState(0);
+  const [expensesPage, setExpensesPage] = useState(0);
 
   const isRange = loadedFrom !== loadedTo;
   const datesPendingSearch = dateFrom !== loadedFrom || dateTo !== loadedTo;
@@ -365,6 +396,8 @@ const Reports = () => {
 
       const report = unwrapEntity(reportRes);
       setClosingData(report);
+      setBillsPage(0);
+      setExpensesPage(0);
       setSalesChargesSummary(
         unwrapEntity(chargesRes) || {
           totalSqftSold: 0,
@@ -407,8 +440,12 @@ const Reports = () => {
   const otherCollected = Number(paySummary.OTHER) || 0;
   const loanCash = Number(loanByMode.CASH) || 0;
   const loanUpi = Number(loanByMode.UPI) || 0;
+  const loanBank = Number(loanByMode.BANK_TRANSFER) || 0;
+  const loanCheque = Number(loanByMode.CHEQUE) || 0;
+  const loanOther = Number(loanByMode.OTHER) || 0;
   const salesCollectionsCashUpi = cashCollected + upiCollected;
   const loanReceiptsCashUpi = loanCash + loanUpi;
+  const totalLoanReceipts = loanCash + loanUpi + loanBank + loanCheque + loanOther;
   const totalInflowDisplay =
     (Number(closingData?.totalCollected) || 0) + loanReceiptsCashUpi;
 
@@ -607,31 +644,86 @@ const Reports = () => {
     setPdfLoading(true);
     try {
       const doc = new jsPDF({ unit: 'pt', format: 'a4' });
-      let y = 40;
-      doc.setFontSize(16);
-      doc.text('Daily Closing Report', 40, y);
-      y += 22;
+      const pageW = doc.internal.pageSize.getWidth();
+      const margin = 36;
+      const contentW = pageW - margin * 2;
+      const teal = [0, 77, 77];
+      const tealLight = [230, 247, 247];
+      const white = [255, 255, 255];
+      const rs = (n) => `Rs. ${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      let y = 0;
+
+      // ── Header banner ──
+      doc.setFillColor(...teal);
+      doc.rect(0, 0, pageW, 70, 'F');
+      doc.setTextColor(...white);
+      doc.setFontSize(18);
+      doc.setFont(undefined, 'bold');
+      doc.text('DAILY CLOSING REPORT', margin + 10, 30);
       doc.setFontSize(10);
-      doc.text(`Period: ${periodLabel}`, 40, y);
-      y += 24;
+      doc.setFont(undefined, 'normal');
+      doc.text(`Period:  ${periodLabel}`, margin + 10, 50);
 
-      autoTable(doc, {
-        startY: y,
-        head: [['Metric', 'Value']],
-        body: [
-          ['Total Bills', String(closingData.totalBills ?? 0)],
-          ['Total Sales', money(closingData.totalSales)],
-          ['Total Paid', money(closingData.totalPaidOnBills)],
-          ['Total Due', money(closingData.totalDueOnBills)],
-          ['Total Collected', money(closingData.totalCollected)],
-          ['Total Expenses', money(closingData.totalExpenses)],
-          ['Final Budget in Hand', money(finalBudgetInHand)],
-        ],
-        theme: 'grid',
-        styles: { fontSize: 9 },
+      // Budget badge (right side)
+      const budgetText = rs(finalBudgetInHand);
+      doc.setFontSize(8);
+      doc.setFont(undefined, 'bold');
+      doc.text('FINAL BUDGET IN HAND', pageW - margin - 10, 22, { align: 'right' });
+      doc.setFontSize(16);
+      doc.text(budgetText, pageW - margin - 10, 48, { align: 'right' });
+
+      doc.setTextColor(0, 0, 0);
+      y = 85;
+
+      // ── SUMMARY section ──
+      doc.setFontSize(11);
+      doc.setFont(undefined, 'bold');
+      doc.text('SUMMARY', margin, y);
+      y += 14;
+
+      const kpiCards = [
+        { label: 'TOTAL BILLS', value: String(closingData.totalBills ?? 0) },
+        { label: 'TOTAL SALES', value: rs(closingData.totalSales) },
+        { label: 'TOTAL PAID', value: rs(closingData.totalPaidOnBills) },
+        { label: 'TOTAL DUE', value: rs(closingData.totalDueOnBills) },
+        { label: 'TOTAL COLLECTED', value: rs(closingData.totalCollected) },
+        { label: 'TOTAL EXPENSES', value: rs(closingData.totalExpenses) },
+        { label: 'OPENING BALANCE', value: rs(openingBudget) },
+        { label: 'LOAN TAKEN', value: rs(totalLoanReceipts) },
+        { label: 'SALES RETURNS', value: rs(salesReturnsCashUpi) },
+        { label: 'CASH + UPI IN HAND', value: rs(finalBudgetInHand) },
+        { label: 'IN BANK', value: bankBalance != null ? rs(bankBalance) : rs(bankCollected) },
+      ];
+      const cardCols = 3;
+      const cardGap = 8;
+      const cardW = (contentW - cardGap * (cardCols - 1)) / cardCols;
+      const cardH = 42;
+      kpiCards.forEach((card, i) => {
+        const col = i % cardCols;
+        const row = Math.floor(i / cardCols);
+        const cx = margin + col * (cardW + cardGap);
+        const cy = y + row * (cardH + cardGap);
+        doc.setFillColor(...tealLight);
+        doc.roundedRect(cx, cy, cardW, cardH, 4, 4, 'F');
+        doc.setFontSize(7);
+        doc.setFont(undefined, 'bold');
+        doc.setTextColor(80, 80, 80);
+        doc.text(card.label, cx + cardW / 2, cy + 14, { align: 'center' });
+        doc.setFontSize(12);
+        doc.setTextColor(0, 0, 0);
+        doc.setFont(undefined, 'bold');
+        doc.text(card.value, cx + cardW / 2, cy + 32, { align: 'center' });
       });
+      const kpiRows = Math.ceil(kpiCards.length / cardCols);
+      y += kpiRows * (cardH + cardGap) + 12;
 
-      y = doc.lastAutoTable.finalY + 20;
+      // ── BILLS SUMMARY ──
+      doc.setFontSize(11);
+      doc.setFont(undefined, 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text('BILLS SUMMARY', margin, y);
+      y += 8;
+
       if (billsRows.length > 0) {
         autoTable(doc, {
           startY: y,
@@ -640,16 +732,48 @@ const Reports = () => {
             formatShortDate(r.billDate),
             r.billNumber,
             r.billType,
-            money(r.totalAmount),
-            money(r.paidAmount),
-            money(r.dueAmount),
+            (r.returnedAmount ?? 0) > 0.005
+              ? `${rs(r.totalAmount)} -> ${rs(r.effectiveTotal ?? r.totalAmount)}`
+              : rs(r.totalAmount),
+            rs(r.paidAmount),
+            (r.refundDue ?? 0) > 0.005
+              ? `Refund ${rs(r.refundDue)}`
+              : rs(r.dueAmount),
             r.status,
           ]),
-          theme: 'striped',
-          styles: { fontSize: 8 },
+          headStyles: {
+            fillColor: teal,
+            textColor: white,
+            fontStyle: 'bold',
+            fontSize: 8,
+            halign: 'left',
+          },
+          bodyStyles: { fontSize: 8 },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+          styles: { cellPadding: 5, lineColor: [226, 232, 240], lineWidth: 0.5 },
+          margin: { left: margin, right: margin },
+          columnStyles: {
+            3: { halign: 'right' },
+            4: { halign: 'right' },
+            5: { halign: 'right' },
+            6: { halign: 'center', fontStyle: 'bold' },
+          },
         });
-        y = doc.lastAutoTable.finalY + 16;
+        y = doc.lastAutoTable.finalY + 18;
+      } else {
+        doc.setFontSize(9);
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(100, 100, 100);
+        doc.text('No bills in this period.', margin, y + 12);
+        y += 28;
       }
+
+      // ── EXPENSES SUMMARY ──
+      doc.setFontSize(11);
+      doc.setFont(undefined, 'bold');
+      doc.setTextColor(0, 0, 0);
+      doc.text('EXPENSES SUMMARY', margin, y);
+      y += 8;
 
       if (expenseLines.length > 0) {
         autoTable(doc, {
@@ -657,15 +781,69 @@ const Reports = () => {
           head: [['#', 'Type / Category', 'Amount', 'Mode', 'Notes']],
           body: expenseLines.map((ex) => [
             ex.id,
-            [ex.expenseType, ex.category].filter(Boolean).join(' · '),
-            money(ex.amount),
+            [ex.expenseType, ex.category].filter(Boolean).join(' - '),
+            rs(ex.amount),
             formatExpenseMode(ex.paymentMethod),
-            ex.description || '—',
+            ex.description || '\u2014',
           ]),
-          theme: 'striped',
-          styles: { fontSize: 8 },
+          headStyles: {
+            fillColor: teal,
+            textColor: white,
+            fontStyle: 'bold',
+            fontSize: 8,
+            halign: 'left',
+          },
+          bodyStyles: { fontSize: 8 },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+          styles: { cellPadding: 5, lineColor: [226, 232, 240], lineWidth: 0.5 },
+          margin: { left: margin, right: margin },
+          columnStyles: {
+            0: { cellWidth: 30, halign: 'center' },
+            2: { halign: 'right' },
+          },
         });
+        y = doc.lastAutoTable.finalY + 18;
+      } else {
+        doc.setFontSize(9);
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(100, 100, 100);
+        doc.text('No expenses in this period.', margin, y + 12);
+        y += 28;
       }
+
+      y += 4;
+
+      // ── Footer ──
+      const pageH = doc.internal.pageSize.getHeight();
+      const totalPages = doc.internal.getNumberOfPages();
+      doc.setPage(totalPages);
+      const lastPageY = totalPages > 1 ? 40 : y;
+      const footerY = Math.max(lastPageY + 10, pageH - 55);
+      doc.setDrawColor(...teal);
+      doc.setLineWidth(0.5);
+      doc.line(margin, footerY, pageW - margin, footerY);
+      doc.setFillColor(...tealLight);
+      doc.roundedRect(margin, footerY + 4, contentW, 42, 4, 4, 'F');
+
+      doc.setFontSize(7);
+      doc.setFont(undefined, 'bold');
+      doc.setTextColor(...teal);
+      doc.text('REPORT OVERVIEW', margin + 10, footerY + 16);
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(80, 80, 80);
+      doc.text(
+        'This report provides a summary of the financial activity including bills, payments,',
+        margin + 10, footerY + 26
+      );
+      doc.text('collections, expenses and the final budget in hand.', margin + 10, footerY + 34);
+
+      doc.setFontSize(8);
+      doc.setFont(undefined, 'normal');
+      doc.setTextColor(60, 60, 60);
+      doc.text('Prepared By', pageW - margin - 10, footerY + 18, { align: 'right' });
+      doc.setFont(undefined, 'bold');
+      doc.text(`Date:  ${periodLabel}`, pageW - margin - 10, footerY + 32, { align: 'right' });
 
       doc.save(`daily-closing-${loadedFrom}${loadedTo !== loadedFrom ? `_to_${loadedTo}` : ''}.pdf`);
     } catch (e) {
@@ -857,6 +1035,20 @@ const Reports = () => {
               value={money(closingData.totalDueOnBills)}
               hint="Still unpaid on those bills"
             />
+            <MetricCard
+              icon="pi pi-briefcase"
+              tone="opening"
+              label="Opening Balance"
+              value={money(openingBudget)}
+              hint={`Cash + UPI balance at start of ${isRange ? 'period' : 'day'}`}
+            />
+            <MetricCard
+              icon="pi pi-arrow-down-left"
+              tone="loan"
+              label={`Loan Taken ${isRange ? '(Period)' : 'Today'}`}
+              value={money(totalLoanReceipts)}
+              hint="Money received as loan (all modes)"
+            />
           </div>
 
           <div className="reports-middle">
@@ -889,8 +1081,13 @@ const Reports = () => {
 
           <div className="reports-bottom-grid">
             <section className="reports-card reports-table-section reports-col-bills">
-            <h3 className="reports-card__title">{billsTitle}</h3>
-            <div className="reports-table-scroll reports-table-scroll--tall">
+            <h3 className="reports-card__title">
+              {billsTitle}
+              {billsRows.length > 0 && (
+                <span className="reports-card__count">{billsRows.length}</span>
+              )}
+            </h3>
+            <div className="reports-table-scroll reports-table-scroll--fixed">
               <table className="reports-table daily-bills-table">
                 <thead>
                   <tr>
@@ -913,7 +1110,9 @@ const Reports = () => {
                       <TableEmpty message="No bills in this period." />
                     </tr>
                   ) : (
-                    billsRows.map((row) => (
+                    billsRows
+                      .slice(billsPage * ROWS_PER_PAGE, (billsPage + 1) * ROWS_PER_PAGE)
+                      .map((row) => (
                       <tr key={`${row.billType}-${row.billId}`}>
                         <td>{formatShortDate(row.billDate)}</td>
                         <td>
@@ -927,9 +1126,25 @@ const Reports = () => {
                           </button>
                         </td>
                         <td>{row.billType}</td>
-                        <td className="num">{money(row.totalAmount)}</td>
+                        <td className="num">
+                          {(row.returnedAmount ?? 0) > 0.005 ? (
+                            <span style={{ lineHeight: 1.35 }}>
+                              <span style={{ textDecoration: 'line-through', color: '#94a3b8', fontSize: '0.85em' }}>
+                                {money(row.totalAmount)}
+                              </span>
+                              <br />
+                              <span style={{ fontWeight: 600 }}>{money(row.effectiveTotal ?? row.totalAmount)}</span>
+                            </span>
+                          ) : money(row.totalAmount)}
+                        </td>
                         <td className="num">{money(row.paidAmount)}</td>
-                        <td className="num">{money(row.dueAmount)}</td>
+                        <td className="num">
+                          {(row.refundDue ?? 0) > 0.005 ? (
+                            <span style={{ color: '#dc2626', fontWeight: 600, fontSize: '0.9em' }}>
+                              Refund {money(row.refundDue)}
+                            </span>
+                          ) : money(row.dueAmount)}
+                        </td>
                         <td className="num">{money(row.cashAmount)}</td>
                         <td className="num">{money(row.upiAmount)}</td>
                         <td className="num">{money(row.bankTransferAmount)}</td>
@@ -947,11 +1162,21 @@ const Reports = () => {
                 </tbody>
               </table>
             </div>
+            <TablePagination
+              page={billsPage}
+              totalPages={Math.ceil(billsRows.length / ROWS_PER_PAGE)}
+              onPageChange={setBillsPage}
+            />
           </section>
 
             <section className="reports-card reports-table-section reports-col-expenses">
-              <h3 className="reports-card__title">{expensesTitle}</h3>
-              <div className="reports-table-scroll reports-table-scroll--tall">
+              <h3 className="reports-card__title">
+                {expensesTitle}
+                {expenseLines.length > 0 && (
+                  <span className="reports-card__count">{expenseLines.length}</span>
+                )}
+              </h3>
+              <div className="reports-table-scroll reports-table-scroll--fixed">
                 <table className="reports-table">
                   <thead>
                     <tr>
@@ -968,7 +1193,9 @@ const Reports = () => {
                         <TableEmpty message="No expenses in this period." />
                       </tr>
                     ) : (
-                      expenseLines.map((ex) => (
+                      expenseLines
+                        .slice(expensesPage * ROWS_PER_PAGE, (expensesPage + 1) * ROWS_PER_PAGE)
+                        .map((ex) => (
                         <tr key={ex.id}>
                           <td>{ex.id}</td>
                           <td>{[ex.expenseType, ex.category].filter(Boolean).join(' · ') || '—'}</td>
@@ -992,12 +1219,31 @@ const Reports = () => {
                   ) : null}
                 </table>
               </div>
+              <TablePagination
+                page={expensesPage}
+                totalPages={Math.ceil(expenseLines.length / ROWS_PER_PAGE)}
+                onPageChange={setExpensesPage}
+              />
             </section>
 
             <div className="reports-sidebar-col">
             <aside className="reports-card reports-highlights">
               <h3 className="reports-card__title">Day Highlights</h3>
               <ul className="reports-highlights__list">
+                <li>
+                  <span>
+                    <i className="pi pi-briefcase" aria-hidden /> Opening Balance
+                  </span>
+                  <strong className="reports-positive">{money(openingBudget)}</strong>
+                </li>
+                <li>
+                  <span>
+                    <i className="pi pi-arrow-down-left" aria-hidden /> Loan Taken {isRange ? '(Period)' : 'Today'}
+                  </span>
+                  <strong className={totalLoanReceipts > 0 ? 'reports-positive' : ''}>
+                    {money(totalLoanReceipts)}
+                  </strong>
+                </li>
                 <li>
                   <span>
                     <i className="pi pi-chart-line" aria-hidden /> Sold SQFT
