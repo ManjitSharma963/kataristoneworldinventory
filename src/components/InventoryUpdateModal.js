@@ -230,7 +230,7 @@ export default function InventoryUpdateModal({
                       ))}
                     </select>
                     {isAdminUser && onOpenAddSupplier && (
-                      <button type="button" className="btn btn-secondary btn-compact" onClick={onOpenAddSupplier}>
+                      <button type="button" className="secondary-button btn-compact" onClick={onOpenAddSupplier}>
                         Add new
                       </button>
                     )}
@@ -253,7 +253,7 @@ export default function InventoryUpdateModal({
                       ))}
                     </select>
                     {isAdminUser && onOpenAddDealer && (
-                      <button type="button" className="btn btn-secondary btn-compact" onClick={onOpenAddDealer}>
+                      <button type="button" className="secondary-button btn-compact" onClick={onOpenAddDealer}>
                         Add new
                       </button>
                     )}
@@ -378,10 +378,10 @@ export default function InventoryUpdateModal({
                 <small className="form-help">Stored with this change in product history</small>
               </div>
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary">
+                <button type="submit" className="primary-button">
                   Save changes
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={onClose}>
+                <button type="button" className="secondary-button" onClick={onClose}>
                   Cancel
                 </button>
               </div>

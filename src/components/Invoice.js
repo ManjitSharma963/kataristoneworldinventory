@@ -89,10 +89,10 @@ const Invoice = ({ bill, onClose }) => {
         <div className="invoice-header">
           <h2>Invoice</h2>
           <div className="invoice-actions">
-            <button className="btn btn-primary" onClick={handlePrint}>
+            <button className="primary-button" onClick={handlePrint}>
               🖨️ Print
             </button>
-            <button className="btn btn-secondary" onClick={onClose}>
+            <button className="secondary-button" onClick={onClose}>
               Close
             </button>
           </div>

@@ -7,6 +7,7 @@ import {
   updateBill,
 } from '../../utils/api';
 import { fetchProductsCatalog } from '../../api/productsApi';
+import DdMmYyCalendar from '../DdMmYyCalendar';
 import './BillEditPage.css';
 
 /** §16 bill-edit UX (original vs draft, stock/payment/advance previews). React Native can mirror this screen 1:1. */
@@ -644,14 +645,14 @@ export default function BillEditPage({ bill, onBack, onSaved, onPaymentsRecorded
     <div className="bill-edit-page">
       <div className="bill-edit-header">
         <div>
-          <button type="button" className="btn btn-secondary" onClick={onBack}>← Back</button>
+          <button type="button" className="secondary-button" onClick={onBack}>← Back</button>
           <h2>{`Edit Bill: ${bill.billNumber || bill.id}`}</h2>
         </div>
         <div className="bill-edit-actions">
-          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving || loading}>
+          <button type="button" className="primary-button" onClick={handleSave} disabled={saving || loading}>
             {saving ? 'Saving…' : 'Update bill'}
           </button>
-          <button type="button" className="btn btn-secondary" onClick={onBack} disabled={saving}>Cancel Edit</button>
+          <button type="button" className="secondary-button" onClick={onBack} disabled={saving}>Cancel Edit</button>
         </div>
       </div>
 
@@ -663,7 +664,7 @@ export default function BillEditPage({ bill, onBack, onSaved, onPaymentsRecorded
               <h3>Bill Details</h3>
               <div className="bill-fields">
                 <label>Customer Name<input value={draft.customerName} onChange={(e) => setField('customerName', e.target.value)} /></label>
-                <label>Bill Date<input type="date" value={draft.billDate} onChange={(e) => setField('billDate', e.target.value)} /></label>
+                <label>Bill Date<DdMmYyCalendar value={draft.billDate} onChange={(v) => setField('billDate', v)} /></label>
                 <label>Mobile Number<input value={draft.customerMobileNumber} onChange={(e) => setField('customerMobileNumber', e.target.value)} /></label>
                 {draft.notes ? (
                   <label className="full">Saved bill notes
@@ -684,7 +685,7 @@ export default function BillEditPage({ bill, onBack, onSaved, onPaymentsRecorded
             </section>
 
             <section className="bill-card">
-              <div className="bill-card-head"><h3>Items</h3><button type="button" className="btn btn-secondary" onClick={addItem}>+ Add Item</button></div>
+              <div className="bill-card-head"><h3>Items</h3><button type="button" className="secondary-button" onClick={addItem}>+ Add Item</button></div>
               <p className="bill-edit-muted bill-edit-muted--small" style={{ marginTop: 0 }}>
                 Grid shows <strong>saved</strong> vs <strong>draft</strong> values; line ₹ and stock Δ update as you edit (preview only until Update bill).
               </p>
@@ -740,7 +741,7 @@ export default function BillEditPage({ bill, onBack, onSaved, onPaymentsRecorded
                               {deltaLabel}
                             </span>
                           </td>
-                          <td><button type="button" className="btn btn-secondary" onClick={() => removeItem(it.rowId)} aria-label="Remove line">🗑</button></td>
+                          <td><button type="button" className="secondary-button" onClick={() => removeItem(it.rowId)} aria-label="Remove line">🗑</button></td>
                         </tr>
                       );
                     })}
@@ -1047,7 +1048,7 @@ export default function BillEditPage({ bill, onBack, onSaved, onPaymentsRecorded
               <div className="bill-edit-actions" style={{ marginTop: '10px' }}>
                 <button
                   type="button"
-                  className="btn btn-primary"
+                  className="primary-button"
                   onClick={handleUpdateBillPayments}
                   disabled={
                     updatingPayments ||

@@ -36,7 +36,8 @@ export const useExpensesForms = ({ getLocalDateString, getLocalMonthString }) =>
     totalAmount: '',
     purchaseDate: getLocalDateString(),
     dueDate: '',
-    notes: ''
+    notes: '',
+    accountChannel: 'NON_GST',
   });
 
   const [clientPaymentFormData, setClientPaymentFormData] = useState({
@@ -44,7 +45,8 @@ export const useExpensesForms = ({ getLocalDateString, getLocalMonthString }) =>
     amount: '',
     date: getLocalDateString(),
     paymentMethod: 'cash',
-    notes: ''
+    notes: '',
+    accountChannel: 'NON_GST',
   });
 
   const [showCustomCategoryInput, setShowCustomCategoryInput] = useState(false);

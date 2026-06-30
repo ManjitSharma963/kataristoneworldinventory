@@ -1,39 +1,15 @@
-.home-screen-management {
-  width: 100%;
-  max-width: 100%;
-  padding: 24px;
-  background: #e0e5ec;
+.home-screen-management.home-screen-management {
+  padding: 0;
+  background: transparent;
   min-height: 100vh;
 }
 
-.home-screen-header {
-  margin-bottom: 30px;
+.home-screen-header.page-header {
+  margin-bottom: var(--space-4);
 }
 
-.home-screen-header h2 {
-  font-size: 28px;
-  font-weight: 700;
-  color: #333;
-  margin: 0 0 8px 0;
-}
-
-.home-screen-header p {
-  color: #666;
-  font-size: 14px;
-  margin: 0;
-}
-
-/* Tab Navigation */
-.home-screen-tabs {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 30px;
-  background: #e0e5ec;
-  padding: 8px;
-  border-radius: 16px;
-  box-shadow: 
-    inset 4px 4px 8px rgba(163, 177, 198, 0.6),
-    inset -4px -4px 8px rgba(255, 255, 255, 0.5);
+.home-screen-tabs.tab-nav {
+  margin-bottom: var(--space-5);
 }
 
 .home-screen-tab {

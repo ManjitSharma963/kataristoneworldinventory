@@ -14,15 +14,21 @@ const InventoryItemsTabs = ({ defaultTab = TAB_INVENTORY_ITEMS }) => {
   }, [defaultTab]);
 
   return (
-    <div className="inventory-items-tabs">
-      <div className="inventory-items-tab-list" role="tablist">
+    <div className="page-container page-container--full inventory-items-tabs-page">
+      <header className="page-header inventory-items-tabs-header">
+        <div>
+          <h1 className="page-title">Inventory</h1>
+          <p className="page-subtitle">Manage stock items and website catalog</p>
+        </div>
+      </header>
+      <div className="tab-nav tab-nav--underline inventory-items-tab-list" role="tablist">
         <button
           type="button"
           role="tab"
           aria-selected={activeTab === TAB_INVENTORY_ITEMS}
           aria-controls="panel-inventory-items"
           id="tab-inventory-items"
-          className={`inventory-items-tab ${activeTab === TAB_INVENTORY_ITEMS ? 'active' : ''}`}
+          className={`tab-nav__item inventory-items-tab ${activeTab === TAB_INVENTORY_ITEMS ? 'tab-nav__item--active active' : ''}`}
           onClick={() => setActiveTab(TAB_INVENTORY_ITEMS)}
         >
           Inventory items
@@ -33,7 +39,7 @@ const InventoryItemsTabs = ({ defaultTab = TAB_INVENTORY_ITEMS }) => {
           aria-selected={activeTab === TAB_WEBSITE_ITEMS}
           aria-controls="panel-website-items"
           id="tab-website-items"
-          className={`inventory-items-tab ${activeTab === TAB_WEBSITE_ITEMS ? 'active' : ''}`}
+          className={`tab-nav__item inventory-items-tab ${activeTab === TAB_WEBSITE_ITEMS ? 'tab-nav__item--active active' : ''}`}
           onClick={() => setActiveTab(TAB_WEBSITE_ITEMS)}
         >
           Website items
@@ -43,7 +49,7 @@ const InventoryItemsTabs = ({ defaultTab = TAB_INVENTORY_ITEMS }) => {
         id="panel-inventory-items"
         role="tabpanel"
         aria-labelledby="tab-inventory-items"
-        className="inventory-items-panel"
+        className="section-card inventory-items-panel"
         hidden={activeTab !== TAB_INVENTORY_ITEMS}
       >
         {activeTab === TAB_INVENTORY_ITEMS && <InventoryItemsPage />}
@@ -52,7 +58,7 @@ const InventoryItemsTabs = ({ defaultTab = TAB_INVENTORY_ITEMS }) => {
         id="panel-website-items"
         role="tabpanel"
         aria-labelledby="tab-website-items"
-        className="inventory-items-panel"
+        className="section-card inventory-items-panel"
         hidden={activeTab !== TAB_WEBSITE_ITEMS}
       >
         {activeTab === TAB_WEBSITE_ITEMS && <WebsiteItemsPage />}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { addToCart, getCartCount } from '../utils/cart';
+import { addToCart, getCartCount, resetCartSession } from '../utils/cart';
 import { isAdmin } from '../utils/api';
 import { fetchProductsCatalog } from '../api/productsApi';
 

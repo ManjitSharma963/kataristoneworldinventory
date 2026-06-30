@@ -15,7 +15,7 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, confirm
           <p>{message || 'Are you sure you want to proceed?'}</p>
         </div>
         <div className="confirmation-modal-actions">
-          <button className="btn btn-secondary" onClick={onClose}>
+          <button className="secondary-button" onClick={onClose}>
             {cancelText}
           </button>
           <button className={`btn btn-${type}`} onClick={onConfirm}>

@@ -8,6 +8,7 @@ import { useLedgerSummary } from '../hooks/useLedgerSummary';
 import DashboardLedgerSummaryCards from './dashboard/DashboardLedgerSummaryCards';
 import { API_BASE_URL } from '../config/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
+import DdMmYyCalendar from './DdMmYyCalendar';
 import './Dashboard.css';
 
 /** Extract payment mode from bills that may use different API field names or nesting */
@@ -89,7 +90,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             <h3>Daily Expenses</h3>
           </div>
           <div className="section-header-actions">
-            <button className="btn btn-primary" onClick={() => setExpensesFormOpen(true)}>
+            <button className="primary-button" onClick={() => setExpensesFormOpen(true)}>
               + Add Expense
             </button>
           </div>
@@ -1626,7 +1627,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   };
 
   return (
-    <div className="dashboard-container">
+    <div className="page-container page-container--full dashboard-container">
 
       {/* API Connection Error Banner */}
       {apiConnectionError && (
@@ -1647,6 +1648,15 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
             <button className="api-error-close" onClick={() => setApiConnectionError(false)}>×</button>
           </div>
         </div>
+      )}
+
+      {activeNav === 'dashboard' && (
+        <header className="page-header dashboard-header">
+          <div>
+            <h1 className="page-title dashboard-title">Dashboard</h1>
+            <p className="page-subtitle">Overview of sales, inventory, expenses, and ledger balance</p>
+          </div>
+        </header>
       )}
 
       {/* Stats Cards - Only show on Dashboard */}
@@ -1706,19 +1716,20 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
               )}
               {statsPeriod === 'range' && (
                 <div className="stats-period-inputs stats-range-inputs" onClick={(e) => e.stopPropagation()}>
-                  <input
-                    type="date"
-                    value={statsRangeStart}
-                    onChange={(e) => setStatsRangeStart(e.target.value)}
+                  <DdMmYyCalendar
                     className="stats-date-input"
+                    inputClassName="stats-date-input"
+                    value={statsRangeStart}
+                    onChange={setStatsRangeStart}
                     placeholder="Start"
                   />
                   <span className="stats-range-sep">to</span>
-                  <input
-                    type="date"
-                    value={statsRangeEnd}
-                    onChange={(e) => setStatsRangeEnd(e.target.value)}
+                  <DdMmYyCalendar
                     className="stats-date-input"
+                    inputClassName="stats-date-input"
+                    value={statsRangeEnd}
+                    onChange={setStatsRangeEnd}
+                    minDate={statsRangeStart || undefined}
                     placeholder="End"
                   />
                 </div>
@@ -2236,25 +2247,26 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                 )}
               </div>
               <div className="date-range-filter">
-                <input
-                  type="date"
+                <DdMmYyCalendar
+                  className="date-input"
+                  inputClassName="date-input"
                   value={dateRange.start}
-                  onChange={(e) => {
-                    setDateRange({ ...dateRange, start: e.target.value });
+                  onChange={(v) => {
+                    setDateRange({ ...dateRange, start: v });
                     setSalesCurrentPage(1);
                   }}
-                  className="date-input"
                   placeholder="Start Date"
                 />
                 <span className="date-separator">to</span>
-                <input
-                  type="date"
+                <DdMmYyCalendar
+                  className="date-input"
+                  inputClassName="date-input"
                   value={dateRange.end}
-                  onChange={(e) => {
-                    setDateRange({ ...dateRange, end: e.target.value });
+                  onChange={(v) => {
+                    setDateRange({ ...dateRange, end: v });
                     setSalesCurrentPage(1);
                   }}
-                  className="date-input"
+                  minDate={dateRange.start || undefined}
                   placeholder="End Date"
                 />
                 {(dateRange.start || dateRange.end) && (
@@ -2587,7 +2599,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                   📥 Export CSV
                 </button>
               )}
-              <button className="btn btn-primary" onClick={() => setShowAddInventory(true)}>
+              <button className="primary-button" onClick={() => setShowAddInventory(true)}>
                 + Add Inventory
               </button>
             </div>
@@ -2786,7 +2798,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                           </div>
                           <div className="inventory-card-actions">
                             <button
-                              className="btn btn-primary btn-sm"
+                              className="primary-button primary-button--sm"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleEditInventory(item);
@@ -2795,7 +2807,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                               ✏️ Edit
                             </button>
                             <button
-                              className="btn btn-secondary btn-sm"
+                              className="secondary-button btn-sm"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleDeleteInventory(item);
@@ -3155,10 +3167,10 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                 </div>
                 
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary">
+                  <button type="submit" className="primary-button">
                     Add Item
                   </button>
-                  <button type="button" className="btn btn-secondary" onClick={() => setShowAddInventory(false)}>
+                  <button type="button" className="secondary-button" onClick={() => setShowAddInventory(false)}>
                     Cancel
                   </button>
                 </div>
@@ -3294,10 +3306,10 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
               )}
             </div>
             <div className="modal-footer">
-              <button className="btn btn-primary" onClick={printBill} title="Print Bill">
+              <button className="primary-button" onClick={printBill} title="Print Bill">
                 🖨️ Print Bill
               </button>
-              <button className="btn btn-secondary" onClick={() => setShowBillItems(false)}>
+              <button className="secondary-button" onClick={() => setShowBillItems(false)}>
                 Close
               </button>
             </div>
@@ -3619,10 +3631,10 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
                 </div>
                 
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary">
+                  <button type="submit" className="primary-button">
                     Update Item
                   </button>
-                  <button type="button" className="btn btn-secondary" onClick={() => {
+                  <button type="button" className="secondary-button" onClick={() => {
                     setShowEditInventory(false);
                     setEditingInventoryItem(null);
                     setEditStockBaseline(null);

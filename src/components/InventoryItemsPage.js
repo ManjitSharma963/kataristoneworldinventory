@@ -15,6 +15,7 @@ import {
   createSupplier,
   createDealer
 } from '../utils/api';
+import DdMmYyCalendar from './DdMmYyCalendar';
 import './Dashboard.css';
 import InventoryUpdateModal from './InventoryUpdateModal';
 import { digitsOnly, isExactlyTenDigits } from '../utils/indianMobile10';
@@ -1035,14 +1036,14 @@ const InventoryItemsPage = () => {
           {isAdmin() && (
             <button
               type="button"
-              className="btn btn-secondary"
+              className="secondary-button"
               onClick={openUpdateInventoryModal}
               title="Edit product prices, GST, stock, and expenses"
             >
               Update inventory
             </button>
           )}
-          <button type="button" className="btn btn-primary" onClick={() => setShowAddInventory(true)}>
+          <button type="button" className="primary-button" onClick={() => setShowAddInventory(true)}>
             Add inventory
           </button>
         </div>
@@ -1071,34 +1072,33 @@ const InventoryItemsPage = () => {
           <div className="inventory-stock-asof-row">
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: '#475569' }}>Start</label>
-              <input
-                type="date"
+              <DdMmYyCalendar
                 value={stockHistoryStartDate}
-                onChange={(e) => setStockHistoryStartDate(e.target.value)}
+                onChange={setStockHistoryStartDate}
                 disabled={stockAsOfLoading}
                 style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
               />
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label style={{ fontSize: '12px', display: 'block', marginBottom: '4px', color: '#475569' }}>End</label>
-              <input
-                type="date"
+              <DdMmYyCalendar
                 value={stockHistoryEndDate}
-                onChange={(e) => setStockHistoryEndDate(e.target.value)}
+                onChange={setStockHistoryEndDate}
                 disabled={stockAsOfLoading}
+                minDate={stockHistoryStartDate || undefined}
                 style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
               />
             </div>
             <button
               type="button"
-              className="btn btn-secondary"
+              className="secondary-button"
               onClick={() => applyStockAsOf()}
               disabled={stockAsOfLoading}
             >
               {stockAsOfLoading ? 'Loading…' : 'Apply'}
             </button>
             {stockAsOfActive && (
-              <button type="button" className="btn btn-secondary" onClick={() => clearStockAsOf()}>
+              <button type="button" className="secondary-button" onClick={() => clearStockAsOf()}>
                 Clear
               </button>
             )}
@@ -1112,7 +1112,7 @@ const InventoryItemsPage = () => {
             <span className="empty-icon">📦</span>
             <p className="empty-state">No inventory items yet</p>
             <p className="empty-subtitle">Click &quot;Add inventory&quot; to add your first item.</p>
-            <button type="button" className="btn btn-primary" onClick={() => setShowAddInventory(true)}>Add inventory</button>
+            <button type="button" className="primary-button" onClick={() => setShowAddInventory(true)}>Add inventory</button>
           </div>
         ) : filteredInventory.length === 0 ? (
           <div className="empty-state-wrapper">
@@ -1417,7 +1417,7 @@ const InventoryItemsPage = () => {
                       {isAdmin() && (
                         <button
                           type="button"
-                          className="btn btn-secondary btn-compact"
+                          className="secondary-button btn-compact"
                           onClick={() => openQuickAdd('supplier', 'add')}
                         >
                           Add new
@@ -1444,7 +1444,7 @@ const InventoryItemsPage = () => {
                       {isAdmin() && (
                         <button
                           type="button"
-                          className="btn btn-secondary btn-compact"
+                          className="secondary-button btn-compact"
                           onClick={() => openQuickAdd('dealer', 'add')}
                         >
                           Add new
@@ -1560,8 +1560,8 @@ const InventoryItemsPage = () => {
                   </div>
                 </div>
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary">Add inventory</button>
-                  <button type="button" className="btn btn-secondary" onClick={() => setShowAddInventory(false)}>Cancel</button>
+                  <button type="submit" className="primary-button">Add inventory</button>
+                  <button type="button" className="secondary-button" onClick={() => setShowAddInventory(false)}>Cancel</button>
                 </div>
               </form>
             </div>
@@ -1792,10 +1792,10 @@ const InventoryItemsPage = () => {
                 />
               </div>
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary" disabled={quickAddSubmitting}>
+                <button type="submit" className="primary-button" disabled={quickAddSubmitting}>
                   {quickAddSubmitting ? 'Saving…' : 'Save'}
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={closeQuickAdd}>
+                <button type="button" className="secondary-button" onClick={closeQuickAdd}>
                   Cancel
                 </button>
               </div>

@@ -8,6 +8,7 @@ import {
   computeReturnSettlementPreview,
   getReturnableBillLines,
 } from './billReturnUtils';
+import DdMmYyCalendar from '../DdMmYyCalendar';
 import './AdjustmentExchangeDialog.css';
 
 const SETTLEMENT_COLLECT = 'COLLECT';
@@ -582,7 +583,7 @@ export default function AdjustmentExchangeDialog({
                   {returnableLines.length > 0 ? (
                     <button
                       type="button"
-                      className="btn btn-secondary"
+                      className="secondary-button"
                       onClick={addReturnLineFromBill}
                       disabled={!canReturn}
                     >
@@ -687,7 +688,7 @@ export default function AdjustmentExchangeDialog({
               <section className="adj-exchange-panel">
                 <div className="adj-exchange-panel-head">
                   <h3>2. New Items (Add to this bill)</h3>
-                  <button type="button" className="btn btn-secondary" onClick={addNewItemRow}>
+                  <button type="button" className="secondary-button" onClick={addNewItemRow}>
                     + Add New Item
                   </button>
                 </div>
@@ -916,11 +917,7 @@ export default function AdjustmentExchangeDialog({
                   </label>
                   <label className="adj-exchange-field">
                     Transaction Date
-                    <input
-                      type="date"
-                      value={transactionDate}
-                      onChange={(e) => setTransactionDate(e.target.value)}
-                    />
+                    <DdMmYyCalendar value={transactionDate} onChange={setTransactionDate} />
                   </label>
                 </section>
               </div>
@@ -936,12 +933,12 @@ export default function AdjustmentExchangeDialog({
             </div>
 
             <footer className="adj-exchange-footer">
-              <button type="button" className="btn btn-secondary" disabled={submitting} onClick={onHide}>
+              <button type="button" className="secondary-button" disabled={submitting} onClick={onHide}>
                 Cancel
               </button>
               <button
                 type="button"
-                className="btn btn-primary"
+                className="primary-button"
                 disabled={submitting}
                 onClick={() => setPreviewOpen(true)}
               >
@@ -962,13 +959,13 @@ export default function AdjustmentExchangeDialog({
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button
               type="button"
-              className="btn btn-secondary"
+              className="secondary-button"
               disabled={submitting}
               onClick={() => setPreviewOpen(false)}
             >
               Back
             </button>
-            <button type="button" className="btn btn-primary" disabled={submitting} onClick={handleConfirm}>
+            <button type="button" className="primary-button" disabled={submitting} onClick={handleConfirm}>
               {submitting ? 'Saving…' : 'Confirm'}
             </button>
           </div>

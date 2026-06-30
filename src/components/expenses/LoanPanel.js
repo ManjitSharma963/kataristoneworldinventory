@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import DdMmYyCalendar from '../DdMmYyCalendar';
+import { formatDdMmYy } from '../../utils/dateFormat';
 
 const INR = (n) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -18,11 +20,41 @@ const LOAN_TXN_COLUMNS = [
   { key: 'giveTake', label: 'Give / Take', defaultVisible: false },
   { key: 'notes', label: 'Notes', defaultVisible: true },
   { key: 'status', label: 'Status', defaultVisible: false },
+  { key: 'actions', label: 'Actions', defaultVisible: true },
 ];
 const LOAN_TXN_COLUMNS_KEY = 'loanLedger.visibleColumns.v1';
+const LOAN_EDIT_WINDOW_DAYS = 7;
+
+function formatLoanDisplayDate(dateStr) {
+  return formatDdMmYy(dateStr) || '—';
+}
+
+function isWithinLoanEditWindow(dateStr) {
+  if (!dateStr) return false;
+  const s = String(dateStr).slice(0, 10);
+  const [y, mo, d] = s.split('-').map(Number);
+  if (!y || !mo || !d) return false;
+  const entry = new Date(y, mo - 1, d);
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - LOAN_EDIT_WINDOW_DAYS);
+  entry.setHours(0, 0, 0, 0);
+  return entry >= cutoff;
+}
+
+function normalizePaymentModeForSelect(raw) {
+  const v = String(raw || 'cash').trim().toLowerCase();
+  if (v === 'bank' || v === 'bank_transfer') return 'bank_transfer';
+  if (v === 'upi') return 'upi';
+  return 'cash';
+}
 
 const LoanPanel = ({
   handleCreateLoanTransaction,
+  handleEditLoanTransaction,
+  handleDeleteLoanTransaction,
+  loanNotesWithoutMode,
+  parseLoanModeFromNotes,
   loanLenders,
   loadingLoanLenders,
   loanLendersTotals,
@@ -35,6 +67,11 @@ const LoanPanel = ({
   const localNow = new Date();
   localNow.setMinutes(localNow.getMinutes() - localNow.getTimezoneOffset());
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingRow, setEditingRow] = useState(null);
+  const [editForm, setEditForm] = useState({ amount: '', paymentMode: 'cash', entryDate: '', notes: '' });
+  const [submittingEdit, setSubmittingEdit] = useState(false);
+  const [deletingRowId, setDeletingRowId] = useState(null);
   const [submittingQuickEntry, setSubmittingQuickEntry] = useState(false);
   const [quickEntry, setQuickEntry] = useState({
     dateTime: localNow.toISOString().slice(0, 16),
@@ -198,6 +235,64 @@ const LoanPanel = ({
     }
   };
 
+  const openEditModal = (row) => {
+    if (!isWithinLoanEditWindow(row?.date)) return;
+    const notesFn = loanNotesWithoutMode || ((n) => String(n || ''));
+    const modeFn = parseLoanModeFromNotes || (() => 'cash');
+    setEditingRow(row);
+    setEditForm({
+      amount: String(row.amount ?? ''),
+      paymentMode: normalizePaymentModeForSelect(row.paymentMode || modeFn(row.notes)),
+      entryDate: row.date ? String(row.date).slice(0, 10) : '',
+      notes: notesFn(row.notes),
+    });
+    setShowEditModal(true);
+  };
+
+  const closeEditModal = () => {
+    if (submittingEdit) return;
+    setShowEditModal(false);
+    setEditingRow(null);
+  };
+
+  const submitEdit = async (e) => {
+    e.preventDefault();
+    if (!editingRow || submittingEdit) return;
+    const amount = parseFloat(String(editForm.amount || '').replace(/,/g, ''));
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    setSubmittingEdit(true);
+    try {
+      await handleEditLoanTransaction(editingRow, {
+        amount,
+        paymentMode: editForm.paymentMode,
+        notes: editForm.notes,
+        entryDate: editForm.entryDate,
+      });
+      setShowEditModal(false);
+      setEditingRow(null);
+    } catch (_) {
+      /* toast handled in parent */
+    } finally {
+      setSubmittingEdit(false);
+    }
+  };
+
+  const confirmDeleteRow = async (row) => {
+    if (!isWithinLoanEditWindow(row?.date) || deletingRowId) return;
+    const ok = window.confirm(
+      `Delete this ${row.typeLabel || 'loan'} transaction for ${row.person || 'this person'} (${INR(row.amount)})?`
+    );
+    if (!ok) return;
+    setDeletingRowId(row.id);
+    try {
+      await handleDeleteLoanTransaction(row);
+    } catch (_) {
+      /* toast handled in parent */
+    } finally {
+      setDeletingRowId(null);
+    }
+  };
+
   const exportCsv = () => {
     const lines = [['Date', 'Type', 'Person', 'Amount', 'PaymentMode', 'GiveOrTake', 'Notes'].join(',')];
     for (const r of filteredRows) {
@@ -223,75 +318,69 @@ const LoanPanel = ({
 
   return (
     <div className="expenses-tab-content">
-      <div
-        style={{
-          border: '1px solid #d9e2ec',
-          borderRadius: '12px',
-          background: '#fff',
-          padding: '12px',
-          fontSize: '13px',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+      <div className="loan-ledger-panel">
+        <div className="loan-ledger-panel__header">
           <div>
-            <h3 style={{ margin: 0, fontSize: 20, color: '#1e293b' }}>Loan Ledger</h3>
-            <p style={{ margin: '2px 0 0', color: '#64748b', fontSize: 12 }}>
+            <h3 className="loan-ledger-panel__title">Loan Ledger</h3>
+            <p className="loan-ledger-panel__subtitle">
               Overview updates from current filters (date, type, payment mode, search).
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" className="btn btn-secondary" onClick={exportCsv}>Export</button>
-            <button type="button" className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+          <div className="loan-ledger-panel__actions">
+            <button type="button" className="secondary-button" onClick={exportCsv}>Export</button>
+            <button type="button" className="primary-button" onClick={() => setShowAddModal(true)}>
               + Give / Take
             </button>
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 330px) 1fr', gap: 10, marginBottom: 10 }}>
-          <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 14 }}>Give / Take Overview</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div className="loan-ledger-overview-grid">
+          <div className="loan-ledger-card">
+            <div className="loan-ledger-card__title">Give / Take Overview</div>
+            <div className="loan-ledger-donut-layout">
               <div
+                className="loan-ledger-donut"
                 style={{
-                  width: 130, height: 130, borderRadius: '50%',
-                  background: `conic-gradient(#dc2626 0 ${pGive}%, #2563eb ${pGive}% ${pGive + pTake}%, #e2e8f0 ${pGive + pTake}% 100%)`,
-                  position: 'relative',
+                  background: `conic-gradient(#dc2626 0 ${pGive}%, #2563eb ${pGive}% ${pGive + pTake}%, #dce2eb ${pGive + pTake}% 100%)`,
                 }}
               >
-                <div style={{ position: 'absolute', inset: 28, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', fontSize: 12 }}>
-                  <span style={{ fontSize: 11 }}>Net</span>
+                <div className="loan-ledger-donut__center">
+                  <span className="loan-ledger-donut__center-label">Net</span>
                   <strong>{INR(Math.abs(simpleNet)).replace('.00', '')}</strong>
                 </div>
               </div>
-              <div style={{ fontSize: 12, color: '#475569' }}>
-                <div style={{ marginBottom: 6 }}>● Total Give: {INR(giveTotal)}</div>
-                <div style={{ marginBottom: 6 }}>● Total Take: {INR(takeTotal)}</div>
-                <div style={{ marginBottom: 6 }}>
+              <div className="loan-ledger-legend">
+                <div className="loan-ledger-legend__item">● Total Give: {INR(giveTotal)}</div>
+                <div className="loan-ledger-legend__item">● Total Take: {INR(takeTotal)}</div>
+                <div className="loan-ledger-legend__item">
                   ● Net: {simpleNet >= 0 ? 'Give' : 'Take'} {INR(Math.abs(simpleNet))}
                 </div>
               </div>
             </div>
           </div>
-          <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
-            <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>Give / Take Summary</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(120px,1fr))', gap: 8 }}>
-              {[
-                ['Give (money out)', giveTotal, '#dc2626'],
-                ['Take (money in)', takeTotal, '#2563eb'],
-              ].map(([l, v, c]) => (
-                <div key={l} style={{ border: '1px solid #eef2f7', borderRadius: 8, padding: 8, background: '#f8fafc' }}>
-                  <div style={{ fontSize: 11, color: '#64748b' }}>{l}</div>
-                  <div style={{ fontSize: 20, color: c, fontWeight: 700 }}>{INR(v).replace('.00', '')}</div>
+          <div className="loan-ledger-card">
+            <div className="loan-ledger-card__title">Give / Take Summary</div>
+            <div className="loan-ledger-summary-grid">
+              <div className="loan-ledger-stat">
+                <div className="loan-ledger-stat__label">Give (money out)</div>
+                <div className="loan-ledger-stat__value loan-ledger-stat__value--give">
+                  {INR(giveTotal).replace('.00', '')}
                 </div>
-              ))}
+              </div>
+              <div className="loan-ledger-stat">
+                <div className="loan-ledger-stat__label">Take (money in)</div>
+                <div className="loan-ledger-stat__value loan-ledger-stat__value--take">
+                  {INR(takeTotal).replace('.00', '')}
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
         <div className="loan-ledger-filters">
           <div className="loan-ledger-filters-row">
-            <input className="loan-ledger-filter-input" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-            <input className="loan-ledger-filter-input" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            <DdMmYyCalendar className="loan-ledger-filter-input" inputClassName="loan-ledger-filter-input" value={fromDate} onChange={setFromDate} />
+            <DdMmYyCalendar className="loan-ledger-filter-input" inputClassName="loan-ledger-filter-input" value={toDate} onChange={setToDate} minDate={fromDate || undefined} />
             <select className="loan-ledger-filter-input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
               <option value="ALL">Give &amp; Take</option>
               <option value="GIVE">I gave (money out)</option>
@@ -310,93 +399,36 @@ const LoanPanel = ({
             <option value="ACTIVE">Active</option>
           </select>
           <input className="loan-ledger-filter-input loan-ledger-search-input" type="text" placeholder="Search person..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          <button type="button" className="btn btn-secondary loan-ledger-reset-btn" onClick={() => { setFromDate(''); setToDate(''); setTypeFilter('ALL'); setPayFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}>
+          <button type="button" className="secondary-button loan-ledger-reset-btn" onClick={() => { setFromDate(''); setToDate(''); setTypeFilter('ALL'); setPayFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}>
             Reset
           </button>
           </div>
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 8,
-            gap: 8,
-            flexWrap: 'wrap',
-            position: 'relative',
-          }}
-        >
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Transaction History</div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', position: 'relative' }}>
-            <span style={{ fontSize: 11, color: '#64748b' }}>
+        <div className="loan-ledger-history-header">
+          <div className="loan-ledger-history-header__title">Transaction History</div>
+          <div className="loan-ledger-history-header__meta">
+            <span className="loan-ledger-history-header__count">
               Showing {visibleColumnCount} of {LOAN_TXN_COLUMNS.length} columns
             </span>
             <button
               type="button"
-              className="btn btn-secondary"
-              style={{ padding: '4px 10px', fontSize: 12 }}
+              className="secondary-button secondary-button--sm"
               onClick={() => setShowColumnsMenu((v) => !v)}
               title="Show or hide table columns"
             >
               ⚙ Columns
             </button>
             {showColumnsMenu && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 'calc(100% + 4px)',
-                  right: 0,
-                  zIndex: 20,
-                  background: '#fff',
-                  border: '1px solid #d9e2ec',
-                  borderRadius: 8,
-                  boxShadow: '0 8px 24px rgba(15,23,42,0.12)',
-                  padding: 8,
-                  minWidth: 200,
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: 6,
-                    paddingBottom: 6,
-                    borderBottom: '1px solid #eef2f7',
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: '#475569',
-                  }}
-                >
+              <div className="loan-ledger-columns-menu">
+                <div className="loan-ledger-columns-menu__head">
                   <span>Toggle columns</span>
-                  <button
-                    type="button"
-                    onClick={resetColumns}
-                    style={{
-                      border: 'none',
-                      background: 'transparent',
-                      color: '#2563eb',
-                      cursor: 'pointer',
-                      fontSize: 11,
-                      padding: 0,
-                    }}
-                  >
+                  <button type="button" className="loan-ledger-columns-menu__reset" onClick={resetColumns}>
                     Reset
                   </button>
                 </div>
                 {LOAN_TXN_COLUMNS.map((c) => (
-                  <label
-                    key={c.key}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '4px 2px',
-                      fontSize: 12,
-                      cursor: 'pointer',
-                    }}
-                  >
+                  <label key={c.key} className="loan-ledger-columns-menu__item">
                     <input
                       type="checkbox"
                       checked={isColVisible(c.key)}
@@ -405,11 +437,10 @@ const LoanPanel = ({
                     {c.label}
                   </label>
                 ))}
-                <div style={{ marginTop: 4, paddingTop: 6, borderTop: '1px solid #eef2f7' }}>
+                <div className="loan-ledger-columns-menu__footer">
                   <button
                     type="button"
-                    className="btn btn-secondary"
-                    style={{ width: '100%', fontSize: 12, padding: '4px 8px' }}
+                    className="secondary-button secondary-button--sm secondary-button--block"
                     onClick={() => setShowColumnsMenu(false)}
                   >
                     Done
@@ -469,7 +500,7 @@ const LoanPanel = ({
                 <tr key={r.id}>
                   {isColVisible('datetime') && (
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      {r.date ? String(r.date).replace('T', ' ').slice(0, 16) : '—'}
+                      {formatLoanDisplayDate(r.date)}
                     </td>
                   )}
                   {isColVisible('type') && (
@@ -502,6 +533,35 @@ const LoanPanel = ({
                   {isColVisible('status') && (
                     <td><span className="pill-status status-open">Active</span></td>
                   )}
+                  {isColVisible('actions') && (
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {isWithinLoanEditWindow(r.date) ? (
+                        <span style={{ display: 'inline-flex', gap: 6 }}>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            style={{ padding: '2px 8px', fontSize: 11 }}
+                            onClick={() => openEditModal(r)}
+                            title="Edit (within last 7 days)"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            style={{ padding: '2px 8px', fontSize: 11, color: '#dc2626' }}
+                            disabled={deletingRowId === r.id}
+                            onClick={() => confirmDeleteRow(r)}
+                            title="Delete (within last 7 days)"
+                          >
+                            {deletingRowId === r.id ? '…' : 'Delete'}
+                          </button>
+                        </span>
+                      ) : (
+                        <span style={{ color: '#94a3b8', fontSize: 11 }}>—</span>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -520,7 +580,7 @@ const LoanPanel = ({
                 <div className="form-row">
                   <div className="form-group">
                     <label>Date & Time</label>
-                    <input type="datetime-local" value={quickEntry.dateTime} onChange={(e) => handleQuickEntryChange('dateTime', e.target.value)} />
+                    <DdMmYyCalendar showTime value={quickEntry.dateTime} onChange={(v) => handleQuickEntryChange('dateTime', v)} />
                   </div>
                   <div className="form-group">
                     <label>What happened? *</label>
@@ -581,9 +641,77 @@ const LoanPanel = ({
                   </div>
                 </div>
                 <div className="form-actions" style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                  <button type="button" className="btn btn-secondary" onClick={() => { setShowAddModal(false); resetQuickEntry(); }}>Cancel</button>
-                  <button type="submit" className="btn btn-primary" disabled={submittingQuickEntry}>
+                  <button type="button" className="secondary-button" onClick={() => { setShowAddModal(false); resetQuickEntry(); }}>Cancel</button>
+                  <button type="submit" className="primary-button" disabled={submittingQuickEntry}>
                     {submittingQuickEntry ? 'Saving...' : 'Save Transaction'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+      {showEditModal && editingRow && (
+        <div className="modal-overlay" onClick={closeEditModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 'min(520px, 92vw)' }}>
+            <div className="modal-header">
+              <h3>Edit loan transaction</h3>
+              <button type="button" className="modal-close" onClick={closeEditModal} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ margin: '0 0 12px', fontSize: 12, color: '#64748b' }}>
+                {editingRow.typeLabel} · {editingRow.person}
+                {' · '}
+                Only transactions from the last {LOAN_EDIT_WINDOW_DAYS} days can be changed.
+              </p>
+              <form onSubmit={submitEdit}>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Amount (₹) *</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      required
+                      value={editForm.amount}
+                      onChange={(e) => setEditForm((p) => ({ ...p, amount: e.target.value }))}
+                      disabled={submittingEdit}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Date</label>
+                    <DdMmYyCalendar
+                      value={editForm.entryDate}
+                      onChange={(v) => setEditForm((p) => ({ ...p, entryDate: v }))}
+                      disabled={submittingEdit}
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Payment mode</label>
+                  <select
+                    value={editForm.paymentMode}
+                    onChange={(e) => setEditForm((p) => ({ ...p, paymentMode: e.target.value }))}
+                    disabled={submittingEdit}
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="upi">UPI</option>
+                    <option value="bank_transfer">Bank</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Notes</label>
+                  <textarea
+                    rows={2}
+                    value={editForm.notes}
+                    onChange={(e) => setEditForm((p) => ({ ...p, notes: e.target.value }))}
+                    disabled={submittingEdit}
+                  />
+                </div>
+                <div className="form-actions" style={{ marginTop: 10, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button type="button" className="secondary-button" onClick={closeEditModal} disabled={submittingEdit}>Cancel</button>
+                  <button type="submit" className="primary-button" disabled={submittingEdit}>
+                    {submittingEdit ? 'Saving...' : 'Save changes'}
                   </button>
                 </div>
               </form>

@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import DdMmYyCalendar from './DdMmYyCalendar';
+import { localISODate, formatDdMmYyyy } from '../utils/dateFormat';
 import {
   fetchDailyClosingReport,
   fetchSalesChargesSummary,
@@ -6,19 +8,15 @@ import {
   getLedgerTransactions,
   getDailyBudgetCalculatedSummary,
   getBalanceSummary,
+  startAuditReport,
+  fetchAuditReportStatus,
+  downloadAuditReport,
 } from '../utils/api';
 import Loading from './Loading';
 import './Reports.css';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-
-function localISODate(d = new Date()) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
 
 const money = (n) =>
   `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -32,20 +30,13 @@ const unwrapList = (value) =>
   Array.isArray(value) ? value : Array.isArray(value?.data) ? value.data : [];
 
 function formatDayLabel(iso) {
-  if (!iso) return '';
-  const [y, m, d] = iso.split('-').map(Number);
-  const dt = new Date(y, m - 1, d);
-  return dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return formatDdMmYyyy(iso);
 }
 
 function formatShortDate(iso) {
   if (!iso) return '—';
-  const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
+  const formatted = formatDdMmYyyy(iso);
+  return formatted || '—';
 }
 
 function formatExpenseMode(pm) {
@@ -163,14 +154,14 @@ const EXPENSE_CHART_BUCKET_COLORS = {
 
 function MetricCard({ icon, tone, label, value, hint }) {
   return (
-    <article className="reports-metric">
-      <div className={`reports-metric__icon reports-metric__icon--${tone}`} aria-hidden>
+    <article className={`summary-card summary-card--metric summary-card--tone-${tone} reports-metric`}>
+      <div className="summary-card__icon reports-metric__icon" aria-hidden>
         <i className={icon} />
       </div>
       <div>
-        <span className="reports-metric__label">{label}</span>
-        <span className="reports-metric__value">{value}</span>
-        {hint ? <span className="reports-metric__hint">{hint}</span> : null}
+        <span className="summary-card__label reports-metric__label">{label}</span>
+        <span className="summary-card__value reports-metric__value">{value}</span>
+        {hint ? <span className="summary-card__hint reports-metric__hint">{hint}</span> : null}
       </div>
     </article>
   );
@@ -185,8 +176,8 @@ function DonutPanel({ title, centerLabel, centerValue, data, emptyMessage }) {
   }));
 
   return (
-    <section className="reports-card reports-donut-panel">
-      <h3 className="reports-card__title">{title}</h3>
+    <section className="section-card reports-card reports-donut-panel">
+      <h3 className="section-title reports-card__title">{title}</h3>
       <div className="reports-donut-layout">
         <div className="reports-donut-chart">
           <div className="reports-donut-viz">
@@ -261,10 +252,10 @@ function BudgetPanel({
     ledgerDebitSplit.other;
 
   return (
-    <section className="reports-card reports-budget-panel">
+    <section className="section-card reports-card reports-budget-panel">
       <div className="reports-budget__header">
         <i className="pi pi-wallet reports-budget__icon" aria-hidden />
-        <h3 className="reports-card__title">Budget in Hand Summary</h3>
+        <h3 className="section-title reports-card__title">Budget in Hand Summary</h3>
       </div>
       <div className="reports-budget__body">
       <div className="reports-budget__row">
@@ -375,6 +366,10 @@ const Reports = () => {
   const [closingLoading, setClosingLoading] = useState(false);
   const [closingError, setClosingError] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditJobId, setAuditJobId] = useState(null);
+  const [auditStatus, setAuditStatus] = useState(null);
+  const auditDownloadedRef = useRef(false);
   const [billsPage, setBillsPage] = useState(0);
   const [expensesPage, setExpensesPage] = useState(0);
 
@@ -639,6 +634,69 @@ const Reports = () => {
     }
   };
 
+  useEffect(() => {
+    if (!auditJobId) return undefined;
+    let cancelled = false;
+    let intervalId;
+
+    const poll = async () => {
+      try {
+        const status = await fetchAuditReportStatus(auditJobId);
+        if (cancelled) return;
+        setAuditStatus(status);
+        const state = String(status?.status || '').toUpperCase();
+        if (state === 'COMPLETED') {
+          if (intervalId) clearInterval(intervalId);
+          if (!auditDownloadedRef.current) {
+            auditDownloadedRef.current = true;
+            const filename = status?.filename || 'Audit_Report.pdf';
+            await downloadAuditReport(auditJobId, filename);
+          }
+          setAuditLoading(false);
+          setAuditJobId(null);
+        } else if (state === 'FAILED') {
+          if (intervalId) clearInterval(intervalId);
+          setAuditLoading(false);
+          window.alert(status?.error || status?.message || 'Audit report generation failed.');
+          setAuditJobId(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          if (intervalId) clearInterval(intervalId);
+          setAuditLoading(false);
+          window.alert(parseReportError(e));
+          setAuditJobId(null);
+        }
+      }
+    };
+
+    poll();
+    intervalId = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [auditJobId]);
+
+  const handleGenerateAuditReport = async () => {
+    if (auditLoading) return;
+    auditDownloadedRef.current = false;
+    setAuditLoading(true);
+    setAuditStatus(null);
+    try {
+      const result = await startAuditReport();
+      const jobId = result?.jobId || result?.data?.jobId;
+      if (!jobId) {
+        throw new Error('Audit report job did not start.');
+      }
+      setAuditJobId(jobId);
+      setAuditStatus({ status: 'QUEUED', progressPercent: 0, message: 'Starting audit report…' });
+    } catch (e) {
+      setAuditLoading(false);
+      window.alert(parseReportError(e));
+    }
+  };
+
   const handleDownloadPdf = async () => {
     if (!closingData) return;
     setPdfLoading(true);
@@ -856,19 +914,19 @@ const Reports = () => {
 
   if (closingLoading && !closingData) {
     return (
-      <div className="reports-page">
+      <div className="page-container page-container--full reports-page">
         <Loading message="Loading report…" />
       </div>
     );
   }
 
   return (
-    <div className="reports-page">
-      <header className="reports-page__header">
+    <div className="page-container page-container--full reports-page">
+      <header className="page-header reports-page__header">
         <div className="reports-page__title-row">
           <div>
-            <h1 className="reports-page__title">Daily Closing Report</h1>
-            <p className="reports-page__subtitle">
+            <h1 className="page-title reports-page__title">Daily Closing Report</h1>
+            <p className="page-subtitle reports-page__subtitle">
               Track your daily financial summary and closing report.
             </p>
           </div>
@@ -878,16 +936,52 @@ const Reports = () => {
             aria-hidden
           />
         </div>
-        <button
-          type="button"
-          className="reports-page__btn-pdf"
-          onClick={handleDownloadPdf}
-          disabled={!closingData || closingLoading || pdfLoading}
-        >
-          <i className="pi pi-download" aria-hidden />
-          <span>{pdfLoading ? 'Generating…' : 'Download PDF'}</span>
-        </button>
+        <div className="reports-page__header-actions">
+          <button
+            type="button"
+            className="reports-page__btn-audit"
+            onClick={handleGenerateAuditReport}
+            disabled={auditLoading}
+          >
+            <i className="pi pi-file-pdf" aria-hidden />
+            <span>{auditLoading ? 'Generating Audit Report…' : 'Generate Audit Report'}</span>
+          </button>
+          <button
+            type="button"
+            className="reports-page__btn-pdf"
+            onClick={handleDownloadPdf}
+            disabled={!closingData || closingLoading || pdfLoading}
+          >
+            <i className="pi pi-download" aria-hidden />
+            <span>{pdfLoading ? 'Generating…' : 'Download PDF'}</span>
+          </button>
+        </div>
       </header>
+
+      {auditLoading && (
+        <section className="reports-audit-progress" aria-live="polite">
+          <div className="reports-audit-progress__head">
+            <strong>Audit Report</strong>
+            <span>{auditStatus?.progressPercent ?? 0}%</span>
+          </div>
+          <div className="reports-audit-progress__bar" role="progressbar" aria-valuenow={auditStatus?.progressPercent ?? 0} aria-valuemin={0} aria-valuemax={100}>
+            <div
+              className="reports-audit-progress__fill"
+              style={{ width: `${Math.max(0, Math.min(100, auditStatus?.progressPercent ?? 0))}%` }}
+            />
+          </div>
+          <p className="reports-audit-progress__message">
+            {auditStatus?.message || 'Preparing application snapshot…'}
+          </p>
+          {auditStatus?.totalRecords > 0 && (
+            <p className="reports-audit-progress__records">
+              Records processed: {Number(auditStatus.recordsProcessed || 0).toLocaleString('en-IN')}
+              {' / '}
+              {Number(auditStatus.totalRecords || 0).toLocaleString('en-IN')}
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="reports-filters" aria-label="Report filters">
         <div className="reports-presets reports-presets--hidden">
@@ -910,24 +1004,31 @@ const Reports = () => {
         <div className="reports-filters__row">
           <div className="reports-filters__field">
             <label htmlFor="report-from">From (Bill Date &amp; Period Start)</label>
-            <input
+            <DdMmYyCalendar
               id="report-from"
-              type="date"
+              inputId="report-from"
               value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
+              onChange={(v) => setDateFrom(v || today)}
+              minDate={undefined}
             />
           </div>
           <div className="reports-filters__field">
             <label htmlFor="report-to">To (Inclusive)</label>
-            <input id="report-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <DdMmYyCalendar
+              id="report-to"
+              inputId="report-to"
+              value={dateTo}
+              onChange={(v) => setDateTo(v || today)}
+              minDate={dateFrom || undefined}
+            />
           </div>
           <div className="reports-filters__field">
             <label htmlFor="report-find">Find on Date</label>
-            <input
+            <DdMmYyCalendar
               id="report-find"
-              type="date"
+              inputId="report-find"
               value={findOnDate}
-              onChange={(e) => handleFindOnDate(e.target.value)}
+              onChange={(v) => handleFindOnDate(v)}
             />
           </div>
           <div className="reports-filters__actions">
@@ -978,7 +1079,7 @@ const Reports = () => {
             {isRange ? <span>Date range</span> : null}
           </div>
 
-          <div className="reports-metrics" aria-label="Key metrics">
+          <div className="summary-card-grid reports-metrics" aria-label="Key metrics">
             <MetricCard
               icon="pi pi-file"
               tone="bills"
@@ -1080,8 +1181,8 @@ const Reports = () => {
           </div>
 
           <div className="reports-bottom-grid">
-            <section className="reports-card reports-table-section reports-col-bills">
-            <h3 className="reports-card__title">
+            <section className="section-card reports-card reports-table-section reports-col-bills">
+            <h3 className="section-title reports-card__title">
               {billsTitle}
               {billsRows.length > 0 && (
                 <span className="reports-card__count">{billsRows.length}</span>
@@ -1169,8 +1270,8 @@ const Reports = () => {
             />
           </section>
 
-            <section className="reports-card reports-table-section reports-col-expenses">
-              <h3 className="reports-card__title">
+            <section className="section-card reports-card reports-table-section reports-col-expenses">
+              <h3 className="section-title reports-card__title">
                 {expensesTitle}
                 {expenseLines.length > 0 && (
                   <span className="reports-card__count">{expenseLines.length}</span>
@@ -1227,8 +1328,8 @@ const Reports = () => {
             </section>
 
             <div className="reports-sidebar-col">
-            <aside className="reports-card reports-highlights">
-              <h3 className="reports-card__title">Day Highlights</h3>
+            <aside className="section-card reports-card reports-highlights">
+              <h3 className="section-title reports-card__title">Day Highlights</h3>
               <ul className="reports-highlights__list">
                 <li>
                   <span>
@@ -1276,8 +1377,8 @@ const Reports = () => {
               </ul>
             </aside>
 
-            <section className="reports-card reports-paymodes-card">
-              <h3 className="reports-card__title">Payment Mode Summary</h3>
+            <section className="section-card reports-card reports-paymodes-card">
+              <h3 className="section-title reports-card__title">Payment Mode Summary</h3>
               <div className="reports-paymodes" aria-label="Payment mode summary">
             <div className="reports-paymode reports-paymode--cash">
               <span>Cash</span>

@@ -12,18 +12,27 @@ import {
   openBillAdjustmentSession
 } from '../utils/api';
 import { fetchProductsCatalog } from '../api/productsApi';
+import { fetchSalesAgents, assignBillAgentCommission } from '../api/salesAgentsApi';
 import {
   formatPaymentModeLabel,
   splitPaymentSummaryLines,
   normalizePaymentModeKey,
   getPaymentBand,
-  normalizeSearchText
+  normalizeSearchText,
+  billMatchesPaymentModeBand,
+  billPaymentModeSearchText,
+  resolveBillPaymentId,
+  paymentModeKeysEqual,
+  isWalletOrAdvancePayment,
+  toBillPaymentIsoDate,
+  paymentMatchesChangeTarget
 } from './sales/salesUtils';
 import { DataTable } from 'primereact/datatable';
 import { Column } from 'primereact/column';
 import { InputText } from 'primereact/inputtext';
 import { Dropdown } from 'primereact/dropdown';
-import { Calendar } from 'primereact/calendar';
+import DdMmYyCalendar from './DdMmYyCalendar';
+import { isoToDate } from '../utils/dateFormat';
 import { Button } from 'primereact/button';
 import { Menu } from 'primereact/menu';
 import { Tag } from 'primereact/tag';
@@ -38,6 +47,7 @@ import AdjustmentExchangeDialog from './sales/AdjustmentExchangeDialog';
 import CancelBillModal from './sales/CancelBillModal';
 import { computeReturnSettlementPreview } from './sales/billReturnUtils';
 import './Sales.css';
+import './Agents.css';
 
 /** API list responses may omit lazy-loaded line items; GET by id returns full payload. */
 function unwrapBillEnvelope(raw) {
@@ -159,6 +169,13 @@ function mergeBillWithFullDetail(row, detail) {
     returnHistory: Array.isArray(d.returnHistory) ? d.returnHistory : row.returnHistory,
     supplementaryBills: Array.isArray(d.supplementaryBills) ? d.supplementaryBills : row.supplementaryBills,
     billEvents: Array.isArray(d.billEvents) ? d.billEvents : row.billEvents,
+    agentId: d.agentId ?? row.agentId,
+    agentName: d.agentName ?? row.agentName,
+    agentCommissionType: d.agentCommissionType ?? row.agentCommissionType,
+    agentCommissionValue: d.agentCommissionValue ?? row.agentCommissionValue,
+    agentCommissionAmount: d.agentCommissionAmount ?? row.agentCommissionAmount,
+    agentCommissionStatus: d.agentCommissionStatus ?? row.agentCommissionStatus,
+    agentCommissionNotes: d.agentCommissionNotes ?? row.agentCommissionNotes,
     originalSale,
   };
 }
@@ -284,7 +301,7 @@ function billIsDraftRow(row) {
   return life === 'DRAFT';
 }
 
-/** Row ⋮ menu: View, Adjust/Exchange, PDF, Cancel bill. Payments/returns are inside View. */
+/** Row ⋮ menu: View, Adjust/Exchange, settlement, PDF, Cancel bill. */
 function SalesRowActionsMenu({
   row,
   onView,
@@ -292,6 +309,7 @@ function SalesRowActionsMenu({
   onPdf,
   onCancel,
   onChangePaymentMode,
+  onBillSettlement,
   readOnly = false
 }) {
   const menuRef = useRef(null);
@@ -312,6 +330,13 @@ function SalesRowActionsMenu({
         command: () => void onChangePaymentMode(row)
       });
     }
+    if (!locked && typeof onBillSettlement === 'function' && billAllowsAdditionalPayment(row)) {
+      base.push({
+        label: 'Bill settlement',
+        icon: 'pi pi-wallet',
+        command: () => void onBillSettlement(row)
+      });
+    }
     base.push({ label: 'Download PDF', icon: 'pi pi-file-pdf', command: () => void onPdf(row) });
     if (!locked) {
       base.push(
@@ -325,7 +350,7 @@ function SalesRowActionsMenu({
       );
     }
     return base;
-  }, [row, readOnly, onView, onAdjustExchange, onPdf, onCancel, onChangePaymentMode]);
+  }, [row, readOnly, onView, onAdjustExchange, onPdf, onCancel, onChangePaymentMode, onBillSettlement]);
 
   return (
     <div className="sales-dash-actions-menu">
@@ -406,10 +431,39 @@ const Sales = ({ setActiveNav }) => {
   const [adjustmentHistory, setAdjustmentHistory] = useState(null);
   const [adjustmentHistoryLoading, setAdjustmentHistoryLoading] = useState(false);
 
+  const [salesAgents, setSalesAgents] = useState([]);
+  const [salesAgentsLoading, setSalesAgentsLoading] = useState(false);
+  const [billAgentAssignId, setBillAgentAssignId] = useState('');
+  const [billAgentCommissionType, setBillAgentCommissionType] = useState('PERCENTAGE');
+  const [billAgentCommissionValue, setBillAgentCommissionValue] = useState('');
+  const [billAgentCommissionNotes, setBillAgentCommissionNotes] = useState('');
+  const [billAgentAssignSubmitting, setBillAgentAssignSubmitting] = useState(false);
+  const [billSettlementOpen, setBillSettlementOpen] = useState(false);
+
+  const billSettlementSectionRef = useRef(null);
+
   const canAddMorePayments = useMemo(() => {
     if (!selectedBill || billDetailLoading) return false;
     return billAllowsAdditionalPayment(selectedBill);
   }, [selectedBill, billDetailLoading]);
+
+  const billSettlementSummary = useMemo(() => {
+    if (!selectedBill) return null;
+    const total = Number(selectedBill.effectiveTotal ?? selectedBill.totalAmount) || 0;
+    const advance = Number(selectedBill.advanceUsed ?? selectedBill.originalSale?.advanceUsed) || 0;
+    const paid = Number(selectedBill.totalPaid ?? selectedBill.paidDisplay ?? selectedBill.paidAmount) || 0;
+    const paidIncludingAdvance = Number((paid + advance).toFixed(2));
+    const pending = computeBalanceDueForBill(selectedBill);
+    return { total, advance, paid, paidIncludingAdvance, pending };
+  }, [selectedBill]);
+
+  const billSettlementPreview = useMemo(() => {
+    if (!billSettlementSummary) return null;
+    const payNow = Number(paymentAddAmount) || 0;
+    const afterReceived = Number((billSettlementSummary.paidIncludingAdvance + payNow).toFixed(2));
+    const writeOff = Math.max(0, Number((billSettlementSummary.total - afterReceived).toFixed(2)));
+    return { payNow, afterReceived, writeOff };
+  }, [billSettlementSummary, paymentAddAmount]);
 
   const toIsoDate = (value) => {
     const d = value instanceof Date ? value : value ? new Date(value) : null;
@@ -491,6 +545,10 @@ const Sales = ({ setActiveNav }) => {
               ''
           ).trim() || '—';
         const items = sale.items || sale.billItems || [];
+        const itemsCount =
+          Number.isFinite(Number(sale.itemsCount)) && Number(sale.itemsCount) >= 0
+            ? Number(sale.itemsCount)
+            : items.length;
 
         // Normalize billType
         let billType = sale.billType || (sale.gstPaid ? 'GST' : 'NON-GST');
@@ -551,6 +609,7 @@ const Sales = ({ setActiveNav }) => {
           customerNumber,
           customerName,
           items,
+          itemsCount,
           billType,
           isGST,
           gstRate,
@@ -591,8 +650,7 @@ const Sales = ({ setActiveNav }) => {
       const q = normalizeSearchText(debouncedSearchQuery);
     return dateRangeFilteredSales.filter((row) => {
       if (paymentModeFilter && paymentModeFilter !== 'ALL') {
-        const band = getPaymentBand(row.paymentMode);
-        if (band !== paymentModeFilter) return false;
+        if (!billMatchesPaymentModeBand(row, paymentModeFilter)) return false;
       }
       if (!q) return true;
       const billNo = normalizeSearchText(row.billNumber);
@@ -600,7 +658,9 @@ const Sales = ({ setActiveNav }) => {
       const custName = normalizeSearchText(
         row.customerName && row.customerName !== '—' ? row.customerName : ''
       );
-      const pm = normalizeSearchText(formatPaymentModeLabel(row.paymentMode));
+      const pm = normalizeSearchText(
+        billPaymentModeSearchText(row) || formatPaymentModeLabel(row.paymentMode)
+      );
       const type = normalizeSearchText(row.billType);
       return (
         billNo.includes(q) ||
@@ -928,6 +988,37 @@ const Sales = ({ setActiveNav }) => {
     return <Tag value={label} severity={rowData.isGST ? 'info' : 'secondary'} />;
   };
 
+  const agentCommissionStatusClass = (status) => {
+    const s = String(status || 'PENDING').toUpperCase();
+    if (s === 'PAID') return 'agents-status agents-status--paid';
+    if (s === 'CANCELLED') return 'agents-status agents-status--cancelled';
+    return 'agents-status agents-status--pending';
+  };
+
+  const agentBodyTemplate = (rowData) => {
+    const agentId = rowData.agentId;
+    const agentName = rowData.agentName;
+    if (!agentId && !agentName) {
+      return <span className="sales-dash-muted">—</span>;
+    }
+    const amount = Number(rowData.agentCommissionAmount) || 0;
+    const status = rowData.agentCommissionStatus || 'PENDING';
+    return (
+      <div className="sales-dash-agent-cell">
+        <div className="sales-dash-agent-name">{agentName || 'Agent'}</div>
+        {amount > 0 ? (
+          <div className="sales-dash-agent-meta">
+            {formatCurrency(amount)}
+            {' · '}
+            <span className={agentCommissionStatusClass(status)}>{status}</span>
+          </div>
+        ) : (
+          <span className={agentCommissionStatusClass(status)}>{status}</span>
+        )}
+      </div>
+    );
+  };
+
   const amountBodyTemplate = (rowData, field) => {
     const amount = rowData[field] || 0;
     return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -1012,10 +1103,12 @@ const Sales = ({ setActiveNav }) => {
       onPdf={handlePdfFromRow}
       onCancel={handleOpenCancelBill}
       onChangePaymentMode={handleChangePaymentModeFromRow}
+      onBillSettlement={handleBillSettlementFromRow}
     />
   );
 
-  const handleViewBillDetails = async (bill) => {
+  const handleViewBillDetails = async (bill, options = {}) => {
+    const { focusSettlement = false } = options;
     if (!bill?.id) {
       setToast({ message: 'Bill id is missing; cannot load details.', type: 'error' });
       throw new Error('missing bill id');
@@ -1027,12 +1120,31 @@ const Sales = ({ setActiveNav }) => {
     setEditDraft(null);
     setBillDetailTab('details');
     setAdjustmentHistory(null);
+    setBillSettlementOpen(focusSettlement);
     setBillPopupVisible(true);
     setBillDetailLoading(true);
     try {
       const raw = await fetchBillByTypeAndId(bill.id, bill.billType);
       const detail = unwrapBillEnvelope(raw);
-      setSelectedBill((prev) => (prev && prev.id === bill.id ? mergeBillWithFullDetail(prev, detail) : prev));
+      const merged = mergeBillWithFullDetail(bill, detail);
+      setSelectedBill((prev) => (prev && prev.id === bill.id ? merged : merged));
+      if (billAllowsAdditionalPayment(merged)) {
+        const pending = computeBalanceDueForBill(merged);
+        setPaymentAddAmount(pending > 0 ? pending.toFixed(2) : '');
+      }
+      if (focusSettlement) {
+        if (!billAllowsAdditionalPayment(merged)) {
+          setToast({
+            message: 'This bill has no balance due — settlement is not available.',
+            type: 'error',
+          });
+          setBillSettlementOpen(false);
+        } else {
+          window.setTimeout(() => {
+            billSettlementSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }, 150);
+        }
+      }
     } catch (err) {
       console.error('[Sales] load bill detail', err);
       setToast({
@@ -1042,6 +1154,21 @@ const Sales = ({ setActiveNav }) => {
       throw err;
     } finally {
       setBillDetailLoading(false);
+    }
+  };
+
+  const handleBillSettlementFromRow = async (bill) => {
+    if (!billAllowsAdditionalPayment(bill)) {
+      setToast({
+        message: 'Bill settlement is only available when there is a balance due on Due, Pending, or Partial bills.',
+        type: 'error',
+      });
+      return;
+    }
+    try {
+      await handleViewBillDetails(bill, { focusSettlement: true });
+    } catch {
+      /* toast already shown */
     }
   };
 
@@ -1213,7 +1340,129 @@ const Sales = ({ setActiveNav }) => {
     setBillDetailLoading(false);
     setBillDetailTab('details');
     setAdjustmentHistory(null);
+    setBillAgentAssignId('');
+    setBillAgentCommissionType('PERCENTAGE');
+    setBillAgentCommissionValue('');
+    setBillAgentCommissionNotes('');
+    setBillAgentAssignSubmitting(false);
+    setBillSettlementOpen(false);
   };
+
+  const billAgentCommissionLocked = (bill) => {
+    if (!bill) return true;
+    if (billIsReadOnlyInSalesList(bill)) return true;
+    return String(bill.agentCommissionStatus || '').trim().toUpperCase() === 'PAID';
+  };
+
+  const syncBillAgentFormFromBill = (bill) => {
+    if (!bill) {
+      setBillAgentAssignId('');
+      setBillAgentCommissionType('PERCENTAGE');
+      setBillAgentCommissionValue('');
+      setBillAgentCommissionNotes('');
+      return;
+    }
+    setBillAgentAssignId(bill.agentId ? String(bill.agentId) : '');
+    setBillAgentCommissionType(bill.agentCommissionType || 'PERCENTAGE');
+    setBillAgentCommissionValue(
+      bill.agentCommissionValue != null && bill.agentCommissionValue !== ''
+        ? String(bill.agentCommissionValue)
+        : ''
+    );
+    setBillAgentCommissionNotes(bill.agentCommissionNotes || '');
+  };
+
+  const billAgentCommissionPreview = useMemo(() => {
+    if (!selectedBill || !billAgentAssignId) return 0;
+    const base = Number(selectedBill.effectiveTotal ?? selectedBill.totalAmount) || 0;
+    const val = Number(parseFloat(billAgentCommissionValue));
+    if (!Number.isFinite(val) || val <= 0) return 0;
+    if (billAgentCommissionType === 'FIXED') return Number(val.toFixed(2));
+    return Number(((base * val) / 100).toFixed(2));
+  }, [selectedBill, billAgentAssignId, billAgentCommissionType, billAgentCommissionValue]);
+
+  const handleSaveBillAgentAssignment = async () => {
+    if (!selectedBill?.id || !selectedBill?.billType) return;
+    if (!billAgentAssignId) {
+      setToast({ message: 'Select an agent.', type: 'error' });
+      return;
+    }
+    const val = Number(parseFloat(billAgentCommissionValue));
+    if (!Number.isFinite(val) || val <= 0) {
+      setToast({ message: 'Enter a valid commission value.', type: 'error' });
+      return;
+    }
+    setBillAgentAssignSubmitting(true);
+    try {
+      await assignBillAgentCommission({
+        billType: String(selectedBill.billType).toUpperCase(),
+        billId: selectedBill.id,
+        agentId: Number(billAgentAssignId),
+        agentCommissionType: billAgentCommissionType,
+        agentCommissionValue: val,
+        agentCommissionNotes: billAgentCommissionNotes.trim().slice(0, 2000) || null,
+        clearAgent: false,
+      });
+      setToast({ message: 'Agent linked to bill.', type: 'success' });
+      await reloadBillDetailInDialog(selectedBill.id, selectedBill.billType);
+      refreshSales();
+    } catch (e) {
+      setToast({ message: e?.message || 'Could not assign agent.', type: 'error' });
+    } finally {
+      setBillAgentAssignSubmitting(false);
+    }
+  };
+
+  const handleRemoveBillAgentFromBill = async () => {
+    if (!selectedBill?.id || !selectedBill?.billType || !selectedBill.agentId) return;
+    setBillAgentAssignSubmitting(true);
+    try {
+      await assignBillAgentCommission({
+        billType: String(selectedBill.billType).toUpperCase(),
+        billId: selectedBill.id,
+        clearAgent: true,
+      });
+      setToast({ message: 'Agent removed from bill.', type: 'success' });
+      await reloadBillDetailInDialog(selectedBill.id, selectedBill.billType);
+      refreshSales();
+    } catch (e) {
+      setToast({ message: e?.message || 'Could not remove agent.', type: 'error' });
+    } finally {
+      setBillAgentAssignSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isBillPopupVisible) return undefined;
+    let cancelled = false;
+    setSalesAgentsLoading(true);
+    fetchSalesAgents(true)
+      .then((list) => {
+        if (!cancelled) setSalesAgents(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSalesAgents([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSalesAgentsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isBillPopupVisible]);
+
+  useEffect(() => {
+    if (isBillPopupVisible && selectedBill) {
+      syncBillAgentFormFromBill(selectedBill);
+    }
+  }, [
+    isBillPopupVisible,
+    selectedBill?.id,
+    selectedBill?.agentId,
+    selectedBill?.agentCommissionType,
+    selectedBill?.agentCommissionValue,
+    selectedBill?.agentCommissionNotes,
+  ]);
 
   useEffect(() => {
     if (!isBillPopupVisible || billDetailTab !== 'adjustments' || !selectedBill?.id || selectedBill.isGST) {
@@ -1323,6 +1572,22 @@ const Sales = ({ setActiveNav }) => {
     }
     return Array.isArray(selectedBill.originalSale.items) ? selectedBill.originalSale.items : [];
   }, [selectedBill, editMode, editDraft]);
+
+  const billEarningsSummary = useMemo(() => {
+    if (!selectedBill || !previewBillItems.length) return null;
+    const total = Number(selectedBill.effectiveTotal ?? selectedBill.totalAmount) || 0;
+    const advance = Number(selectedBill.advanceUsed ?? selectedBill.originalSale?.advanceUsed) || 0;
+    const paid = Number(selectedBill.totalPaid ?? selectedBill.paidDisplay ?? selectedBill.paidAmount) || 0;
+    const received = Number((paid + advance).toFixed(2));
+    const isPaid = getBillPaymentStatusKey(selectedBill) === 'PAID';
+    const writeOff = isPaid && received + 0.005 < total ? Number((total - received).toFixed(2)) : 0;
+    let grossProfit = 0;
+    for (const item of previewBillItems) {
+      const pp = Number(item.purchasePrice) || 0;
+      grossProfit += (Number(item.pricePerUnit) - pp) * Number(item.quantity);
+    }
+    return { total, received, grossProfit, writeOff, isPaid };
+  }, [selectedBill, previewBillItems]);
 
   /** Live totals for edit sidebar (approximates GST on discounted subtotal). */
   const editBillTotals = useMemo(() => {
@@ -1465,6 +1730,58 @@ const Sales = ({ setActiveNav }) => {
     }
   };
 
+  const handleSettleBill = async () => {
+    if (!selectedBill?.id || !selectedBill?.billType) return;
+    if (!billAllowsAdditionalPayment(selectedBill)) {
+      setToast({
+        message: 'Settlement is only available when the bill has a pending balance.',
+        type: 'error',
+      });
+      return;
+    }
+    const pending = computeBalanceDueForBill(selectedBill);
+    if (!Number.isFinite(pending) || pending <= 0.005) {
+      setToast({ message: 'No pending amount to settle.', type: 'error' });
+      return;
+    }
+    const amount = Number(paymentAddAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setToast({ message: 'Enter a valid settlement amount.', type: 'error' });
+      return;
+    }
+    if (amount - pending > 0.005) {
+      setToast({
+        message: `Settlement amount cannot exceed pending balance (${formatCurrency(pending)}).`,
+        type: 'error',
+      });
+      return;
+    }
+    try {
+      setPaymentSubmitting(true);
+      await addBillPayment(selectedBill.id, selectedBill.billType, {
+        amount: Number(amount.toFixed(2)),
+        paymentMode: paymentAddMode,
+        paymentDate: paymentAddDate || undefined,
+        settleBill: true,
+      });
+      await refreshSales();
+      const receivedAfter = Number((billSettlementSummary.paidIncludingAdvance + amount).toFixed(2));
+      const writeOff = Math.max(0, Number((billSettlementSummary.total - receivedAfter).toFixed(2)));
+      setToast({
+        message:
+          writeOff > 0.005
+            ? `Bill settled as Paid — received ${formatCurrency(receivedAfter)}, write-off ${formatCurrency(writeOff)}`
+            : `Bill settled as Paid — received ${formatCurrency(receivedAfter)}`,
+        type: 'success',
+      });
+      closeBillPopup();
+    } catch (e) {
+      setToast({ message: e?.message || 'Bill settlement failed.', type: 'error' });
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  };
+
   const handleAddPaymentToBill = async () => {
     if (!selectedBill?.id || !selectedBill?.billType) return;
     if (!billAllowsAdditionalPayment(selectedBill)) {
@@ -1523,21 +1840,41 @@ const Sales = ({ setActiveNav }) => {
   const handleChangePaymentMode = async () => {
     const t = changePaymentModeTarget;
     if (!t || !selectedBill?.id || !selectedBill?.billType) return;
-    if (changePaymentNewMode === t.paymentMode) {
-      setToast({ message: 'Payment mode is already ' + formatPaymentModeLabel(t.paymentMode), type: 'info' });
+    const paymentId = resolveBillPaymentId(t);
+    if (!paymentId) {
+      setToast({
+        message:
+          'This bill has no editable payment row (legacy bill). Add a payment line first, or use Record payment on the bill edit page.',
+        type: 'error',
+      });
+      return;
+    }
+    if (isWalletOrAdvancePayment(t)) {
+      setToast({ message: 'Wallet advance cannot be changed here — it follows the customer wallet.', type: 'error' });
+      return;
+    }
+    const currentMode = normalizePaymentModeKey(t.paymentMode ?? t.payment_mode ?? 'CASH');
+    const nextMode = normalizePaymentModeKey(changePaymentNewMode || 'CASH');
+    if (paymentModeKeysEqual(nextMode, currentMode)) {
+      setToast({ message: 'Payment mode is already ' + formatPaymentModeLabel(currentMode), type: 'info' });
+      return;
+    }
+    const amount = Number(t.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setToast({ message: 'Payment amount is invalid; cannot change mode.', type: 'error' });
       return;
     }
     try {
       setPaymentSubmitting(true);
-      await updateBillPayment(selectedBill.id, selectedBill.billType, t.paymentId, {
-        amount: t.amount,
-        paymentMode: changePaymentNewMode,
-        paymentDate: t.paymentDate,
+      await updateBillPayment(selectedBill.id, selectedBill.billType, paymentId, {
+        amount,
+        paymentMode: nextMode,
+        paymentDate: toBillPaymentIsoDate(t.paymentDate),
       });
       await refreshSales();
       await reloadBillDetailInDialog(selectedBill.id, selectedBill.billType);
       setToast({
-        message: `Payment mode changed from ${formatPaymentModeLabel(t.paymentMode)} to ${formatPaymentModeLabel(changePaymentNewMode)}.`,
+        message: `Payment mode changed from ${formatPaymentModeLabel(currentMode)} to ${formatPaymentModeLabel(nextMode)}. Ledger and in-hand budget were updated.`,
         type: 'success'
       });
       setChangePaymentModeTarget(null);
@@ -1579,17 +1916,17 @@ const Sales = ({ setActiveNav }) => {
   }
 
   return (
-    <div className="sales-dashboard">
+    <div className="page-container page-container--full sales-dashboard">
       <InlineToast
         message={toast.message}
         type={toast.type}
         onClose={() => setToast({ message: '', type: 'success' })}
       />
 
-      <header className="sales-dash-header">
+      <header className="page-header sales-dash-header">
         <div>
-          <h1 className="sales-dash-title">Sales Management</h1>
-          <p className="sales-dash-subtitle">Track your sales, payments and manage bills</p>
+          <h1 className="page-title sales-dash-title">Sales Management</h1>
+          <p className="page-subtitle sales-dash-subtitle">Track your sales, payments and manage bills</p>
         </div>
         <div className="sales-dash-header-actions">
           <div className="sales-dash-range-pill" title="Bill date range for KPIs and table">
@@ -1609,60 +1946,60 @@ const Sales = ({ setActiveNav }) => {
         </div>
       </header>
 
-      <section
-        className="sales-dash-kpis"
-        aria-label={salesListTab === 'gst' ? 'GST B2B summary' : 'Period summary'}
-      >
-        <div className="sales-kpi-card sales-kpi-card--blue">
-          <div className="sales-kpi-icon" aria-hidden>
+      <div className="sales-dash-hero-panel">
+        <div className="sales-dash-kpi-top">
+        <div className="sales-dash-kpi-primary">
+        <div className="summary-card summary-card--kpi summary-card--tone-blue sales-kpi-card sales-kpi-card--blue">
+          <div className="summary-card__icon sales-kpi-icon" aria-hidden>
             <i className="pi pi-chart-line" />
           </div>
           <div className="sales-kpi-body">
-            <span className="sales-kpi-label">
+            <span className="summary-card__label sales-kpi-label">
               {salesListTab === 'gst' ? 'Total GST sales' : 'Total sales'}
             </span>
-            <span className="sales-kpi-value">{formatCurrency(kpiTotals.totalSales)}</span>
-            <span className="sales-kpi-hint">
+            <span className="summary-card__value sales-kpi-value">{formatCurrency(kpiTotals.totalSales)}</span>
+            <span className="summary-card__hint sales-kpi-hint">
               {salesListTab === 'gst'
                 ? 'B2B GST invoices — not counted in in-hand cash'
                 : 'Sum of bill amounts for filtered bills'}
             </span>
           </div>
         </div>
-        <div className="sales-kpi-card sales-kpi-card--green">
-          <div className="sales-kpi-icon" aria-hidden>
+        <div className="summary-card summary-card--kpi summary-card--tone-green sales-kpi-card sales-kpi-card--green">
+          <div className="summary-card__icon sales-kpi-icon" aria-hidden>
             <i className="pi pi-wallet" />
           </div>
           <div className="sales-kpi-body">
-            <span className="sales-kpi-label">
+            <span className="summary-card__label sales-kpi-label">
               {salesListTab === 'gst' ? 'Received from GST' : 'Total received'}
             </span>
-            <span className="sales-kpi-value">{formatCurrency(kpiTotals.totalReceived)}</span>
-            <span className="sales-kpi-hint">
+            <span className="summary-card__value sales-kpi-value">{formatCurrency(kpiTotals.totalReceived)}</span>
+            <span className="summary-card__hint sales-kpi-hint">
               {salesListTab === 'gst'
                 ? `Recorded on GST bills (separate from in-hand cash)`
                 : `Bill payments ${formatCurrency(kpiTotals.totalBillPayments)} + advance applied ${formatCurrency(kpiTotals.totalAdvanceOnBills)}`}
             </span>
           </div>
         </div>
-        <div className="sales-kpi-card sales-kpi-card--red">
-          <div className="sales-kpi-icon" aria-hidden>
+        <div className="summary-card summary-card--kpi summary-card--tone-red sales-kpi-card sales-kpi-card--red">
+          <div className="summary-card__icon sales-kpi-icon" aria-hidden>
             <i className="pi pi-clock" />
           </div>
           <div className="sales-kpi-body">
-            <span className="sales-kpi-label">
+            <span className="summary-card__label sales-kpi-label">
               {salesListTab === 'gst' ? 'Pending on GST' : 'Pending amount'}
             </span>
-            <span className="sales-kpi-value">{formatCurrency(kpiTotals.totalPending)}</span>
-            <span className="sales-kpi-hint">
+            <span className="summary-card__value sales-kpi-value">{formatCurrency(kpiTotals.totalPending)}</span>
+            <span className="summary-card__hint sales-kpi-hint">
               {salesListTab === 'gst'
                 ? 'Outstanding on B2B invoices'
                 : 'Balance still due on bills'}
             </span>
           </div>
         </div>
-        <div className="sales-kpi-card sales-kpi-card--wide">
-          <span className="sales-kpi-wide-title">
+        </div>
+        <div className="summary-card summary-card--kpi-wide sales-kpi-card sales-kpi-card--wide">
+          <span className="summary-card__label sales-kpi-wide-title">
             Payment method breakdown
             <span
               className="sales-kpi-wide-title-note"
@@ -1734,79 +2071,9 @@ const Sales = ({ setActiveNav }) => {
             </div>
           </div>
         </div>
-        <div className="sales-kpi-recon-strip" role="note">
-          <span className="sales-kpi-recon-formula">
-            Total sales ≈ Received + Pending:&nbsp;
-            {formatCurrency(kpiTotals.totalReceived)} + {formatCurrency(kpiTotals.totalPending)} ={' '}
-            {formatCurrency(kpiTotals.coveredByPayments)}
-          </span>
-          {Math.abs(kpiTotals.salesVsCoveredDelta) > 0.05 ? (
-            <span className="sales-kpi-recon-delta">
-              {' '}
-              (diff vs total sales {formatCurrency(kpiTotals.salesVsCoveredDelta)} — rounding or unusual payment rows,
-              e.g. refunds)
-            </span>
-          ) : null}
         </div>
-        {adjustmentKpis ? (
-          <div
-            className="sales-kpi-adjustment-strip"
-            role="note"
-            style={{
-              gridColumn: '1 / -1',
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-              gap: '12px',
-              padding: '12px 14px',
-              borderRadius: '10px',
-              border: '1px solid #e2e8f0',
-              background: '#f8fafc',
-            }}
-          >
-            <div>
-              <span className="sales-kpi-label">Gross sales</span>
-              <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
-                {formatCurrency(adjustmentKpis.gross)}
-              </span>
-            </div>
-            <div>
-              <span className="sales-kpi-label">Stock returns (partial)</span>
-              <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
-                {formatCurrency(adjustmentKpis.returns)}
-              </span>
-              <span className="sales-kpi-hint" style={{ display: 'block', fontSize: '0.7rem', marginTop: 2 }}>
-                Item returns on active bills — not bill cancellation
-              </span>
-            </div>
-            {cancelledPeriodStats.count > 0 ? (
-              <div>
-                <span className="sales-kpi-label">Cancelled bills</span>
-                <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
-                  {formatCurrency(cancelledPeriodStats.total)}
-                </span>
-                <span className="sales-kpi-hint" style={{ display: 'block', fontSize: '0.7rem', marginTop: 2 }}>
-                  {cancelledPeriodStats.count} bill(s) — open Cancelled bills tab
-                </span>
-              </div>
-            ) : null}
-            <div>
-              <span className="sales-kpi-label">Supplementary</span>
-              <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
-                {formatCurrency(adjustmentKpis.supplementary)}
-              </span>
-            </div>
-            <div>
-              <span className="sales-kpi-label">Net sales</span>
-              <span className="sales-kpi-value" style={{ display: 'block', fontSize: '1.1rem' }}>
-                {formatCurrency(adjustmentKpis.net)}
-              </span>
-              <span className="sales-kpi-hint">Gross − returns + supplementary</span>
-            </div>
-          </div>
-        ) : null}
-      </section>
 
-      <section className="sales-dash-filters" aria-label="Filters">
+        <section className="sales-dash-filters" aria-label="Filters">
         <div className="sales-dash-search-wrap">
           <i className="pi pi-search sales-dash-search-icon" aria-hidden />
           <InputText
@@ -1827,28 +2094,93 @@ const Sales = ({ setActiveNav }) => {
         />
         <div className="sales-dash-date-field">
           <label htmlFor="sales-from-date">From date</label>
-          <Calendar
+          <DdMmYyCalendar
             id="sales-from-date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.value || null)}
-            dateFormat="dd/mm/yy"
+            inputId="sales-from-date"
+            value={toIsoDate(dateFrom)}
+            onChange={(v) => setDateFrom(v ? isoToDate(v) : null)}
             placeholder="From"
-            showIcon
           />
         </div>
         <div className="sales-dash-date-field">
           <label htmlFor="sales-to-date">To date</label>
-          <Calendar
+          <DdMmYyCalendar
             id="sales-to-date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.value || null)}
-            dateFormat="dd/mm/yy"
+            inputId="sales-to-date"
+            value={toIsoDate(dateTo)}
+            onChange={(v) => setDateTo(v ? isoToDate(v) : null)}
             placeholder="To"
-            showIcon
-            minDate={dateFrom || undefined}
+            minDate={toIsoDate(dateFrom) || undefined}
           />
         </div>
         <Button type="button" label="Reset filters" icon="pi pi-replay" outlined onClick={handleResetAllFilters} />
+      </section>
+      </div>
+
+      <section
+        className="sales-dash-kpi-meta"
+        aria-label={salesListTab === 'gst' ? 'GST B2B summary details' : 'Period summary details'}
+      >
+        <div className="sales-kpi-recon-strip" role="note">
+          <span className="sales-kpi-recon-formula">
+            Total sales ≈ Received + Pending:&nbsp;
+            {formatCurrency(kpiTotals.totalReceived)} + {formatCurrency(kpiTotals.totalPending)} ={' '}
+            {formatCurrency(kpiTotals.coveredByPayments)}
+          </span>
+          {Math.abs(kpiTotals.salesVsCoveredDelta) > 0.05 ? (
+            <span className="sales-kpi-recon-delta">
+              {' '}
+              (diff vs total sales {formatCurrency(kpiTotals.salesVsCoveredDelta)} — rounding or unusual payment rows,
+              e.g. refunds)
+            </span>
+          ) : null}
+        </div>
+        {adjustmentKpis ? (
+          <div
+            className={`sales-kpi-adjustment-strip${cancelledPeriodStats.count > 0 ? ' sales-kpi-adjustment-strip--5' : ''}`}
+            role="note"
+          >
+            <div>
+              <span className="sales-kpi-label">Gross sales</span>
+              <span className="sales-kpi-value">
+                {formatCurrency(adjustmentKpis.gross)}
+              </span>
+            </div>
+            <div>
+              <span className="sales-kpi-label">Stock returns (partial)</span>
+              <span className="sales-kpi-value">
+                {formatCurrency(adjustmentKpis.returns)}
+              </span>
+              <span className="sales-kpi-hint">
+                Item returns on active bills — not bill cancellation
+              </span>
+            </div>
+            {cancelledPeriodStats.count > 0 ? (
+              <div>
+                <span className="sales-kpi-label">Cancelled bills</span>
+                <span className="sales-kpi-value">
+                  {formatCurrency(cancelledPeriodStats.total)}
+                </span>
+                <span className="sales-kpi-hint">
+                  {cancelledPeriodStats.count} bill(s) — open Cancelled bills tab
+                </span>
+              </div>
+            ) : null}
+            <div>
+              <span className="sales-kpi-label">Supplementary</span>
+              <span className="sales-kpi-value">
+                {formatCurrency(adjustmentKpis.supplementary)}
+              </span>
+            </div>
+            <div>
+              <span className="sales-kpi-label">Net sales</span>
+              <span className="sales-kpi-value">
+                {formatCurrency(adjustmentKpis.net)}
+              </span>
+              <span className="sales-kpi-hint">Gross − returns + supplementary</span>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="sales-dash-table-section">
@@ -1965,6 +2297,7 @@ const Sales = ({ setActiveNav }) => {
                 body={(rowData) => String(rowData.itemsCount ?? 0)}
               />
               <Column field="billType" header="Type" style={{ minWidth: '7rem' }} body={billTypeBodyTemplate} />
+              <Column header="Agent" style={{ minWidth: '10rem' }} body={agentBodyTemplate} />
               <Column
                 field="effectiveTotal"
                 header="Amount"
@@ -2228,7 +2561,7 @@ const Sales = ({ setActiveNav }) => {
                   >
                     <button
                       type="button"
-                      className={billDetailTab === 'details' ? 'btn btn-primary' : 'btn btn-secondary'}
+                      className={billDetailTab === 'details' ? 'primary-button' : 'secondary-button'}
                       onClick={() => setBillDetailTab('details')}
                     >
                       Bill details
@@ -2236,12 +2569,101 @@ const Sales = ({ setActiveNav }) => {
                     <button
                       type="button"
                       className={
-                        billDetailTab === 'adjustments' ? 'btn btn-primary' : 'btn btn-secondary'
+                        billDetailTab === 'adjustments' ? 'primary-button' : 'secondary-button'
                       }
                       onClick={() => setBillDetailTab('adjustments')}
                     >
                       Adjustment history
                     </button>
+                  </div>
+                ) : null}
+                {!billDetailLoading && canAddMorePayments && billSettlementSummary && (billDetailTab === 'details' || selectedBill.isGST) ? (
+                  <div
+                    ref={billSettlementSectionRef}
+                    className="bill-settlement-panel"
+                  >
+                    <h4 className="bill-settlement-title">Bill settlement</h4>
+                    <div className="bill-settlement-stats">
+                      <div className="bill-settlement-stat">
+                        <span>Bill total</span>
+                        <strong>{formatCurrency(billSettlementSummary.total)}</strong>
+                      </div>
+                      <div className="bill-settlement-stat">
+                        <span>Already paid</span>
+                        <strong>{formatCurrency(billSettlementSummary.paidIncludingAdvance)}</strong>
+                      </div>
+                      <div className="bill-settlement-stat bill-settlement-stat--pending">
+                        <span>Pending amount</span>
+                        <strong>{formatCurrency(billSettlementSummary.pending)}</strong>
+                      </div>
+                    </div>
+                    <p className="bill-settlement-hint">
+                      Enter how much the customer pays now. <strong>Settle bill</strong> records this payment, closes
+                      the bill as <strong>Paid</strong>, and writes off any remaining balance.
+                    </p>
+                    {billSettlementPreview && billSettlementPreview.payNow > 0 ? (
+                      <div className="bill-settlement-preview">
+                        <span>
+                          Total received after settlement:{' '}
+                          <strong>{formatCurrency(billSettlementPreview.afterReceived)}</strong>
+                        </span>
+                        {billSettlementPreview.writeOff > 0.005 ? (
+                          <span>
+                            Write-off: <strong>{formatCurrency(billSettlementPreview.writeOff)}</strong>
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="bill-settlement-actions">
+                      <label className="bill-settlement-field">
+                        <span>Settlement amount (₹)</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          max={billSettlementSummary.pending}
+                          value={paymentAddAmount}
+                          onChange={(e) => setPaymentAddAmount(e.target.value)}
+                          disabled={paymentSubmitting}
+                          placeholder="0.00"
+                        />
+                      </label>
+                      <label className="bill-settlement-field">
+                        <span>Payment mode</span>
+                        <select
+                          value={paymentAddMode}
+                          onChange={(e) => setPaymentAddMode(e.target.value)}
+                          disabled={paymentSubmitting}
+                        >
+                          <option value="CASH">Cash</option>
+                          <option value="UPI">UPI</option>
+                          <option value="BANK_TRANSFER">Bank transfer</option>
+                          <option value="CHEQUE">Cheque</option>
+                          <option value="OTHER">Other</option>
+                        </select>
+                      </label>
+                      <label className="bill-settlement-field">
+                        <span>Payment date</span>
+                        <DdMmYyCalendar
+                          value={paymentAddDate}
+                          onChange={setPaymentAddDate}
+                          disabled={paymentSubmitting}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="primary-button bill-settlement-btn"
+                        disabled={
+                          paymentSubmitting ||
+                          billSettlementSummary.pending <= 0 ||
+                          !Number(paymentAddAmount) ||
+                          Number(paymentAddAmount) <= 0
+                        }
+                        onClick={handleSettleBill}
+                      >
+                        {paymentSubmitting ? 'Settling…' : 'Settle bill'}
+                      </button>
+                    </div>
                   </div>
                 ) : null}
                 {billDetailTab === 'adjustments' && !selectedBill.isGST ? (
@@ -2394,7 +2816,7 @@ const Sales = ({ setActiveNav }) => {
                   <div style={{ marginBottom: '12px' }}>
                     <button
                       type="button"
-                      className="btn btn-secondary"
+                      className="secondary-button"
                       disabled={billDetailLoading || paymentSubmitting}
                       onClick={() => void handleOpenStockReturn(selectedBill)}
                     >
@@ -2410,7 +2832,7 @@ const Sales = ({ setActiveNav }) => {
                   <div style={{ marginBottom: '12px' }}>
                     <button
                       type="button"
-                      className="btn btn-secondary"
+                      className="secondary-button"
                       disabled={billDetailLoading || paymentSubmitting}
                       onClick={() => void handleOpenAdjustExchangeGuide(selectedBill)}
                     >
@@ -2628,7 +3050,7 @@ const Sales = ({ setActiveNav }) => {
                           <h4 className="bill-edit-section-title">1. Line items</h4>
                           <p className="bill-edit-section-hint">Edit items, add new lines, or remove rows. Amount is calculated from qty × rate.</p>
                         </div>
-                        <button type="button" className="btn btn-secondary bill-edit-btn-add" onClick={handleAddEditItem} disabled={editSaving}>
+                        <button type="button" className="secondary-button bill-edit-btn-add" onClick={handleAddEditItem} disabled={editSaving}>
                           <i className="pi pi-plus" aria-hidden /> Add item
                         </button>
                       </div>
@@ -2824,12 +3246,16 @@ const Sales = ({ setActiveNav }) => {
                                 </td>
                               </tr>
                             )}
-                            {(selectedBill?.originalSale?.payments || []).map((p, pidx) => (
-                              <tr key={p.paymentId || pidx}>
+                            {(selectedBill?.originalSale?.payments || []).map((p, pidx) => {
+                              const pid = resolveBillPaymentId(p);
+                              const walletLine = isWalletOrAdvancePayment(p);
+                              const editingThis = paymentMatchesChangeTarget(p, changePaymentModeTarget);
+                              return (
+                              <tr key={pid ?? pidx}>
                                 <td>{pidx + 1}</td>
                                 <td>{String(p.paymentDate || '—').slice(0, 10)}</td>
                                 <td>
-                                  {changePaymentModeTarget?.paymentId === p.paymentId ? (
+                                  {editingThis ? (
                                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                                       <select
                                         className="bill-edit-cell-input"
@@ -2863,6 +3289,7 @@ const Sales = ({ setActiveNav }) => {
                                 <td className="bill-edit-cell-muted">—</td>
                                 <td>
                                   <div style={{ display: 'flex', gap: '2px' }}>
+                                    {!walletLine && pid ? (
                                     <Button
                                       type="button"
                                       icon="pi pi-pencil"
@@ -2871,28 +3298,29 @@ const Sales = ({ setActiveNav }) => {
                                       severity="info"
                                       disabled={paymentSubmitting || editSaving}
                                       onClick={() => {
-                                        setChangePaymentModeTarget(p);
-                                        setChangePaymentNewMode(p.paymentMode || 'CASH');
+                                        setChangePaymentModeTarget({ ...p, paymentId: pid });
+                                        setChangePaymentNewMode(normalizePaymentModeKey(p.paymentMode || 'CASH'));
                                       }}
                                       aria-label="Change payment mode"
                                       title="Change payment mode"
                                       style={{ width: '28px', height: '28px' }}
                                     />
+                                    ) : null}
                                     <Button
                                       type="button"
                                       icon="pi pi-trash"
                                       rounded
                                       text
                                       severity="danger"
-                                      disabled={paymentSubmitting || editSaving}
-                                      onClick={() => handleDeletePaymentFromBill(p.paymentId)}
+                                      disabled={paymentSubmitting || editSaving || walletLine || !pid}
+                                      onClick={() => handleDeletePaymentFromBill(pid)}
                                       aria-label="Delete payment"
                                       style={{ width: '28px', height: '28px' }}
                                     />
                                   </div>
                                 </td>
                               </tr>
-                            ))}
+                            );})}
                           </tbody>
                         </table>
                       </div>
@@ -2919,16 +3347,16 @@ const Sales = ({ setActiveNav }) => {
                           <option value="CHEQUE">Cheque</option>
                           <option value="OTHER">Other</option>
                         </select>
-                        <input
-                          type="date"
+                        <DdMmYyCalendar
                           className="bill-edit-cell-input bill-edit-payment-add-field"
+                          inputClassName="bill-edit-cell-input bill-edit-payment-add-field"
                           value={paymentAddDate}
-                          onChange={(e) => setPaymentAddDate(e.target.value)}
+                          onChange={setPaymentAddDate}
                           disabled={paymentSubmitting || editSaving || !canAddMorePayments}
                         />
                         <button
                           type="button"
-                          className="btn btn-primary"
+                          className="primary-button"
                           disabled={paymentSubmitting || editSaving || !canAddMorePayments}
                           onClick={handleAddPaymentToBill}
                         >
@@ -3086,7 +3514,7 @@ const Sales = ({ setActiveNav }) => {
                 </div>
 
                 <footer className="bill-edit-footer">
-                  <button type="button" className="btn btn-secondary" disabled={editSaving} onClick={handleCancelBillEdit}>
+                  <button type="button" className="secondary-button" disabled={editSaving} onClick={handleCancelBillEdit}>
                     Cancel
                   </button>
                   <div className="bill-edit-footer-warn">
@@ -3133,66 +3561,21 @@ const Sales = ({ setActiveNav }) => {
 
             {!editMode && (
               <>
-            <div className="bill-summary" style={{ marginBottom: '12px' }}>
-              <p style={{ margin: '0 0 6px' }}>
-                <strong>Add payment to this bill</strong>
-              </p>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={paymentAddAmount}
-                  onChange={(e) => setPaymentAddAmount(e.target.value)}
-                  placeholder="Amount"
-                  disabled={paymentSubmitting || !canAddMorePayments}
-                  style={{ padding: '8px', minWidth: '140px' }}
-                />
-                <select
-                  value={paymentAddMode}
-                  onChange={(e) => setPaymentAddMode(e.target.value)}
-                  disabled={paymentSubmitting || !canAddMorePayments}
-                  style={{ padding: '8px', minWidth: '140px' }}
-                >
-                  <option value="CASH">Cash</option>
-                  <option value="UPI">UPI</option>
-                  <option value="BANK_TRANSFER">Bank transfer</option>
-                  <option value="CHEQUE">Cheque</option>
-                  <option value="OTHER">Other</option>
-                </select>
-                <input
-                  type="date"
-                  value={paymentAddDate}
-                  onChange={(e) => setPaymentAddDate(e.target.value)}
-                  disabled={paymentSubmitting || !canAddMorePayments}
-                  style={{ padding: '8px', minWidth: '160px' }}
-                />
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={paymentSubmitting || !canAddMorePayments}
-                  onClick={handleAddPaymentToBill}
-                >
-                  {paymentSubmitting ? 'Saving...' : 'Add payment'}
-                </button>
-              </div>
-              {!canAddMorePayments && selectedBill && !billDetailLoading ? (
-                <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#64748b', maxWidth: '520px' }}>
-                  Add payment is only available when the bill is Due, Pending, or Partially paid and there is a balance
-                  due.
-                </p>
-              ) : null}
               <div style={{ marginTop: '10px' }}>
-                <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: '13px' }}>Payment timeline</p>
+                <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: '13px' }}>Payment history</p>
                 {(selectedBill?.originalSale?.payments || []).length === 0 ? (
                   <span style={{ color: '#64748b' }}>No payments recorded yet.</span>
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: '18px' }}>
-                    {(selectedBill.originalSale.payments || []).map((p) => (
-                      <li key={p.paymentId} style={{ marginBottom: '6px' }}>
-                        {changePaymentModeTarget?.paymentId === p.paymentId ? (
+                    {(selectedBill.originalSale.payments || []).map((p) => {
+                      const pid = resolveBillPaymentId(p);
+                      const walletLine = isWalletOrAdvancePayment(p);
+                      const editingThis = paymentMatchesChangeTarget(p, changePaymentModeTarget);
+                      return (
+                      <li key={pid ?? `${p.paymentDate}-${p.paymentMode}`} style={{ marginBottom: '6px' }}>
+                        {editingThis ? (
                           <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                            {p.paymentDate} -
+                            {String(p.paymentDate || '').slice(0, 10)} -
                             <select
                               style={{ padding: '2px 6px', fontSize: '13px' }}
                               value={changePaymentNewMode}
@@ -3206,13 +3589,13 @@ const Sales = ({ setActiveNav }) => {
                               <option value="OTHER">Other</option>
                             </select>
                             - ₹{Number(p.amount || 0).toFixed(2)}{' '}
-                            <button type="button" className="btn btn-primary"
+                            <button type="button" className="primary-button"
                               style={{ padding: '2px 8px' }}
                               disabled={paymentSubmitting}
                               onClick={handleChangePaymentMode}>
                               {paymentSubmitting ? 'Saving...' : 'Save'}
                             </button>
-                            <button type="button" className="btn btn-secondary"
+                            <button type="button" className="secondary-button"
                               style={{ padding: '2px 8px' }}
                               disabled={paymentSubmitting}
                               onClick={() => setChangePaymentModeTarget(null)}>
@@ -3221,37 +3604,38 @@ const Sales = ({ setActiveNav }) => {
                           </span>
                         ) : (
                           <>
-                            {p.paymentDate} - {formatPaymentModeLabel(p.paymentMode)} - ₹{Number(p.amount || 0).toFixed(2)}{' '}
+                            {String(p.paymentDate || '').slice(0, 10)} - {formatPaymentModeLabel(p.paymentMode)} - ₹{Number(p.amount || 0).toFixed(2)}{' '}
+                            {!walletLine && pid ? (
                             <button
                               type="button"
-                              className="btn btn-secondary"
+                              className="secondary-button"
                               style={{ marginLeft: '4px', padding: '2px 8px' }}
                               onClick={() => {
-                                setChangePaymentModeTarget(p);
-                                setChangePaymentNewMode(p.paymentMode || 'CASH');
+                                setChangePaymentModeTarget({ ...p, paymentId: pid });
+                                setChangePaymentNewMode(normalizePaymentModeKey(p.paymentMode || 'CASH'));
                               }}
                               disabled={paymentSubmitting}
                               title="Change payment mode"
                             >
                               Change mode
                             </button>
+                            ) : null}
                             <button
                               type="button"
                               className="btn btn-danger"
                               style={{ marginLeft: '4px', padding: '2px 8px' }}
-                              onClick={() => handleDeletePaymentFromBill(p.paymentId)}
-                              disabled={paymentSubmitting}
+                              onClick={() => handleDeletePaymentFromBill(pid)}
+                              disabled={paymentSubmitting || walletLine || !pid}
                             >
                               Delete
                             </button>
                           </>
                         )}
                       </li>
-                    ))}
+                    );})}
                   </ul>
                 )}
               </div>
-            </div>
 
             <table className="bill-table">
               <thead>
@@ -3445,6 +3829,181 @@ const Sales = ({ setActiveNav }) => {
               </p>
             </div>
 
+            {billEarningsSummary ? (
+              <div className="bill-earnings-panel">
+                <h4 className="bill-earnings-title">Collection &amp; profit</h4>
+                <div className="bill-earnings-stats">
+                  <div className="bill-earnings-stat">
+                    <span>Amount received</span>
+                    <strong>{formatCurrency(billEarningsSummary.received)}</strong>
+                    <small>Cash + advance applied</small>
+                  </div>
+                  <div className="bill-earnings-stat bill-earnings-stat--profit">
+                    <span>Gross profit</span>
+                    <strong>{formatCurrency(billEarningsSummary.grossProfit)}</strong>
+                    <small>Sale − purchase cost</small>
+                  </div>
+                  {billEarningsSummary.writeOff > 0.005 ? (
+                    <div className="bill-earnings-stat bill-earnings-stat--writeoff">
+                      <span>Settlement write-off</span>
+                      <strong>{formatCurrency(billEarningsSummary.writeOff)}</strong>
+                      <small>Balance waived on close</small>
+                    </div>
+                  ) : null}
+                  <div className="bill-earnings-stat">
+                    <span>Payment status</span>
+                    <strong>{getBillPaymentStatusKey(selectedBill) || '—'}</strong>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div
+              className="cart-agent-section"
+              style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}
+            >
+              <h4 style={{ margin: '0 0 12px' }}>Sales agent commission</h4>
+              {selectedBill.agentId || selectedBill.agentName ? (
+                <div style={{ marginBottom: '12px', fontSize: '14px', color: '#334155' }}>
+                  <p style={{ margin: '0 0 6px' }}>
+                    <strong>Agent:</strong> {selectedBill.agentName || '—'}
+                    {selectedBill.agentCommissionStatus ? (
+                      <>
+                        {' '}
+                        <span className={agentCommissionStatusClass(selectedBill.agentCommissionStatus)}>
+                          {selectedBill.agentCommissionStatus}
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
+                  {Number(selectedBill.agentCommissionAmount) > 0 ? (
+                    <p style={{ margin: '0 0 6px' }}>
+                      <strong>Commission:</strong> ₹{' '}
+                      {Number(selectedBill.agentCommissionAmount).toLocaleString('en-IN', {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                      {selectedBill.agentCommissionType && selectedBill.agentCommissionValue != null ? (
+                        <span style={{ color: '#64748b', marginLeft: '6px' }}>
+                          (
+                          {selectedBill.agentCommissionType === 'FIXED'
+                            ? `₹ ${selectedBill.agentCommissionValue}`
+                            : `${selectedBill.agentCommissionValue}%`}
+                          )
+                        </span>
+                      ) : null}
+                    </p>
+                  ) : null}
+                  {selectedBill.agentCommissionNotes ? (
+                    <p style={{ margin: 0, color: '#64748b' }}>
+                      <strong>Notes:</strong> {selectedBill.agentCommissionNotes}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#64748b' }}>
+                  No agent linked yet. You can assign one below — useful when the bill was created
+                  before the agent was added.
+                </p>
+              )}
+
+              {billAgentCommissionLocked(selectedBill) ? (
+                <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
+                  {billIsReadOnlyInSalesList(selectedBill)
+                    ? 'Agent assignment is not available on cancelled bills.'
+                    : 'Commission is paid — assignment cannot be changed.'}
+                </p>
+              ) : (
+                <>
+                  <div className="cart-agent-grid">
+                    <div className="cart-agent-row">
+                      <label htmlFor="bill-agent-select">Agent</label>
+                      <select
+                        id="bill-agent-select"
+                        value={billAgentAssignId}
+                        disabled={billAgentAssignSubmitting || salesAgentsLoading}
+                        onChange={(e) => setBillAgentAssignId(e.target.value)}
+                      >
+                        <option value="">Select agent…</option>
+                        {salesAgents.map((agent) => (
+                          <option key={agent.id} value={agent.id}>
+                            {agent.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="cart-agent-row">
+                      <label htmlFor="bill-agent-type">Commission type</label>
+                      <select
+                        id="bill-agent-type"
+                        value={billAgentCommissionType}
+                        disabled={billAgentAssignSubmitting}
+                        onChange={(e) => setBillAgentCommissionType(e.target.value)}
+                      >
+                        <option value="PERCENTAGE">Percentage</option>
+                        <option value="FIXED">Fixed amount</option>
+                      </select>
+                    </div>
+                    <div className="cart-agent-row">
+                      <label htmlFor="bill-agent-value">
+                        Commission {billAgentCommissionType === 'FIXED' ? '( ₹ )' : '( % )'}
+                      </label>
+                      <input
+                        id="bill-agent-value"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={billAgentCommissionValue}
+                        disabled={billAgentAssignSubmitting}
+                        onChange={(e) => setBillAgentCommissionValue(e.target.value)}
+                      />
+                    </div>
+                    <div className="cart-agent-row">
+                      <label>Preview amount</label>
+                      <div className="cart-agent-amount">
+                        ₹{' '}
+                        {billAgentCommissionPreview.toLocaleString('en-IN', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </div>
+                    </div>
+                    <div className="cart-agent-row" style={{ gridColumn: '1 / -1' }}>
+                      <label htmlFor="bill-agent-notes">Notes</label>
+                      <textarea
+                        id="bill-agent-notes"
+                        rows={2}
+                        placeholder="Customer brought by agent…"
+                        value={billAgentCommissionNotes}
+                        disabled={billAgentAssignSubmitting}
+                        onChange={(e) => setBillAgentCommissionNotes(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={billAgentAssignSubmitting || !billAgentAssignId}
+                      onClick={handleSaveBillAgentAssignment}
+                    >
+                      {selectedBill.agentId ? 'Update agent link' : 'Link agent to bill'}
+                    </button>
+                    {selectedBill.agentId ? (
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={billAgentAssignSubmitting}
+                        onClick={handleRemoveBillAgentFromBill}
+                      >
+                        Remove agent
+                      </button>
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
+
             {!billIsReadOnlyInSalesList(selectedBill) ? (
             <div
               style={{
@@ -3627,7 +4186,7 @@ const Sales = ({ setActiveNav }) => {
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
               <button
                 type="button"
-                className="btn btn-secondary"
+                className="secondary-button"
                 disabled={stockReturnSubmitting}
                 onClick={() => setStockReturnOpen(false)}
               >
@@ -3635,7 +4194,7 @@ const Sales = ({ setActiveNav }) => {
               </button>
               <button
                 type="button"
-                className="btn btn-primary"
+                className="primary-button"
                 disabled={stockReturnSubmitting}
                 onClick={handleSubmitStockReturn}
               >

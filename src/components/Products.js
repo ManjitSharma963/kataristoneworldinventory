@@ -4,6 +4,7 @@ import { Toast } from 'primereact/toast';
 import CartModal from './CartModal';
 import ProductsContent from './products/ProductsContent';
 import { useProductsCatalog } from '../hooks/useProductsCatalog';
+import { resetCartSession } from '../utils/cart';
 import { SUPPLEMENTARY_BILL_CHECKOUT_STORAGE_KEY } from '../constants/supplementaryBillCheckout';
 import 'primereact/resources/themes/lara-light-cyan/theme.css';
 import 'primereact/resources/primereact.min.css';
@@ -75,55 +76,53 @@ const Products = () => {
   };
 
   const handleBillCreated = () => {
+    resetCartSession();
     refreshCartCount();
     // Reload products to update stock after bill creation
     loadProducts();
   };
 
   return (
-    <div className="products-container">
+    <div className="page-container page-container--full products-page">
       <Toast ref={toast} />
-      <div className="products-header">
-        <h2>Products to Buy</h2>
+      <header className="page-header products-header">
+        <div>
+          <h1 className="page-title">Products to Buy</h1>
+          <p className="page-subtitle">Browse catalog and add items to cart for checkout</p>
+        </div>
         {cartSupplementaryParent ? (
-          <div
-            style={{
-              flex: '1 1 280px',
-              maxWidth: '560px',
-              margin: '0 12px',
-              padding: '10px 12px',
-              borderRadius: '8px',
-              background: '#fffbeb',
-              border: '1px solid #fcd34d',
-              fontSize: '13px',
-              color: '#78350f',
-              lineHeight: 1.4,
-            }}
-          >
-            <strong>Exchange / supplementary mode</strong> — billing for parent invoice{' '}
-            <strong>#{cartSupplementaryParent.parentBillNumber || cartSupplementaryParent.parentBillId}</strong>. Add
-            items, then checkout.
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{ marginLeft: '10px', padding: '4px 10px', fontSize: '12px' }}
-              onClick={clearSupplementaryCheckoutContext}
-            >
-              Cancel
-            </button>
+          <div className="status-card status-card--warning products-supplementary-banner">
+            <span className="status-card__icon" aria-hidden>↔</span>
+            <div className="status-card__body">
+              <p className="status-card__title">Exchange / supplementary mode</p>
+              <p className="status-card__text">
+                Billing for parent invoice{' '}
+                <strong>#{cartSupplementaryParent.parentBillNumber || cartSupplementaryParent.parentBillId}</strong>.
+                Add items, then checkout.
+              </p>
+              <button
+                type="button"
+                className="secondary-button secondary-button--sm"
+                style={{ marginTop: '8px' }}
+                onClick={clearSupplementaryCheckoutContext}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         ) : null}
-        <div className="products-search-wrap">
-          <i className="pi pi-search products-search-icon" aria-hidden />
-          <input
-            type="text"
-            placeholder="Search products by name, type or color..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="products-search-input"
-          />
-        </div>
-        <Button
+        <div className="page-toolbar products-header-toolbar">
+          <div className="page-toolbar__grow search-bar products-search-wrap">
+            <i className="pi pi-search products-search-icon" aria-hidden />
+            <input
+              type="text"
+              placeholder="Search products by name, type or color..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="search-bar__input products-search-input"
+            />
+          </div>
+          <Button
           icon="pi pi-shopping-cart"
           label={cartCount > 0 ? `Cart (${cartCount})` : 'Cart'}
           onClick={() => setShowCartModal(true)}
@@ -131,9 +130,10 @@ const Products = () => {
           badge={cartCount > 0 ? cartCount.toString() : null}
           badgeClassName="cart-badge-count"
         />
-      </div>
+        </div>
+      </header>
 
-      <div className="products-section">
+      <div className="section-card section-card--inset products-section">
         <ProductsContent
           loading={loading}
           products={products}

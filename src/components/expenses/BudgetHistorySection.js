@@ -1,4 +1,5 @@
 import React from 'react';
+import DdMmYyCalendar from '../DdMmYyCalendar';
 
 const BudgetHistorySection = ({
   loadingBudgetHistory,
@@ -18,7 +19,7 @@ const BudgetHistorySection = ({
         {showDownloadButton && (
           <button
             type="button"
-            className="btn btn-secondary budget-history-download-btn"
+            className="secondary-button budget-history-download-btn"
             onClick={onDownloadPdf}
             disabled={loadingBudgetHistory || filteredBudgetHistoryRows.length === 0}
           >
@@ -29,20 +30,21 @@ const BudgetHistorySection = ({
       <div className="budget-history-filters">
         <div className="budget-history-filter-item">
           <label className="budget-history-filter-label">From</label>
-          <input
-            type="date"
+          <DdMmYyCalendar
             value={budgetHistoryDateRange.from}
-            onChange={(e) => setBudgetHistoryDateRange((p) => ({ ...p, from: e.target.value }))}
+            onChange={(v) => setBudgetHistoryDateRange((p) => ({ ...p, from: v }))}
             className="budget-history-filter-control"
+            inputClassName="budget-history-filter-control"
           />
         </div>
         <div className="budget-history-filter-item">
           <label className="budget-history-filter-label">To</label>
-          <input
-            type="date"
+          <DdMmYyCalendar
             value={budgetHistoryDateRange.to}
-            onChange={(e) => setBudgetHistoryDateRange((p) => ({ ...p, to: e.target.value }))}
+            onChange={(v) => setBudgetHistoryDateRange((p) => ({ ...p, to: v }))}
             className="budget-history-filter-control"
+            inputClassName="budget-history-filter-control"
+            minDate={budgetHistoryDateRange.from || undefined}
           />
         </div>
         <div className="budget-history-filter-item budget-history-filter-item-wide">
@@ -59,7 +61,7 @@ const BudgetHistorySection = ({
         </div>
         <button
           type="button"
-          className="btn btn-secondary budget-history-clear-btn"
+          className="secondary-button budget-history-clear-btn"
           onClick={() => { setBudgetHistoryDateRange({ from: '', to: '' }); setBudgetHistoryTypeFilter('ALL'); }}
         >
           Clear
@@ -126,4 +128,3 @@ const BudgetHistorySection = ({
 };
 
 export default BudgetHistorySection;
-

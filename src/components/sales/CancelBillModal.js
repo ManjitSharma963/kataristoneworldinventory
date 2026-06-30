@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Dialog } from 'primereact/dialog';
 import { cancelBill, getBillCancelPreview } from '../../utils/api';
+import DdMmYyCalendar from '../DdMmYyCalendar';
 import './CancelBillModal.css';
 
 const REASON_OPTIONS = [
@@ -93,7 +94,7 @@ export default function CancelBillModal({ visible, bill, onClose, onSuccess, onE
 
   const footer = (
     <div className="cancel-bill-footer">
-      <button type="button" className="btn btn-secondary" disabled={submitting} onClick={onClose}>
+      <button type="button" className="secondary-button" disabled={submitting} onClick={onClose}>
         Close
       </button>
       <button
@@ -310,11 +311,11 @@ export default function CancelBillModal({ visible, bill, onClose, onSuccess, onE
                 <div className="cancel-bill-form-grid">
                   <div>
                     <label htmlFor="cancel-date">Cancellation date</label>
-                    <input
+                    <DdMmYyCalendar
                       id="cancel-date"
-                      type="date"
+                      inputId="cancel-date"
                       value={cancelDate}
-                      onChange={(e) => setCancelDate(e.target.value)}
+                      onChange={setCancelDate}
                     />
                   </div>
                   <div>

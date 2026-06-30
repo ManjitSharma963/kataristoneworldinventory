@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   computeGstSplit,
   resolveDeliveryState,
@@ -24,6 +24,8 @@ import 'primereact/resources/themes/lara-light-cyan/theme.css';
 import 'primereact/resources/primereact.min.css';
 import 'primeicons/primeicons.css';
 import './CartModal.css';
+import './Agents.css';
+import { fetchSalesAgents } from '../api/salesAgentsApi';
 
 const parsePayInput = (v) => {
   if (v === '' || v === null || v === undefined) return 0;
@@ -121,7 +123,7 @@ export default function CartModal({
 }) {
   const [cart, setCart] = useState([]);
   const [cartCount, setCartCount] = useState(0);
-  const [taxRate, setTaxRate] = useState(18);
+  const [taxRate, setTaxRate] = useState(0);
   const [discountInput, setDiscountInput] = useState('');
   const [mobileNumber, setMobileNumber] = useState('');
   const [customerName, setCustomerName] = useState('');
@@ -131,7 +133,7 @@ export default function CartModal({
   const [pincode, setPincode] = useState('');
   const [gstin, setGstin] = useState('');
   const [email, setEmail] = useState('');
-  const [billType, setBillType] = useState('GST');
+  const [billType, setBillType] = useState('NON-GST');
   const [payCash, setPayCash] = useState('');
   const [payUpi, setPayUpi] = useState('');
   const [payBank, setPayBank] = useState('');
@@ -152,7 +154,21 @@ export default function CartModal({
   /** Remaining advance for current mobile (null = unknown / not loaded). */
   const [advanceRemaining, setAdvanceRemaining] = useState(null);
   const [oldBillPendingAmount, setOldBillPendingAmount] = useState(0);
+  const [dealThroughAgent, setDealThroughAgent] = useState(false);
+  const [salesAgents, setSalesAgents] = useState([]);
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [agentCommissionType, setAgentCommissionType] = useState('PERCENTAGE');
+  const [agentCommissionValue, setAgentCommissionValue] = useState('');
+  const [agentCommissionNotes, setAgentCommissionNotes] = useState('');
   const toast = React.useRef(null);
+  /** When false, cart must not be written back to localStorage (e.g. after checkout). */
+  const cartPersistAllowedRef = useRef(true);
+  const cartEpochRef = useRef(0);
+
+  const persistCartIfAllowed = useCallback((nextCart) => {
+    if (!cartPersistAllowedRef.current) return;
+    saveCart(nextCart);
+  }, []);
 
   const supplementaryCheckoutKey = supplementaryParent?.parentBillId
     ? `${supplementaryParent.parentBillId}:${supplementaryParent.parentBillType || ''}`
@@ -209,8 +225,25 @@ export default function CartModal({
   }, [mobileNumber]);
 
   useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await fetchSalesAgents(true);
+        if (!cancelled) setSalesAgents(list);
+      } catch {
+        if (!cancelled) setSalesAgents([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = 'hidden';
+      cartPersistAllowedRef.current = true;
       loadCart();
     } else {
       document.body.style.overflow = '';
@@ -276,9 +309,9 @@ export default function CartModal({
     setState('');
     setPincode('');
     setGstin('');
-    setTaxRate(18);
+    setTaxRate(0);
     setDiscountInput('');
-    setBillType('GST');
+    setBillType('NON-GST');
     setPayCash('');
     setPayUpi('');
     setPayBank('');
@@ -292,6 +325,11 @@ export default function CartModal({
     setAdvanceRemaining(null);
     setOldBillPendingAmount(0);
     setSubmitError('');
+    setDealThroughAgent(false);
+    setSelectedAgentId('');
+    setAgentCommissionType('PERCENTAGE');
+    setAgentCommissionValue('');
+    setAgentCommissionNotes('');
     setEditingPriceItemId(null);
     setEditingPriceValue('');
     setEditingQtyItemId(null);
@@ -300,6 +338,8 @@ export default function CartModal({
   }, []);
 
   const clearCartAndSession = useCallback(() => {
+    cartEpochRef.current += 1;
+    cartPersistAllowedRef.current = false;
     resetCartSession();
     resetCheckoutFormState();
     setCart([]);
@@ -343,6 +383,15 @@ export default function CartModal({
     () => round2(Math.max(0, fin.netDueAfterAdvance - totalPaidNow)),
     [fin.netDueAfterAdvance, totalPaidNow]
   );
+
+  const agentCommissionAmount = useMemo(() => {
+    if (!dealThroughAgent) return 0;
+    const base = fin.grandTotal;
+    const val = Number(parseFloat(agentCommissionValue));
+    if (!Number.isFinite(val) || val <= 0) return 0;
+    if (agentCommissionType === 'FIXED') return round2(val);
+    return round2((base * val) / 100);
+  }, [dealThroughAgent, fin.grandTotal, agentCommissionType, agentCommissionValue]);
 
   const handlePaymentFieldChange = useCallback(
     (field) => (e) => {
@@ -412,7 +461,7 @@ export default function CartModal({
       }
       return next;
     });
-    saveCart(cartItems);
+    persistCartIfAllowed(cartItems);
     setCart(cartItems);
     setCartCount(getCartCount());
   };
@@ -435,7 +484,9 @@ export default function CartModal({
   };
 
   const handleUpdateQuantity = (productId, quantity) => {
+    const epoch = cartEpochRef.current;
     setCart((prev) => {
+      if (epoch !== cartEpochRef.current) return prev;
       const updatedCart = prev.map((item) => {
         if (item.id !== productId) return item;
         const maxQ = getCartItemMaxQuantity(item);
@@ -448,7 +499,7 @@ export default function CartModal({
         normalizedQty = Math.round(normalizedQty * 100) / 100;
         return { ...item, quantity: normalizedQty, sqftOrdered: normalizedQty };
       });
-      saveCart(updatedCart);
+      persistCartIfAllowed(updatedCart);
       return updatedCart;
     });
   };
@@ -662,6 +713,18 @@ export default function CartModal({
       return;
     }
 
+    if (dealThroughAgent) {
+      if (!selectedAgentId) {
+        setSubmitError('Please select an agent for this deal');
+        return;
+      }
+      const val = Number(parseFloat(agentCommissionValue));
+      if (!Number.isFinite(val) || val <= 0) {
+        setSubmitError('Enter a valid commission rate or amount');
+        return;
+      }
+    }
+
     setSubmitError('');
 
     const finCo = computeCartFinancials(
@@ -754,6 +817,15 @@ export default function CartModal({
         ).slice(0, 500),
       }),
       ...(createBillNote.trim() ? { notes: createBillNote.trim().slice(0, 2000) } : {}),
+      ...(dealThroughAgent && selectedAgentId
+        ? {
+            dealThroughAgent: true,
+            agentId: Number(selectedAgentId),
+            agentCommissionType,
+            agentCommissionValue: Number(parseFloat(agentCommissionValue)) || 0,
+            agentCommissionNotes: agentCommissionNotes.trim().slice(0, 2000) || null,
+          }
+        : { dealThroughAgent: false }),
       ...(billType === 'GST' && {
         vehicleNo: gstVehicleNo.trim() || null,
         deliveryAddress: gstDeliveryAddress.trim() || null,
@@ -835,6 +907,10 @@ export default function CartModal({
       // Success — wipe cart + all saved checkout session data
       clearCartAndSession();
 
+      if (onBillCreated) {
+        onBillCreated(createdBill);
+      }
+
       if (toast.current) {
         const adv = createdBill && (Number(createdBill.advanceUsed) || 0);
         toast.current.show({
@@ -849,11 +925,6 @@ export default function CartModal({
                 : 'Bill created successfully!',
           life: 3000
         });
-      }
-
-      // Call callback if provided
-      if (onBillCreated) {
-        onBillCreated(createdBill);
       }
 
       // Close modal after a short delay
@@ -919,7 +990,7 @@ export default function CartModal({
         <div className="cart-top-gst-toggle">
           <div className="summary-row editable-field cart-bill-type-toggle">
             <span className="summary-label">GST / Non-GST:</span>
-            <div className="cart-bill-type-btns" role="group" aria-label="GST or Non-GST toggle (default GST)">
+            <div className="cart-bill-type-btns" role="group" aria-label="GST or Non-GST toggle (default Non-GST)">
               <button
                 type="button"
                 className={`cart-bill-type-btn ${billType === 'GST' ? 'cart-bill-type-btn--on' : ''}`}
@@ -971,137 +1042,142 @@ export default function CartModal({
                   <div className="cart-item-details">
                     <h3 className="cart-item-name">{item.title}</h3>
                     {item.type ? <p className="cart-item-category">{item.type}</p> : null}
-                    <div className="cart-item-price-block">
-                      <span className="cart-item-field-label">Unit price</span>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        aria-label="Unit price"
-                        value={editingPriceItemId === item.id
-                          ? editingPriceValue
-                          : ((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''))}
-                        onFocus={() => {
-                          setEditingPriceItemId(item.id);
-                          setEditingPriceValue((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''));
-                        }}
-                        onChange={(e) => {
-                          const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
-                          setEditingPriceValue(raw);
-                          const updatedPrice = parseFloat(raw) || 0;
-                          const updatedCart = cart.map((cartItem) => {
-                            if (cartItem.id === item.id) {
-                              return { ...cartItem, pricePerSqftAfter: updatedPrice, price: updatedPrice };
+                    <div className="cart-item-qty-block">
+                      <span className="cart-item-field-label">Quantity</span>
+                      <div className="cart-item-qty">
+                        <button
+                          type="button"
+                          className="qty-btn minus"
+                          onClick={() => handleDecreaseQuantity(item)}
+                          disabled={maxQty === 0 || (parseFloat(item.quantity) || 0) <= MIN_CART_QTY + 1e-9}
+                          aria-label="Decrease quantity"
+                        >
+                          <i className="pi pi-minus"></i>
+                        </button>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          aria-label="Quantity"
+                          min={MIN_CART_QTY}
+                          step="0.01"
+                          max={maxQty}
+                          value={editingQtyItemId === item.id
+                            ? editingQtyValue
+                            : maxQty === 0
+                              ? formatQuantityInCart(0)
+                              : formatQuantityInCart(Number(parseFloat(item.quantity)) || MIN_CART_QTY)}
+                          onFocus={() => {
+                            setEditingQtyItemId(item.id);
+                            setEditingQtyValue(
+                              maxQty === 0
+                                ? '0.00'
+                                : toDisplayQuantity(Number(parseFloat(item.quantity)) || MIN_CART_QTY, '1.00')
+                            );
+                          }}
+                          onChange={(e) => {
+                            const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
+                            setEditingQtyValue(raw === '' ? '' : raw);
+                            if (maxQty === 0) {
+                              handleUpdateQuantity(item.id, 0);
+                              return;
                             }
-                            return cartItem;
-                          });
-                          setCart(updatedCart);
-                          if (!isAdmin()) saveCart(updatedCart);
-                        }}
-                        onBlur={() => {
-                          const parsed = parseFloat(editingPriceValue);
-                          const rounded = isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
-                          const updatedCart = cart.map((cartItem) => {
-                            if (cartItem.id === item.id) {
-                              return { ...cartItem, pricePerSqftAfter: rounded, price: rounded };
+                            if (raw === '' || raw === '0') {
+                              handleUpdateQuantity(item.id, MIN_CART_QTY);
+                              return;
                             }
-                            return cartItem;
-                          });
-                          setCart(updatedCart);
-                          if (!isAdmin()) saveCart(updatedCart);
-                          setEditingPriceItemId(null);
-                          setEditingPriceValue('');
-                        }}
-                        className="price-input styled-input cart-item-price-input"
-                        placeholder="0.00"
-                      />
-                      <span className="cart-item-unit-price">
-                        {RUPEE} {(Number(item.pricePerSqftAfter ?? item.price ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / {unitLabel}
-                      </span>
+                            const val = parseFloat(raw);
+                            if (!isNaN(val)) {
+                              const clamped = Math.min(Math.max(MIN_CART_QTY, val), maxQty);
+                              handleUpdateQuantity(item.id, Math.round(clamped * 100) / 100);
+                            }
+                          }}
+                          onBlur={() => {
+                            const raw = editingQtyValue.trim();
+                            if (maxQty === 0) {
+                              handleUpdateQuantity(item.id, 0);
+                            } else if (raw === '' || raw === '0') {
+                              handleUpdateQuantity(item.id, MIN_CART_QTY);
+                            } else {
+                              const parsed = parseFloat(raw);
+                              const rounded = isNaN(parsed)
+                                ? MIN_CART_QTY
+                                : Math.round(Math.min(Math.max(MIN_CART_QTY, parsed), maxQty) * 100) / 100;
+                              handleUpdateQuantity(item.id, rounded);
+                            }
+                            setEditingQtyItemId(null);
+                            setEditingQtyValue('');
+                          }}
+                          className="qty-input"
+                          placeholder="0.00"
+                          disabled={maxQty === 0}
+                        />
+                        <button
+                          type="button"
+                          className="qty-btn plus"
+                          onClick={() => handleIncreaseQuantity(item)}
+                          disabled={maxQty === 0 || (parseFloat(item.quantity) || 0) >= maxQty - 1e-9}
+                          aria-label="Increase quantity"
+                        >
+                          <i className="pi pi-plus"></i>
+                        </button>
+                      </div>
+                      {stockCap !== null && stockCap > 0 ? (
+                        <span className="cart-item-qty-hint">Max {formatQuantityInCart(stockCap)} {unitLabel}</span>
+                      ) : null}
                     </div>
                   </div>
 
-                  <div className="cart-item-qty-column">
-                    <span className="cart-item-field-label">Quantity</span>
-                    <div className="cart-item-qty">
-                      <button
-                        type="button"
-                        className="qty-btn minus"
-                        onClick={() => handleDecreaseQuantity(item)}
-                        disabled={maxQty === 0 || (parseFloat(item.quantity) || 0) <= MIN_CART_QTY + 1e-9}
-                        aria-label="Decrease quantity"
-                      >
-                        <i className="pi pi-minus"></i>
-                      </button>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        aria-label="Quantity"
-                        min={MIN_CART_QTY}
-                        step="0.01"
-                        max={maxQty}
-                        value={editingQtyItemId === item.id
-                          ? editingQtyValue
-                          : maxQty === 0
-                            ? formatQuantityInCart(0)
-                            : formatQuantityInCart(Number(parseFloat(item.quantity)) || MIN_CART_QTY)}
-                        onFocus={() => {
-                          setEditingQtyItemId(item.id);
-                          setEditingQtyValue(
-                            maxQty === 0
-                              ? '0.00'
-                              : toDisplayQuantity(Number(parseFloat(item.quantity)) || MIN_CART_QTY, '1.00')
-                          );
-                        }}
-                        onChange={(e) => {
-                          const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
-                          setEditingQtyValue(raw === '' ? '' : raw);
-                          if (maxQty === 0) {
-                            handleUpdateQuantity(item.id, 0);
-                            return;
+                  <div className="cart-item-price-column">
+                    <span className="cart-item-field-label">Unit price</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      aria-label="Unit price"
+                      value={editingPriceItemId === item.id
+                        ? editingPriceValue
+                        : ((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''))}
+                      onFocus={() => {
+                        setEditingPriceItemId(item.id);
+                        setEditingPriceValue((item.pricePerSqftAfter ?? item.price) === 0 ? '' : toDisplayPrice(item.pricePerSqftAfter ?? item.price ?? 0, ''));
+                      }}
+                      onChange={(e) => {
+                        const raw = stripLeadingZeros(e.target.value.replace(/[^\d.]/g, ''));
+                        setEditingPriceValue(raw);
+                        const updatedPrice = parseFloat(raw) || 0;
+                        const updatedCart = cart.map((cartItem) => {
+                          if (cartItem.id === item.id) {
+                            return { ...cartItem, pricePerSqftAfter: updatedPrice, price: updatedPrice };
                           }
-                          if (raw === '' || raw === '0') {
-                            handleUpdateQuantity(item.id, MIN_CART_QTY);
-                            return;
+                          return cartItem;
+                        });
+                        setCart(updatedCart);
+                        if (isAdmin()) persistCartIfAllowed(updatedCart);
+                      }}
+                      onBlur={() => {
+                        if (!cartPersistAllowedRef.current) {
+                          setEditingPriceItemId(null);
+                          setEditingPriceValue('');
+                          return;
+                        }
+                        const parsed = parseFloat(editingPriceValue);
+                        const rounded = isNaN(parsed) ? 0 : Math.round(parsed * 100) / 100;
+                        const updatedCart = cart.map((cartItem) => {
+                          if (cartItem.id === item.id) {
+                            return { ...cartItem, pricePerSqftAfter: rounded, price: rounded };
                           }
-                          const val = parseFloat(raw);
-                          if (!isNaN(val)) {
-                            const clamped = Math.min(Math.max(MIN_CART_QTY, val), maxQty);
-                            handleUpdateQuantity(item.id, Math.round(clamped * 100) / 100);
-                          }
-                        }}
-                        onBlur={() => {
-                          const raw = editingQtyValue.trim();
-                          if (maxQty === 0) {
-                            handleUpdateQuantity(item.id, 0);
-                          } else if (raw === '' || raw === '0') {
-                            handleUpdateQuantity(item.id, MIN_CART_QTY);
-                          } else {
-                            const parsed = parseFloat(raw);
-                            const rounded = isNaN(parsed)
-                              ? MIN_CART_QTY
-                              : Math.round(Math.min(Math.max(MIN_CART_QTY, parsed), maxQty) * 100) / 100;
-                            handleUpdateQuantity(item.id, rounded);
-                          }
-                          setEditingQtyItemId(null);
-                          setEditingQtyValue('');
-                        }}
-                        className="qty-input"
-                        placeholder="0.00"
-                        disabled={maxQty === 0}
-                      />
-                      <button
-                        type="button"
-                        className="qty-btn plus"
-                        onClick={() => handleIncreaseQuantity(item)}
-                        disabled={maxQty === 0 || (parseFloat(item.quantity) || 0) >= maxQty - 1e-9}
-                        aria-label="Increase quantity"
-                      >
-                        <i className="pi pi-plus"></i>
-                      </button>
-                    </div>
-                    {stockCap !== null && stockCap > 0 ? (
-                      <span className="cart-item-qty-hint">Max {formatQuantityInCart(stockCap)} {unitLabel}</span>
-                    ) : null}
+                          return cartItem;
+                        });
+                        setCart(updatedCart);
+                        if (isAdmin()) persistCartIfAllowed(updatedCart);
+                        setEditingPriceItemId(null);
+                        setEditingPriceValue('');
+                      }}
+                      className="price-input styled-input cart-item-price-input"
+                      placeholder="0.00"
+                    />
+                    <span className="cart-item-unit-price">
+                      {RUPEE} {(Number(item.pricePerSqftAfter ?? item.price ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / {unitLabel}
+                    </span>
                   </div>
                 </div>
 
@@ -1482,6 +1558,86 @@ export default function CartModal({
               </div>
             </div>
           )}
+
+          <div className="cart-agent-section">
+            <label className="cart-agent-toggle">
+              <input
+                type="checkbox"
+                checked={dealThroughAgent}
+                onChange={(e) => {
+                  setDealThroughAgent(e.target.checked);
+                  if (!e.target.checked) {
+                    setSelectedAgentId('');
+                    setAgentCommissionNotes('');
+                  }
+                }}
+              />
+              Deal through Agent
+            </label>
+            {dealThroughAgent ? (
+              <div className="cart-agent-grid">
+                <div className="cart-agent-row">
+                  <label htmlFor="cart-agent-select">Agent Name</label>
+                  <select
+                    id="cart-agent-select"
+                    value={selectedAgentId}
+                    onChange={(e) => setSelectedAgentId(e.target.value)}
+                  >
+                    <option value="">Select agent…</option>
+                    {salesAgents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="cart-agent-row">
+                  <label htmlFor="cart-agent-type">Commission Type</label>
+                  <select
+                    id="cart-agent-type"
+                    value={agentCommissionType}
+                    onChange={(e) => setAgentCommissionType(e.target.value)}
+                  >
+                    <option value="PERCENTAGE">Percentage</option>
+                    <option value="FIXED">Fixed amount</option>
+                  </select>
+                </div>
+                <div className="cart-agent-row">
+                  <label htmlFor="cart-agent-value">
+                    Commission {agentCommissionType === 'FIXED' ? `( ${RUPEE} )` : '( %)'}
+                  </label>
+                  <input
+                    id="cart-agent-value"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={agentCommissionValue}
+                    onChange={(e) => setAgentCommissionValue(e.target.value)}
+                  />
+                </div>
+                <div className="cart-agent-row">
+                  <label>Commission Amount</label>
+                  <div className="cart-agent-amount">
+                    {RUPEE} {agentCommissionAmount.toFixed(2)}
+                  </div>
+                </div>
+                <div className="cart-agent-row">
+                  <label>Status</label>
+                  <div className="agents-status agents-status--pending">Pending</div>
+                </div>
+                <div className="cart-agent-row" style={{ gridColumn: '1 / -1' }}>
+                  <label htmlFor="cart-agent-notes">Notes</label>
+                  <textarea
+                    id="cart-agent-notes"
+                    rows={2}
+                    placeholder="Customer brought by agent…"
+                    value={agentCommissionNotes}
+                    onChange={(e) => setAgentCommissionNotes(e.target.value)}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
 
           <div className="neumorphic-card discount-section" style={{ marginTop: '1rem' }}>
             <div className="summary-row editable-discount">

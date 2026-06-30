@@ -358,11 +358,21 @@ export const createClientTransaction = async (payload) => {
 };
 
 /** Signed running balance per row (PAYMENT_IN +, OUT/PURCHASE −). */
-export const fetchClientRunningLedger = async (clientId) => {
+export const fetchClientRunningLedger = async (clientId, accountChannel) => {
   const cid = String(clientId ?? '').trim();
   const q = new URLSearchParams({ clientId: cid });
+  if (accountChannel) {
+    q.set('accountChannel', String(accountChannel).trim());
+  }
   const raw = await apiCall(`/client-transactions/running-ledger?${q}`, { method: 'GET' });
   return unwrapApiList(raw);
+};
+
+export const fetchClientAccountSummary = async (clientId) => {
+  const cid = String(clientId ?? '').trim();
+  const q = new URLSearchParams({ clientId: cid });
+  const raw = await apiCall(`/client-transactions/client-summary?${q}`, { method: 'GET' });
+  return raw?.data != null && typeof raw.data === 'object' ? raw.data : raw;
 };
 
 export const fetchClientDueAlerts = async () => {
@@ -612,6 +622,34 @@ export const recordLoanGivenCollection = async ({ amount, borrowerId, borrowerNa
   });
 };
 
+/** Update a lender-side Give/Take row (last 7 days only). */
+export const updateLoanLenderTransaction = async (entryId, { amount, paymentMode, notes, entryDate } = {}) => {
+  const body = { amount: Number(amount) };
+  if (paymentMode != null && String(paymentMode).trim() !== '') body.paymentMode = String(paymentMode).trim();
+  if (notes != null) body.notes = String(notes).trim();
+  if (entryDate) body.entryDate = String(entryDate).slice(0, 10);
+  return await apiCall(`/loans/transactions/lender/${entryId}`, { method: 'PUT', body: JSON.stringify(body) });
+};
+
+/** Delete a lender-side Give/Take row (last 7 days only). */
+export const deleteLoanLenderTransaction = async (entryId) => {
+  return await apiCall(`/loans/transactions/lender/${entryId}`, { method: 'DELETE' });
+};
+
+/** Update a borrower-side Give/Take row (last 7 days only). */
+export const updateLoanBorrowerTransaction = async (entryId, { amount, paymentMode, notes, entryDate } = {}) => {
+  const body = { amount: Number(amount) };
+  if (paymentMode != null && String(paymentMode).trim() !== '') body.paymentMode = String(paymentMode).trim();
+  if (notes != null) body.notes = String(notes).trim();
+  if (entryDate) body.entryDate = String(entryDate).slice(0, 10);
+  return await apiCall(`/loans/transactions/borrower/${entryId}`, { method: 'PUT', body: JSON.stringify(body) });
+};
+
+/** Delete a borrower-side Give/Take row (last 7 days only). */
+export const deleteLoanBorrowerTransaction = async (entryId) => {
+  return await apiCall(`/loans/transactions/borrower/${entryId}`, { method: 'DELETE' });
+};
+
 /**
  * Create daily budget (POST)
  * @param {number} amount - Budget amount per day
@@ -687,6 +725,27 @@ export const getLedgerTransactions = async ({ from, to, limit = 200 } = {}) => {
   if (limit != null) params.set('limit', String(limit));
   const qs = params.toString();
   return await apiCall(`/v1/balance/transactions${qs ? `?${qs}` : ''}`, { method: 'GET' });
+};
+
+/**
+ * Move money between cash+UPI and bank rails (total liquidity unchanged).
+ * @param {{ amount: number, direction: 'CASH_TO_BANK'|'BANK_TO_CASH', date?: string, notes?: string }} body
+ */
+export const transferCashBank = async (body) => {
+  return await apiCall('/v1/balance/transfer', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+};
+
+/** Cash ↔ bank transfer history (grouped, newest first). */
+export const getCashBankTransferHistory = async ({ from, to, limit = 100 } = {}) => {
+  const params = new URLSearchParams();
+  if (from) params.set('from', String(from));
+  if (to) params.set('to', String(to));
+  if (limit != null) params.set('limit', String(limit));
+  const qs = params.toString();
+  return await apiCall(`/v1/balance/transfers${qs ? `?${qs}` : ''}`, { method: 'GET' });
 };
 
 /**
@@ -1444,5 +1503,22 @@ export const fetchClientPayments = async (clientId) => {
     
     return allPayments;
   }
+};
+
+// ==================== AUDIT REPORT (Application Snapshot PDF) ====================
+
+export const startAuditReport = async () => {
+  const response = await apiCall('/reports/audit/start', { method: 'POST' });
+  return unwrapApiEntity(response);
+};
+
+export const fetchAuditReportStatus = async (jobId) => {
+  const response = await apiCall(`/reports/audit/status/${encodeURIComponent(jobId)}`, { method: 'GET' });
+  return unwrapApiEntity(response);
+};
+
+export const downloadAuditReport = async (jobId, filename) => {
+  const endpoint = `/reports/audit/download/${encodeURIComponent(jobId)}`;
+  return downloadPDF(endpoint, filename || 'Audit_Report.pdf');
 };
 

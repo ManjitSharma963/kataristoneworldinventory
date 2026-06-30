@@ -128,7 +128,7 @@ const Inventory = () => {
     <div className="inventory-container">
       <div className="inventory-header">
         <h2>Inventory Management</h2>
-        <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
+        <button className="primary-button" onClick={() => setShowForm(!showForm)}>
           {showForm ? 'Cancel' : 'Add New Item'}
         </button>
       </div>
@@ -212,10 +212,10 @@ const Inventory = () => {
               </div>
             </div>
             <div className="form-actions">
-              <button type="submit" className="btn btn-primary">
+              <button type="submit" className="primary-button">
                 {editingItem ? 'Update Item' : 'Add Item'}
               </button>
-              <button type="button" className="btn btn-secondary" onClick={resetForm}>
+              <button type="button" className="secondary-button" onClick={resetForm}>
                 Cancel
               </button>
             </div>

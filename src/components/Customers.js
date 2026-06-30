@@ -433,13 +433,16 @@ const Customers = () => {
     Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
-    <div className="customers-container">
-      <div className="customers-header">
-        <h2>Customer Management</h2>
-        <button type="button" className="btn btn-primary" onClick={openAddCustomer}>
+    <div className="page-container page-container--full customers-page">
+      <header className="page-header customers-header">
+        <div>
+          <h1 className="page-title">Customer Management</h1>
+          <p className="page-subtitle">Manage profiles, contact details, and advance wallet</p>
+        </div>
+        <button type="button" className="primary-button" onClick={openAddCustomer}>
           + Add Customer
         </button>
-      </div>
+      </header>
 
       {advanceModalCustomer && (
         <div className="modal-overlay" onClick={closeAdvanceModal}>
@@ -455,22 +458,22 @@ const Customers = () => {
                 <p>Loading…</p>
               ) : (
                 <>
-                  <div className="advance-summary-cards">
-                    <div className="advance-summary-card">
-                      <span className="advance-summary-label">Total advance</span>
-                      <span className="advance-summary-value">₹ {money(advanceSummary?.totalAdvance)}</span>
+                  <div className="summary-card-grid">
+                    <div className="summary-card">
+                      <span className="summary-card__label">Total advance</span>
+                      <span className="summary-card__value">₹ {money(advanceSummary?.totalAdvance)}</span>
                     </div>
-                    <div className="advance-summary-card">
-                      <span className="advance-summary-label">Used on bills</span>
-                      <span className="advance-summary-value">₹ {money(advanceSummary?.totalUsed)}</span>
+                    <div className="summary-card">
+                      <span className="summary-card__label">Used on bills</span>
+                      <span className="summary-card__value">₹ {money(advanceSummary?.totalUsed)}</span>
                     </div>
-                    <div className="advance-summary-card">
-                      <span className="advance-summary-label">Remaining</span>
-                      <span className="advance-summary-value">₹ {money(advanceSummary?.remaining)}</span>
+                    <div className="summary-card">
+                      <span className="summary-card__label">Remaining</span>
+                      <span className="summary-card__value">₹ {money(advanceSummary?.remaining)}</span>
                     </div>
-                    <div className="advance-summary-card">
-                      <span className="advance-summary-label">Old Bill Pending</span>
-                      <span className="advance-summary-value">₹ {money(advanceSummary?.oldBillPendingAmount)}</span>
+                    <div className="summary-card">
+                      <span className="summary-card__label">Old Bill Pending</span>
+                      <span className="summary-card__value">₹ {money(advanceSummary?.oldBillPendingAmount)}</span>
                     </div>
                   </div>
 
@@ -512,7 +515,7 @@ const Customers = () => {
                           />
                         </div>
                       </div>
-                      <button type="submit" className="btn btn-primary" disabled={advanceLoading}>
+                      <button type="submit" className="primary-button" disabled={advanceLoading}>
                         Record advance
                       </button>
                     </form>
@@ -558,7 +561,7 @@ const Customers = () => {
                           />
                         </div>
                       </div>
-                      <button type="submit" className="btn btn-secondary" disabled={advanceLoading}>
+                      <button type="submit" className="secondary-button" disabled={advanceLoading}>
                         Refund
                       </button>
                     </form>
@@ -791,10 +794,10 @@ const Customers = () => {
                   </div>
                 )}
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary">
+                  <button type="submit" className="primary-button">
                     {editingCustomer ? 'Update Customer' : 'Add Customer'}
                   </button>
-                  <button type="button" className="btn btn-secondary" onClick={resetForm}>
+                  <button type="button" className="secondary-button" onClick={resetForm}>
                     Cancel
                   </button>
                 </div>
@@ -805,39 +808,41 @@ const Customers = () => {
       )}
 
       {/* Search */}
-      <div className="search-wrapper">
-        <span className="search-icon">🔍</span>
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => {
-            setSearchQuery(e.target.value);
-            setCurrentPage(1);
-          }}
-          placeholder="Search customers by name, phone, email..."
-          className="search-input"
-        />
-        {searchQuery && (
-          <button
-            type="button"
-            onClick={() => {
-              setSearchQuery('');
+      <div className="page-toolbar">
+        <div className="page-toolbar__grow search-bar search-wrapper">
+          <span className="search-icon">🔍</span>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
               setCurrentPage(1);
             }}
-            className="search-clear-btn"
-          >
-            ×
-          </button>
-        )}
+            placeholder="Search customers by name, phone, email..."
+            className="search-bar__input search-input"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setCurrentPage(1);
+              }}
+              className="search-bar__clear search-clear-btn"
+            >
+              ×
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Customers Table */}
-      <div className="customers-table-container">
+      <div className="section-card customers-table-container">
         {loading ? (
           <Loading message="Loading customers..." />
         ) : filteredCustomers.length > 0 ? (
           <>
-            <div className="sales-table-wrapper">
+            <div className="table-scroll sales-table-wrapper">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -887,19 +892,21 @@ const Customers = () => {
               </table>
             </div>
             {totalPages > 1 && (
-              <div className="pagination">
+              <div className="pagination-bar pagination">
                 <button
-                  className="pagination-btn"
+                  type="button"
+                  className="secondary-button secondary-button--sm pagination-btn"
                   onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
                   disabled={currentPage === 1}
                 >
                   Previous
                 </button>
-                <span className="pagination-info">
+                <span className="pagination-bar__info pagination-info">
                   Page {currentPage} of {totalPages}
                 </span>
                 <button
-                  className="pagination-btn"
+                  type="button"
+                  className="secondary-button secondary-button--sm pagination-btn"
                   onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
                   disabled={currentPage === totalPages}
                 >

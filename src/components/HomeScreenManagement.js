@@ -445,25 +445,29 @@ const HomeScreenManagement = () => {
   }
 
   return (
-    <div className="home-screen-management">
-      <div className="home-screen-header">
-        <h2>🏠 Home Screen Management</h2>
-        <p>Manage hero slides and categories for your homepage</p>
-      </div>
+    <div className="page-container page-container--full home-screen-management">
+      <header className="page-header home-screen-header">
+        <div>
+          <h1 className="page-title">Home Screen Management</h1>
+          <p className="page-subtitle">Manage hero slides and categories for your homepage</p>
+        </div>
+      </header>
 
       {/* Tab Navigation */}
-      <div className="home-screen-tabs">
+      <div className="tab-nav home-screen-tabs">
         <button
-          className={`home-screen-tab ${activeTab === 'hero' ? 'active' : ''}`}
+          type="button"
+          className={`tab-nav__item home-screen-tab ${activeTab === 'hero' ? 'tab-nav__item--active active' : ''}`}
           onClick={() => setActiveTab('hero')}
         >
-          🖼️ Hero Slides
+          Hero Slides
         </button>
         <button
-          className={`home-screen-tab ${activeTab === 'categories' ? 'active' : ''}`}
+          type="button"
+          className={`tab-nav__item home-screen-tab ${activeTab === 'categories' ? 'tab-nav__item--active active' : ''}`}
           onClick={() => setActiveTab('categories')}
         >
-          📁 Categories
+          Categories
         </button>
       </div>
 
@@ -481,7 +485,7 @@ const HomeScreenManagement = () => {
           <div className="section-header">
             <h3>Hero Slides</h3>
             <button
-              className="btn btn-primary"
+              className="primary-button"
               onClick={() => {
                 setEditingHero(null);
                 setHeroFormData({
@@ -564,12 +568,12 @@ const HomeScreenManagement = () => {
                     </label>
                   </div>
                   <div className="form-actions">
-                    <button type="submit" className="btn btn-primary">
+                    <button type="submit" className="primary-button">
                       {editingHero ? 'Update' : 'Add'} Hero Slide
                     </button>
                     <button
                       type="button"
-                      className="btn btn-secondary"
+                      className="secondary-button"
                       onClick={() => {
                         setShowHeroForm(false);
                         setEditingHero(null);
@@ -643,7 +647,7 @@ const HomeScreenManagement = () => {
           <div className="section-header">
             <h3>Categories</h3>
             <button
-              className="btn btn-primary"
+              className="primary-button"
               onClick={() => {
                 setEditingCategory(null);
                 setCategoryFormData({
@@ -738,12 +742,12 @@ const HomeScreenManagement = () => {
                     </label>
                   </div>
                   <div className="form-actions">
-                    <button type="submit" className="btn btn-primary">
+                    <button type="submit" className="primary-button">
                       {editingCategory ? 'Update' : 'Add'} Category
                     </button>
                     <button
                       type="button"
-                      className="btn btn-secondary"
+                      className="secondary-button"
                       onClick={() => {
                         setShowCategoryForm(false);
                         setEditingCategory(null);

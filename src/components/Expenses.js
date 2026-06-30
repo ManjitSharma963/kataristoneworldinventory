@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import DdMmYyCalendar from './DdMmYyCalendar';
 // Note: localStorage functions are no longer used - all data comes from API
 // Keeping imports for potential future use or reference, but not actively used
 import { getExpenses, addExpense, updateExpense, deleteExpense, getEmployees, addEmployee, updateEmployee, deleteEmployee } from '../utils/storage';
@@ -23,11 +24,17 @@ import {
   addClientPayment,
   fetchAllPayments,
   fetchClientRunningLedger,
+  fetchClientAccountSummary,
   fetchClientDueAlerts,
+  fetchClientSupplierAccounts,
+  createClientSupplierAccount,
+  updateClientSupplierAccount,
   apiGetDailyBudget,
   apiGetDailyBudgetByDate,
   apiGetBalanceSummary,
   apiGetLedgerTransactions,
+  apiTransferCashBank,
+  apiGetCashBankTransferHistory,
   apiRecordLoanReceipt,
   apiFetchLoanLenders,
   apiFetchLoanLenderLedger,
@@ -35,6 +42,10 @@ import {
   apiFetchLendBorrowerLedger,
   apiRecordLoanGiven,
   apiRecordLoanGivenCollection,
+  apiUpdateLoanLenderTransaction,
+  apiDeleteLoanLenderTransaction,
+  apiUpdateLoanBorrowerTransaction,
+  apiDeleteLoanBorrowerTransaction,
   apiCreateDailyBudget,
   apiUpdateDailyBudget,
   apiDeleteDailyBudget,
@@ -52,6 +63,13 @@ import { useExpensesForms } from '../hooks/useExpensesForms';
 import ExpensesHeader from './expenses/ExpensesHeader';
 import LoanPanel from './expenses/LoanPanel';
 import BudgetHistorySection from './expenses/BudgetHistorySection';
+import CashBankTransferHistorySection from './expenses/CashBankTransferHistorySection';
+import ClientListSection from './expenses/ClientListSection';
+import {
+  CLIENT_ACCOUNT_CHANNEL_OPTIONS,
+  accountChannelLabel,
+  normalizeAccountChannel,
+} from '../utils/clientAccountChannel';
 import EmployeeLedgerModal from './expenses/EmployeeLedgerModal';
 import './Expenses.css';
 
@@ -129,6 +147,19 @@ function expenseNumericId(e) {
     if (m) return Number(m[1]);
   }
   return 0;
+}
+
+function parseLoanModeFromNotes(notes) {
+  const s = String(notes || '');
+  const m = s.match(/Mode:\s*([a-z_]+)/i);
+  return m ? m[1].toLowerCase() : 'cash';
+}
+
+function loanNotesWithoutMode(notes) {
+  const s = String(notes || '').trim();
+  const idx = s.lastIndexOf(' · Mode: ');
+  if (idx >= 0) return s.slice(0, idx).trim();
+  return s.replace(/^Mode:\s*\w+\s*$/i, '').trim();
 }
 
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
@@ -215,7 +246,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [clientRunningLedgerTitle, setClientRunningLedgerTitle] = useState('');
   const [clientRunningLedgerRows, setClientRunningLedgerRows] = useState([]);
   const [loadingClientRunningLedger, setLoadingClientRunningLedger] = useState(false);
-  const [showPaymentsTable, setShowPaymentsTable] = useState(false); // Toggle between purchases and payments view
+  const [clientSubView, setClientSubView] = useState('clients'); // clients | purchases | payments
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   // Start with 0 so we always show database value after fetch; never show stale localStorage first
@@ -247,6 +278,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const [loadingBudgetHistory, setLoadingBudgetHistory] = useState(false);
   const [budgetHistoryDateRange, setBudgetHistoryDateRange] = useState({ from: '', to: '' });
   const [budgetHistoryTypeFilter, setBudgetHistoryTypeFilter] = useState('ALL');
+  const [showCashBankTransferModal, setShowCashBankTransferModal] = useState(false);
+  const [transferDirection, setTransferDirection] = useState('CASH_TO_BANK');
+  const [transferAmount, setTransferAmount] = useState('');
+  const [transferDate, setTransferDate] = useState('');
+  const [transferNotes, setTransferNotes] = useState('');
+  const [savingTransfer, setSavingTransfer] = useState(false);
+  const [transferHistory, setTransferHistory] = useState([]);
+  const [loadingTransferHistory, setLoadingTransferHistory] = useState(false);
+  const [transferHistoryDateRange, setTransferHistoryDateRange] = useState({ from: '', to: '' });
+  const [transferHistoryDirectionFilter, setTransferHistoryDirectionFilter] = useState('ALL');
+  const [transferModalTab, setTransferModalTab] = useState('transfer');
   const [loanReceiptAmount, setLoanReceiptAmount] = useState('');
   /** '' = unspecified, '__new__' = type new name, else lender id string */
   const [loanReceiptLenderSelect, setLoanReceiptLenderSelect] = useState('');
@@ -312,7 +354,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
-  /** Normalize API joining date for `<input type="date">` (handles ISO string, array, Date). */
+  /** Normalize API joining date for date picker (handles ISO string, array, Date). */
   const joiningDateToInputValue = (joiningDate) => {
     if (joiningDate == null || joiningDate === '') return getLocalDateString();
     if (Array.isArray(joiningDate) && joiningDate.length >= 3) {
@@ -553,10 +595,15 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             const giveTake = flow === 'PAID_OUT' ? 'GIVE' : 'TAKE';
             return {
               id: `l-${l.id}-${r.id}`,
+              entryId: r.id,
+              ledgerSide: 'lender',
+              partyId: l.id,
+              entryType: typ,
+              expenseId: r.expenseId ?? r.expense_id ?? null,
               date: r.entryDate || r.entry_date || r.createdAt || r.created_at || '',
               person,
               personKey: String(person || '').trim().toLowerCase(),
-              paymentMode: String(r.paymentMode || r.payment_mode || '').toUpperCase(),
+              paymentMode: String(r.paymentMode || r.payment_mode || parseLoanModeFromNotes(r.notes) || '').toUpperCase(),
               notes: r.notes || '',
               status: 'ACTIVE',
               flow,
@@ -581,10 +628,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             const giveTake = flow === 'GIVEN_OUT' ? 'GIVE' : 'TAKE';
             return {
               id: `b-${b.id}-${r.id}`,
+              entryId: r.id,
+              ledgerSide: 'borrower',
+              partyId: b.id,
+              entryType: typ,
               date: r.entryDate || r.entry_date || r.createdAt || r.created_at || '',
               person,
               personKey: String(person || '').trim().toLowerCase(),
-              paymentMode: String(r.paymentMode || r.payment_mode || '').toUpperCase(),
+              paymentMode: String(r.paymentMode || r.payment_mode || parseLoanModeFromNotes(r.notes) || '').toUpperCase(),
               notes: r.notes || '',
               status: 'ACTIVE',
               flow,
@@ -870,6 +921,63 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     }
   };
 
+  const handleEditLoanTransaction = async (row, payload) => {
+    const entryId = row?.entryId;
+    if (!entryId || !row?.ledgerSide) {
+      showToast('Cannot edit this row.', 'error');
+      return;
+    }
+    const amount = Number(payload?.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showToast('Enter a valid amount.', 'error');
+      return;
+    }
+    const body = {
+      amount,
+      paymentMode: payload?.paymentMode || 'cash',
+      notes: payload?.notes ?? '',
+      entryDate: payload?.entryDate ? String(payload.entryDate).slice(0, 10) : undefined,
+    };
+    try {
+      if (row.ledgerSide === 'lender') {
+        await apiUpdateLoanLenderTransaction(entryId, body);
+      } else {
+        await apiUpdateLoanBorrowerTransaction(entryId, body);
+      }
+      await loadBudgetState();
+      await refreshLoanLedgerData();
+      await loadExpenses();
+      showToast('Loan transaction updated.');
+    } catch (err) {
+      console.error('handleEditLoanTransaction', err);
+      showToast(err?.message || 'Failed to update transaction.', 'error');
+      throw err;
+    }
+  };
+
+  const handleDeleteLoanTransaction = async (row) => {
+    const entryId = row?.entryId;
+    if (!entryId || !row?.ledgerSide) {
+      showToast('Cannot delete this row.', 'error');
+      return;
+    }
+    try {
+      if (row.ledgerSide === 'lender') {
+        await apiDeleteLoanLenderTransaction(entryId);
+      } else {
+        await apiDeleteLoanBorrowerTransaction(entryId);
+      }
+      await loadBudgetState();
+      await refreshLoanLedgerData();
+      await loadExpenses();
+      showToast('Loan transaction deleted.');
+    } catch (err) {
+      console.error('handleDeleteLoanTransaction', err);
+      showToast(err?.message || 'Failed to delete transaction.', 'error');
+      throw err;
+    }
+  };
+
   const openLoanLenderHistory = async (lender) => {
     if (!lender?.id) return;
     setLoanHistoryModal({ open: true, lender, rows: [], loading: true });
@@ -1081,6 +1189,88 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       showToast(err?.message || 'Failed to update budget. Please try again.', 'error');
     } finally {
       setSavingBudget(false);
+    }
+  };
+
+  const openCashBankTransferModal = () => {
+    setTransferDirection('CASH_TO_BANK');
+    setTransferAmount('');
+    setTransferDate(getLocalDateString());
+    setTransferNotes('');
+    setTransferModalTab('transfer');
+    setShowCashBankTransferModal(true);
+  };
+
+  const loadTransferHistory = async () => {
+    setLoadingTransferHistory(true);
+    try {
+      const from = transferHistoryDateRange.from || undefined;
+      const to = transferHistoryDateRange.to || undefined;
+      const raw = await apiGetCashBankTransferHistory({ from, to, limit: 100 });
+      const list = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.data)
+          ? raw.data
+          : [];
+      setTransferHistory(list);
+    } catch (_) {
+      setTransferHistory([]);
+    } finally {
+      setLoadingTransferHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showCashBankTransferModal && transferModalTab === 'history') {
+      loadTransferHistory();
+    }
+  }, [showCashBankTransferModal, transferModalTab, transferHistoryDateRange.from, transferHistoryDateRange.to]);
+
+  const filteredTransferHistoryRows = useMemo(() => {
+    return (transferHistory || []).filter((row) => {
+      const dir = String(row.direction ?? '').toUpperCase();
+      if (transferHistoryDirectionFilter !== 'ALL' && dir !== transferHistoryDirectionFilter) {
+        return false;
+      }
+      return true;
+    });
+  }, [transferHistory, transferHistoryDirectionFilter]);
+
+  const closeCashBankTransferModal = () => {
+    if (savingTransfer) return;
+    setShowCashBankTransferModal(false);
+  };
+
+  const handleCashBankTransfer = async () => {
+    const val = parseFloat(transferAmount);
+    const amount = Number.isFinite(val) ? Math.max(0, val) : 0;
+    if (amount <= 0) {
+      showToast('Please enter a valid amount greater than 0.', 'error');
+      return;
+    }
+    setSavingTransfer(true);
+    try {
+      const payload = {
+        amount,
+        direction: transferDirection,
+        ...(transferDate ? { date: transferDate } : {}),
+        ...(transferNotes.trim() ? { notes: transferNotes.trim() } : {}),
+      };
+      await apiTransferCashBank(payload);
+      await loadBudgetState();
+      await loadTransferHistory();
+      setTransferModalTab('history');
+      window.dispatchEvent(new Event('kataria-ledger-refresh'));
+      setShowCashBankTransferModal(false);
+      const msg = transferDirection === 'CASH_TO_BANK'
+        ? `₹${amount.toLocaleString('en-IN')} moved from cash/UPI to bank.`
+        : `₹${amount.toLocaleString('en-IN')} moved from bank to cash/UPI.`;
+      showToast(msg);
+    } catch (err) {
+      console.error('Cash/bank transfer failed:', err);
+      showToast(err?.message || 'Transfer failed. Please try again.', 'error');
+    } finally {
+      setSavingTransfer(false);
     }
   };
 
@@ -1319,6 +1509,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       date: getLocalDateString(),
       paymentMethod: 'cash',
       notes: '',
+      accountChannel: 'NON_GST',
     });
   }, []);
 
@@ -1531,6 +1722,85 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return '';
   }, [clientPurchaseSupplierSelect, clientPurchaseNewSupplierName, suppliersList]);
 
+  const openClientPurchaseForClient = useCallback(
+    (clientName, accountChannel = 'NON_GST') => {
+      const name = String(clientName || '').trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      const supplierMatch = suppliersList.find((s) => String(s.name || '').trim().toLowerCase() === key);
+      const priorMatch = clientPurchasePriorNames.find((n) => n.toLowerCase() === key);
+      if (supplierMatch) {
+        setClientPurchaseSupplierSelect(`s:${supplierMatch.id}`);
+        setClientPurchaseNewSupplierName('');
+      } else if (priorMatch) {
+        setClientPurchaseSupplierSelect(`p:${encodeURIComponent(priorMatch)}`);
+        setClientPurchaseNewSupplierName('');
+      } else {
+        setClientPurchaseSupplierSelect('__new__');
+        setClientPurchaseNewSupplierName(name);
+      }
+      setClientPurchaseSupplierSearchQuery('');
+      setClientPurchaseFormData({
+        purchaseDescription: '',
+        totalAmount: '',
+        purchaseDate: getLocalDateString(),
+        dueDate: '',
+        notes: '',
+        accountChannel: normalizeAccountChannel(accountChannel),
+      });
+      setShowClientPurchaseForm(true);
+    },
+    [suppliersList, clientPurchasePriorNames]
+  );
+
+  const openClientPaymentForChannel = useCallback(
+    (clientName, accountChannel, purchase = null) => {
+      const key = String(clientName || '').trim().toLowerCase();
+      const channel = normalizeAccountChannel(accountChannel);
+      if (!key) return;
+      let target = purchase;
+      if (!target) {
+        const matches = (clientPayments || [])
+          .filter((p) => String(p?.clientName || '').trim().toLowerCase() === key)
+          .filter(
+            (p) => normalizeAccountChannel(p?.accountChannel ?? p?.account_channel) === channel
+          )
+          .sort((a, b) => {
+            const pendingDiff = getClientPurchasePending(b) - getClientPurchasePending(a);
+            if (pendingDiff !== 0) return pendingDiff;
+            return String(a?.purchaseDate || '').localeCompare(String(b?.purchaseDate || ''));
+          });
+        target = matches.find((p) => getClientPurchasePending(p) > 0) || matches[0];
+      }
+      if (!target) {
+        showToast(
+          `No ${accountChannelLabel(channel)} purchase for this client. Add a ${accountChannelLabel(channel)} purchase first.`,
+          'error'
+        );
+        return;
+      }
+      const safePending = getClientPurchasePending(target);
+      setSelectedClientPurchase(target);
+      setClientPaymentFormData({
+        purchaseId: target.id,
+        amount: safePending > 0 ? String(safePending) : '',
+        date: getLocalDateString(),
+        paymentMethod: 'cash',
+        notes: '',
+        accountChannel: channel,
+      });
+      setShowClientPaymentForm(true);
+    },
+    [clientPayments, getClientPurchasePending, showToast]
+  );
+
+  const refreshClientTabData = useCallback(async () => {
+    await loadClientPayments();
+    await loadAllPayments();
+    await loadExpenses();
+    await refreshClientDueAlerts();
+  }, [refreshClientDueAlerts, loadExpenses]);
+
   // Load all payments from API endpoint
   const loadAllPayments = async () => {
     try {
@@ -1548,11 +1818,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           
           return {
             ...payment,
-            // Keep all API fields: id, clientPurchaseId, clientId, amount, date, paymentMethod, notes, createdAt, updatedAt
-            // Add enriched fields from purchase if available
+            accountChannel: normalizeAccountChannel(
+              purchase?.accountChannel ?? purchase?.account_channel ?? payment.accountChannel ?? payment.account_channel
+            ),
             clientName: purchase?.clientName || payment.clientId || '-',
             purchaseDescription: purchase?.purchaseDescription || '-',
-            purchaseId: payment.clientPurchaseId || payment.purchaseId // Support both field names
+            purchaseId: payment.clientPurchaseId || payment.purchaseId
           };
         });
         setAllPayments(enrichedPayments);
@@ -2029,7 +2300,19 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     setEditingExpense(null);
   };
 
-  const clientLedgerPseudoExpenses = useMemo(() => {
+  const safeExpenses = Array.isArray(expenses) ? expenses : [];
+
+  const dedupedSafeExpenses = useMemo(() => {
+    const paymentIds = new Set((allPayments || []).map((p) => String(p.id)));
+    if (paymentIds.size === 0) return safeExpenses;
+    return safeExpenses.filter((e) => {
+      const ref = e.referenceId ?? e.reference_id;
+      if (ref != null && paymentIds.has(String(ref))) return false;
+      return true;
+    });
+  }, [safeExpenses, allPayments]);
+
+  const clientPaymentPseudoExpenses = useMemo(() => {
     const fmtPm = (mode) => {
       if (mode == null || mode === '') return 'cash';
       const m = String(mode).trim().toUpperCase().replace(/-/g, '_');
@@ -2041,6 +2324,49 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       if (m === 'OTHER') return 'bank';
       return String(mode).toLowerCase().replace(/_/g, ' ');
     };
+
+    const existingClientPaymentIds = new Set();
+    for (const e of safeExpenses) {
+      const ref = e.referenceId ?? e.reference_id;
+      const refType = String(e.referenceType ?? e.reference_type ?? '').toUpperCase();
+      const cat = String(e.category ?? '').toLowerCase();
+      if (ref != null && (refType === 'CLIENT' || cat === 'client_purchase_payment')) {
+        existingClientPaymentIds.add(String(ref));
+      }
+    }
+
+    const fromPayments = (allPayments || [])
+      .filter((p) => p?.id != null && !existingClientPaymentIds.has(String(p.id)))
+      .map((p) => {
+        const dateRaw = p.date || p.createdAt;
+        let dateStr = getLocalDateString();
+        if (typeof dateRaw === 'string' && dateRaw.length >= 10) dateStr = dateRaw.slice(0, 10);
+        const channel = accountChannelLabel(p.accountChannel ?? p.account_channel);
+        const client = p.clientName || p.clientId || 'Client';
+        const purchaseDesc =
+          p.purchaseDescription && p.purchaseDescription !== '-'
+            ? p.purchaseDescription
+            : 'Supplier purchase';
+        return {
+          id: `client-pay-${p.id}`,
+          _ledgerOnly: true,
+          _clientPaymentId: p.id,
+          date: dateStr,
+          createdAt: p.createdAt ?? p.date ?? null,
+          type: 'client_payment',
+          category: 'client_purchase_payment',
+          description: `Payment to ${client} (${channel}) — ${purchaseDesc}`,
+          amount: Number(p.amount) || 0,
+          paymentMethod: fmtPm(p.paymentMethod),
+          notes: p.notes || '',
+        };
+      });
+
+    if (fromPayments.length > 0) {
+      return fromPayments;
+    }
+
+    // Fallback for legacy rows if payments API is empty (ledger-only history)
     return (clientLedgerFeedRows || []).map((r) => {
       const d = r.txnDate ?? r.txn_date;
       let dateStr = getLocalDateString();
@@ -2054,7 +2380,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         _ledgerOnly: true,
         date: dateStr,
         createdAt: r.createdAt ?? r.created_at ?? r.txnDate ?? r.txn_date ?? null,
-        type: 'client_ledger',
+        type: 'client_payment',
         category: 'client_purchase_payment',
         description:
           r.description ||
@@ -2064,7 +2390,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         paymentMethod: fmtPm(r.paymentMode ?? r.payment_mode),
       };
     });
-  }, [clientLedgerFeedRows]);
+  }, [allPayments, clientLedgerFeedRows, safeExpenses]);
 
   const loanOutflowPseudoExpenses = useMemo(() => {
     const fmtPm = (mode) => {
@@ -2104,10 +2430,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       });
   }, [loanTransactions]);
 
-  const safeExpenses = Array.isArray(expenses) ? expenses : [];
   const expenseTableSource = activeTab === 'all'
-    ? [...safeExpenses, ...clientLedgerPseudoExpenses, ...loanOutflowPseudoExpenses]
-    : safeExpenses;
+    ? [...dedupedSafeExpenses, ...clientPaymentPseudoExpenses, ...loanOutflowPseudoExpenses]
+    : dedupedSafeExpenses;
 
   // Filter expenses based on active tab
   let filteredExpenses = expenseTableSource.filter((expense) => {
@@ -2216,7 +2541,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   };
 
   const getTypeLabel = (type) => {
-    if (type === 'client_ledger') return 'Client payment';
+    if (type === 'client_payment' || type === 'client_ledger') return 'Client payment';
     if (type === 'loan_ledger') return 'Loan outflow';
     if (String(type || '').toLowerCase() === 'advance') return 'Employee advance';
     if (String(type || '').toLowerCase() === 'salary') return 'Salary';
@@ -2224,7 +2549,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   };
 
   const getTypeIcon = (type) => {
-    if (type === 'client_ledger') return '🏭';
+    if (type === 'client_payment' || type === 'client_ledger') return '🏭';
     if (type === 'loan_ledger') return '💸';
     if (String(type || '').toLowerCase() === 'advance') return '👨‍🏭';
     if (String(type || '').toLowerCase() === 'salary') return '💼';
@@ -2247,14 +2572,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   // If showAddButtonInHeader is true, only render the button
   if (showAddButtonInHeader) {
     return (
-      <button className="btn btn-primary" onClick={handleAddClick}>
+      <button className="primary-button" onClick={handleAddClick}>
         + Add Expense
       </button>
     );
   }
 
   return (
-    <div className="expenses-container">
+    <div className="page-container page-container--full expenses-container">
       {!hideHeader && (
         <ExpensesHeader
           budgetInHand={budgetInHand}
@@ -2343,7 +2668,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   >
                     <button
                       type="button"
-                      className="btn btn-primary"
+                      className="primary-button"
                       disabled={savingBudget}
                       onClick={handleSaveDailyBudget}
                     >
@@ -2351,7 +2676,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     </button>
                     <button
                       type="button"
-                      className="btn btn-secondary"
+                      className="secondary-button"
                       disabled={savingBudget}
                       onClick={openUpdateBudgetPopup}
                     >
@@ -2359,7 +2684,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     </button>
                     <button
                       type="button"
-                      className="btn btn-secondary budget-history-download-btn"
+                      className="secondary-button budget-history-download-btn"
                       onClick={downloadBudgetHistoryPdf}
                       disabled={loadingBudgetHistory || filteredBudgetHistoryRows.length === 0}
                     >
@@ -2435,9 +2760,122 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 </div>
               </div>
               <div className="form-actions" style={{ marginTop: '14px' }}>
-                <button type="button" className="btn btn-primary" disabled={savingBudget} onClick={handleApplyBudgetUpdate}>
+                <button type="button" className="primary-button" disabled={savingBudget} onClick={handleApplyBudgetUpdate}>
                   {savingBudget ? 'Updating...' : 'Update'}
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCashBankTransferModal && (
+        <div className="modal-overlay" onClick={closeCashBankTransferModal}>
+          <div className="modal-content transfer-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '820px' }}>
+            <div className="modal-header">
+              <h3>Cash ↔ Bank transfer</h3>
+              <button type="button" className="modal-close" onClick={closeCashBankTransferModal}>×</button>
+            </div>
+            <div className="modal-body">
+              <p className="transfer-modal-balance-hint">
+                Moves money between cash/UPI and bank. Total liquidity stays the same.
+                Cash+UPI available: <strong>₹{(ledgerBalances.inHand || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                {' · '}
+                Bank available: <strong>₹{(ledgerBalances.bank || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+              </p>
+              <div className="transfer-modal-layout">
+                <nav className="transfer-modal-tabs" aria-label="Transfer sections">
+                  <button
+                    type="button"
+                    className={`transfer-modal-tab ${transferModalTab === 'transfer' ? 'active' : ''}`}
+                    onClick={() => setTransferModalTab('transfer')}
+                  >
+                    New transfer
+                  </button>
+                  <button
+                    type="button"
+                    className={`transfer-modal-tab ${transferModalTab === 'history' ? 'active' : ''}`}
+                    onClick={() => setTransferModalTab('history')}
+                  >
+                    History
+                  </button>
+                </nav>
+                <div className="transfer-modal-panel">
+                  {transferModalTab === 'transfer' ? (
+                    <>
+                      <div className="form-group">
+                        <label>Direction *</label>
+                        <select
+                          value={transferDirection}
+                          onChange={(e) => setTransferDirection(e.target.value)}
+                          className="budget-in-hand-input"
+                          style={{ width: '100%', padding: '8px 12px' }}
+                          disabled={savingTransfer}
+                        >
+                          <option value="CASH_TO_BANK">Cash/UPI → Bank (deposit to bank)</option>
+                          <option value="BANK_TO_CASH">Bank → Cash/UPI (withdraw to cash)</option>
+                        </select>
+                      </div>
+                      <div className="form-row">
+                        <div className="form-group">
+                          <label>Amount (₹) *</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={transferAmount}
+                            onChange={(e) => setTransferAmount(e.target.value)}
+                            placeholder="e.g. 10000"
+                            className="budget-in-hand-input"
+                            style={{ width: '100%', padding: '8px 12px' }}
+                            disabled={savingTransfer}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Date</label>
+                          <DdMmYyCalendar
+                            value={transferDate}
+                            onChange={(v) => setTransferDate(v || getLocalDateString())}
+                            disabled={savingTransfer}
+                            className="budget-in-hand-input"
+                            inputClassName="budget-in-hand-input"
+                            style={{ width: '100%' }}
+                          />
+                        </div>
+                      </div>
+                      <div className="form-group">
+                        <label>Notes (optional)</label>
+                        <input
+                          type="text"
+                          value={transferNotes}
+                          onChange={(e) => setTransferNotes(e.target.value)}
+                          placeholder="e.g. HDFC deposit"
+                          className="budget-in-hand-input"
+                          style={{ width: '100%', padding: '8px 12px' }}
+                          disabled={savingTransfer}
+                        />
+                      </div>
+                      <div className="form-actions" style={{ marginTop: '14px' }}>
+                        <button type="button" className="secondary-button" disabled={savingTransfer} onClick={closeCashBankTransferModal}>
+                          Cancel
+                        </button>
+                        <button type="button" className="primary-button" disabled={savingTransfer} onClick={handleCashBankTransfer}>
+                          {savingTransfer ? 'Transferring...' : 'Transfer'}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <CashBankTransferHistorySection
+                      embedded
+                      loading={loadingTransferHistory}
+                      rows={filteredTransferHistoryRows}
+                      dateRange={transferHistoryDateRange}
+                      setDateRange={setTransferHistoryDateRange}
+                      directionFilter={transferHistoryDirectionFilter}
+                      setDirectionFilter={setTransferHistoryDirectionFilter}
+                    />
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -2457,9 +2895,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             <div className="form-row">
               <div className="form-group">
                 <label>Date *</label>
-                <input
-                  type="date"
-                  {...registerExpense('date')}
+                <DdMmYyCalendar
+                  value={watchExpense('date')}
+                  onChange={(v) => setExpenseValue('date', v, { shouldValidate: true })}
                 />
                 {expenseErrors.date && (
                   <span className="error-message">{expenseErrors.date.message}</span>
@@ -2673,7 +3111,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             </div>
 
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary" disabled={submittingExpense}>
+                <button type="submit" className="primary-button" disabled={submittingExpense}>
                   {submittingExpense ? (
                     <>
                       <span className="button-loading"></span>
@@ -2683,7 +3121,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     editingExpense ? 'Update Expense' : 'Add Expense'
                   )}
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={resetForm} disabled={submittingExpense}>
+                <button type="button" className="secondary-button" onClick={resetForm} disabled={submittingExpense}>
                   Cancel
                 </button>
               </div>
@@ -2733,24 +3171,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             Client Transactions
           </button>
         </div>
-        {activeTab === 'client' && (
-          <div className="expenses-tab-navigation__actions">
-            <button type="button" className="btn btn-secondary" onClick={openClientPaymentForm}>
-              💰 Make Payment
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => openClientAddAmountForm(null)}
-              title="Add more amount owed on an existing purchase"
-            >
-              ➕ Buy more (add amount)
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => setShowClientPurchaseForm(true)}>
-              + Add Client Purchase
-            </button>
-          </div>
-        )}
       </div>
 
       {/* All Expenses Tab Content */}
@@ -2820,10 +3240,13 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
 
           {/* Budget and Add Expense buttons */}
           <div className="expenses-actions">
-            <button type="button" className="btn btn-secondary" onClick={() => { setDailyBudgetModalValue(budgetInHand === 0 ? '' : String(budgetInHand)); setDailyBudgetFundingSource('CASH_UPI'); setShowDailyBudgetModal(true); }}>
+            <button type="button" className="secondary-button" onClick={() => { setDailyBudgetModalValue(budgetInHand === 0 ? '' : String(budgetInHand)); setDailyBudgetFundingSource('CASH_UPI'); setShowDailyBudgetModal(true); }}>
               Budget
             </button>
-            <button className="btn btn-primary" onClick={handleAddClick}>
+            <button type="button" className="secondary-button" onClick={openCashBankTransferModal} title="Move money between cash/UPI and bank without changing total liquidity">
+              ⇄ Cash ↔ Bank
+            </button>
+            <button className="primary-button" onClick={handleAddClick}>
               + Add Expense
             </button>
           </div>
@@ -2857,25 +3280,26 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         </div>
 
         <div className="date-range-filter">
-          <input
-            type="date"
+          <DdMmYyCalendar
+            className="date-input"
+            inputClassName="date-input"
             value={dateFilter.start}
-            onChange={(e) => {
-              setDateFilter({ ...dateFilter, start: e.target.value });
+            onChange={(v) => {
+              setDateFilter({ ...dateFilter, start: v });
               setCurrentPage(1);
             }}
-            className="date-input"
             placeholder="Start Date"
           />
           <span className="date-separator">to</span>
-          <input
-            type="date"
+          <DdMmYyCalendar
+            className="date-input"
+            inputClassName="date-input"
             value={dateFilter.end}
-            onChange={(e) => {
-              setDateFilter({ ...dateFilter, end: e.target.value });
+            onChange={(v) => {
+              setDateFilter({ ...dateFilter, end: v });
               setCurrentPage(1);
             }}
-            className="date-input"
+            minDate={dateFilter.start || undefined}
             placeholder="End Date"
           />
           {(dateFilter.start || dateFilter.end) && (
@@ -2900,6 +3324,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
         <div className="expenses-tab-content">
           <LoanPanel
             handleCreateLoanTransaction={handleCreateLoanTransaction}
+            handleEditLoanTransaction={handleEditLoanTransaction}
+            handleDeleteLoanTransaction={handleDeleteLoanTransaction}
+            loanNotesWithoutMode={loanNotesWithoutMode}
+            parseLoanModeFromNotes={parseLoanModeFromNotes}
             handleRecordLoanReceipt={handleRecordLoanReceipt}
             handleRecordLoanGiven={handleRecordLoanGiven}
             handleRecordLoanCollection={handleRecordLoanCollection}
@@ -3221,12 +3649,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   </div>
                   <div className="form-group">
                     <label>Date *</label>
-                    <input
-                      type="date"
-                      name="date"
+                    <DdMmYyCalendar
                       value={payAdvanceFormData.date}
-                      onChange={(e) => setPayAdvanceFormData({ ...payAdvanceFormData, date: e.target.value })}
-                      required
+                      onChange={(v) => setPayAdvanceFormData({ ...payAdvanceFormData, date: v })}
                     />
                   </div>
                   <div className="form-group">
@@ -3257,10 +3682,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   />
                 </div>
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary" disabled={submittingPayAdvance}>
+                  <button type="submit" className="primary-button" disabled={submittingPayAdvance}>
                     {submittingPayAdvance ? 'Paying...' : 'Pay Advance'}
                   </button>
-                  <button type="button" className="btn btn-secondary" onClick={() => {
+                  <button type="button" className="secondary-button" onClick={() => {
                     setShowPayAdvanceForm(false);
                     setPayAdvanceFormData({
                       employeeId: '',
@@ -3353,12 +3778,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 <div className="form-row">
                   <div className="form-group">
                     <label>Payment Date *</label>
-                    <input
-                      type="date"
-                      name="date"
+                    <DdMmYyCalendar
                       value={paySalaryFormData.date}
-                      onChange={(e) => setPaySalaryFormData({ ...paySalaryFormData, date: e.target.value })}
-                      required
+                      onChange={(v) => setPaySalaryFormData({ ...paySalaryFormData, date: v })}
                     />
                   </div>
                   <div className="form-group">
@@ -3379,10 +3801,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   </div>
                 </div>
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary">
+                  <button type="submit" className="primary-button">
                     Pay Salary
                   </button>
-                  <button type="button" className="btn btn-secondary" onClick={() => {
+                  <button type="button" className="secondary-button" onClick={() => {
                     setShowPaySalaryForm(false);
                     setSelectedEmployee(null);
                     setPaySalaryFormData({
@@ -3489,22 +3911,22 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   </div>
                   <div className="form-group">
                     <label>Joining Date</label>
-                    <input
-                      type="date"
+                    <DdMmYyCalendar
                       value={editEmployeeForm.joiningDate}
                       disabled
                       title="Joining date cannot be changed"
                       className="employee-edit-joining-readonly"
+                      inputClassName="employee-edit-joining-readonly"
                     />
                   </div>
                 </div>
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary" disabled={savingEditEmployee}>
+                  <button type="submit" className="primary-button" disabled={savingEditEmployee}>
                     {savingEditEmployee ? 'Saving…' : 'Save changes'}
                   </button>
                   <button
                     type="button"
-                    className="btn btn-secondary"
+                    className="secondary-button"
                     disabled={savingEditEmployee}
                     onClick={closeEditEmployeeModal}
                   >
@@ -3605,20 +4027,17 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                   </div>
                   <div className="form-group">
                     <label>Joining Date *</label>
-                    <input
-                      type="date"
-                      name="joiningDate"
+                    <DdMmYyCalendar
                       value={salaryFormData.joiningDate}
-                      onChange={(e) => setSalaryFormData({ ...salaryFormData, joiningDate: e.target.value })}
-                      required
+                      onChange={(v) => setSalaryFormData({ ...salaryFormData, joiningDate: v })}
                     />
                   </div>
                 </div>
                 <div className="form-actions">
-                  <button type="submit" className="btn btn-primary">
+                  <button type="submit" className="primary-button">
                     Add Employee
                   </button>
-                  <button type="button" className="btn btn-secondary" onClick={() => {
+                  <button type="button" className="secondary-button" onClick={() => {
                     setShowSalaryForm(false);
                     setSalaryFormData({
                       employeeName: '',
@@ -3640,12 +4059,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       {activeTab === 'employee' && (
         <div className="expenses-tab-content">
           <div className="salaries-actions">
-            <button className="btn btn-primary" onClick={() => setShowSalaryForm(true)}>
+            <button className="primary-button" onClick={() => setShowSalaryForm(true)}>
               + Add Employee
             </button>
             {/* Only show Pay Advance button if there are employees */}
             {employees.length > 0 && (
-              <button className="btn btn-secondary" onClick={() => {
+              <button className="secondary-button" onClick={() => {
                 setShowPayAdvanceForm(true);
                 setPayAdvanceFormData({
                   employeeId: '',
@@ -3886,34 +4305,73 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       {/* Client Payment Tab Content */}
       {activeTab === 'client' && (
         <div className="expenses-tab-content">
-          {clientPayments.length > 0 && (
-          <div className="salaries-actions" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <button 
-                  className={`btn ${!showPaymentsTable ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={async () => {
-                    setShowPaymentsTable(false);
-                    // Reload purchases data when switching to purchases view
-                    await loadClientPayments();
-                  }}
-                  style={{ fontSize: '13px', padding: '8px 16px' }}
-                >
-                  📦 Purchases
+          <div className="client-tab-toolbar">
+            <div className="client-tab-toolbar__actions">
+              <button type="button" className="secondary-button" onClick={openClientPaymentForm}>
+                💰 Make Payment
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => openClientAddAmountForm(null)}
+                title="Add more amount owed on an existing purchase"
+              >
+                ➕ Buy more (add amount)
+              </button>
+              <button type="button" className="primary-button" onClick={() => setShowClientPurchaseForm(true)}>
+                + Add Client Purchase
+              </button>
+              <span className="client-tab-toolbar__divider" aria-hidden="true" />
+              <button
+                type="button"
+                className={clientSubView === 'clients' ? 'primary-button primary-button--sm' : 'secondary-button secondary-button--sm'}
+                onClick={async () => {
+                  setClientSubView('clients');
+                  await loadClientPayments();
+                }}
+              >
+                👥 Client list
+              </button>
+              <button
+                type="button"
+                className={clientSubView === 'purchases' ? 'primary-button primary-button--sm' : 'secondary-button secondary-button--sm'}
+                onClick={async () => {
+                  setClientSubView('purchases');
+                  await loadClientPayments();
+                }}
+              >
+                📦 Purchases
+              </button>
+              <button
+                type="button"
+                className={clientSubView === 'payments' ? 'primary-button primary-button--sm' : 'secondary-button secondary-button--sm'}
+                onClick={async () => {
+                  setClientSubView('payments');
+                  await loadAllPayments();
+                }}
+              >
+                💰 All Payments
+              </button>
+            </div>
+            <div className="client-tab-toolbar__search">
+              <input
+                type="text"
+                className="client-tab-search-input"
+                placeholder={
+                  clientSubView === 'clients'
+                    ? '🔍 Search clients…'
+                    : '🔍 Filter by client name…'
+                }
+                value={clientFilter}
+                onChange={(e) => setClientFilter(e.target.value)}
+              />
+              {clientFilter && (
+                <button type="button" className="secondary-button client-tab-search-clear" onClick={() => setClientFilter('')}>
+                  Clear
                 </button>
-                <button 
-                  className={`btn ${showPaymentsTable ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={async () => {
-                    setShowPaymentsTable(true);
-                    // Load all payments from dedicated API endpoint
-                    await loadAllPayments();
-                  }}
-                  style={{ fontSize: '13px', padding: '8px 16px' }}
-                >
-                  💰 All Payments
-                </button>
-              </div>
+              )}
+            </div>
           </div>
-          )}
 
           {Array.isArray(clientDueAlerts) && clientDueAlerts.length > 0 && (
             <div
@@ -3939,43 +4397,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
             </div>
           )}
 
-          {/* Client Filter */}
-          {clientPayments.length > 0 && (
-            <div style={{ marginTop: '15px', marginBottom: '15px', display: 'flex', gap: '10px', alignItems: 'center' }}>
-              <input
-                type="text"
-                placeholder="🔍 Filter by client name..."
-                value={clientFilter}
-                onChange={(e) => setClientFilter(e.target.value)}
-                style={{
-                  padding: '10px 14px',
-                  border: 'none',
-                  borderRadius: '12px',
-                  fontSize: '14px',
-                  width: '300px',
-                  background: '#e0e5ec',
-                  boxShadow: 'inset 3px 3px 6px rgba(163, 177, 198, 0.6), inset -3px -3px 6px rgba(255, 255, 255, 0.5)'
-                }}
-              />
-              {clientFilter && (
-                <button
-                  onClick={() => setClientFilter('')}
-                  style={{
-                    padding: '10px 20px',
-                    background: '#e0e5ec',
-                    border: 'none',
-                    borderRadius: '12px',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    fontWeight: '600'
-                  }}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          )}
-
           {/* Client Purchase Form Modal */}
           {showClientPurchaseForm && (
             <div className="modal-overlay" onClick={() => {
@@ -3985,7 +4406,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 totalAmount: '',
                 purchaseDate: getLocalDateString(),
                 dueDate: '',
-                notes: ''
+                notes: '',
+                accountChannel: 'NON_GST',
               });
               setClientPurchaseSupplierSelect('');
               setClientPurchaseNewSupplierName('');
@@ -4001,7 +4423,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       totalAmount: '',
                       purchaseDate: getLocalDateString(),
                       dueDate: '',
-                      notes: ''
+                      notes: '',
+                      accountChannel: 'NON_GST',
                     });
                     setClientPurchaseSupplierSelect('');
                     setClientPurchaseNewSupplierName('');
@@ -4023,7 +4446,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         purchaseDescription: clientPurchaseFormData.purchaseDescription,
                         totalAmount: parseFloat(clientPurchaseFormData.totalAmount) || 0,
                         purchaseDate: clientPurchaseFormData.purchaseDate,
-                        notes: clientPurchaseFormData.notes || ''
+                        notes: clientPurchaseFormData.notes || '',
+                        accountChannel: normalizeAccountChannel(clientPurchaseFormData.accountChannel),
                       };
                       if (clientPurchaseFormData.dueDate) {
                         purchaseData.dueDate = clientPurchaseFormData.dueDate;
@@ -4043,7 +4467,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         purchaseDescription: '',
                         totalAmount: '',
                         purchaseDate: getLocalDateString(),
-                        notes: ''
+                        dueDate: '',
+                        notes: '',
+                        accountChannel: 'NON_GST',
                       });
                       setClientPurchaseSupplierSelect('');
                       setClientPurchaseNewSupplierName('');
@@ -4059,6 +4485,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         purchaseDate: clientPurchaseFormData.purchaseDate,
                         notes: clientPurchaseFormData.notes || '',
                         payments: [],
+                        accountChannel: normalizeAccountChannel(clientPurchaseFormData.accountChannel),
                         createdAt: new Date().toISOString()
                       };
                       const updated = [...clientPayments, newPurchase];
@@ -4070,7 +4497,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         purchaseDescription: '',
                         totalAmount: '',
                         purchaseDate: getLocalDateString(),
-                        notes: ''
+                        dueDate: '',
+                        notes: '',
+                        accountChannel: 'NON_GST',
                       });
                       setClientPurchaseSupplierSelect('');
                       setClientPurchaseNewSupplierName('');
@@ -4134,6 +4563,26 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       </p>
                     </div>
                     <div className="form-group">
+                      <label>Account *</label>
+                      <select
+                        value={clientPurchaseFormData.accountChannel || 'NON_GST'}
+                        onChange={(e) =>
+                          setClientPurchaseFormData({ ...clientPurchaseFormData, accountChannel: e.target.value })
+                        }
+                        required
+                      >
+                        {CLIENT_ACCOUNT_CHANNEL_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p style={{ marginTop: '8px', fontSize: '12px', color: '#64748b', lineHeight: 1.45 }}>
+                        GST and Non-GST are separate payable accounts for the same client. Payments must match the
+                        purchase account.
+                      </p>
+                    </div>
+                    <div className="form-group">
                       <label>Purchase Description *</label>
                       <input
                         type="text"
@@ -4158,20 +4607,18 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       </div>
                       <div className="form-group">
                         <label>Purchase Date *</label>
-                        <input
-                          type="date"
+                        <DdMmYyCalendar
                           value={clientPurchaseFormData.purchaseDate}
-                          onChange={(e) => setClientPurchaseFormData({ ...clientPurchaseFormData, purchaseDate: e.target.value })}
-                          required
+                          onChange={(v) => setClientPurchaseFormData({ ...clientPurchaseFormData, purchaseDate: v })}
                         />
                       </div>
                     </div>
                     
                     <div className="form-actions">
-                      <button type="submit" className="btn btn-primary">
+                      <button type="submit" className="primary-button">
                         Add Purchase
                       </button>
-                      <button type="button" className="btn btn-secondary" onClick={() => {
+                      <button type="button" className="secondary-button" onClick={() => {
                         setShowClientPurchaseForm(false);
                         setClientPurchaseFormData({
                           purchaseDescription: '',
@@ -4353,11 +4800,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     </div>
                     <div className="form-group">
                       <label>Purchase date</label>
-                      <input
-                        type="date"
+                      <DdMmYyCalendar
                         value={clientAddAmountFormData.purchaseDate || getLocalDateString()}
-                        onChange={(e) =>
-                          setClientAddAmountFormData({ ...clientAddAmountFormData, purchaseDate: e.target.value })
+                        onChange={(v) =>
+                          setClientAddAmountFormData({ ...clientAddAmountFormData, purchaseDate: v })
                         }
                       />
                     </div>
@@ -4374,12 +4820,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     <div className="form-actions">
                       <button
                         type="button"
-                        className="btn btn-secondary"
+                        className="secondary-button"
                         onClick={() => setShowClientAddAmountForm(false)}
                       >
                         Cancel
                       </button>
-                      <button type="submit" className="btn btn-primary" disabled={submittingClientAddAmount}>
+                      <button type="submit" className="primary-button" disabled={submittingClientAddAmount}>
                         {submittingClientAddAmount ? 'Saving…' : 'Add amount'}
                       </button>
                     </div>
@@ -4399,7 +4845,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                 amount: '',
                 date: getLocalDateString(),
                 paymentMethod: 'cash',
-                notes: ''
+                notes: '',
+                accountChannel: 'NON_GST',
               });
             }}>
               <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -4413,7 +4860,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       amount: '',
                       date: getLocalDateString(),
                       paymentMethod: 'cash',
-                      notes: ''
+                      notes: '',
+                      accountChannel: 'NON_GST',
                     });
                   }}>×</button>
                 </div>
@@ -4612,7 +5060,14 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           const purchase = clientPayments.find(p => String(p.id) === String(selectedId));
                           console.log('Purchase selected:', { selectedId, purchase, allPurchases: clientPayments });
                           setSelectedClientPurchase(purchase);
-                          setClientPaymentFormData({ ...clientPaymentFormData, purchaseId: selectedId });
+                          const channel = normalizeAccountChannel(
+                            purchase?.accountChannel ?? purchase?.account_channel
+                          );
+                          setClientPaymentFormData({
+                            ...clientPaymentFormData,
+                            purchaseId: selectedId,
+                            accountChannel: channel,
+                          });
                         }}
                         required
                       >
@@ -4628,6 +5083,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                 : 'Settled';
                           return (
                             <option key={purchase?.id} value={purchase?.id}>
+                              [{accountChannelLabel(purchase?.accountChannel ?? purchase?.account_channel)}]{' '}
                               {purchase?.clientName || '-'} — {(purchase?.purchaseDescription || '-').slice(0, 36)} ({statusLabel})
                             </option>
                           );
@@ -4639,6 +5095,11 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         <strong>Total Amount:</strong> ₹{(Number(parseFloat(selectedClientPurchase?.totalAmount || 0) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<br />
                         <strong>Paid Amount:</strong> ₹{(Number(selectedClientPurchase?.payments?.reduce((sum, p) => sum + (parseFloat(p?.amount) || 0), 0) || 0) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<br />
                         <strong>Pending:</strong> ₹{getClientPurchasePending(selectedClientPurchase).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        <br />
+                        <strong>Account:</strong>{' '}
+                        {accountChannelLabel(
+                          selectedClientPurchase?.accountChannel ?? selectedClientPurchase?.account_channel
+                        )}
                         {getClientPurchaseOverpaid(selectedClientPurchase) > 0 && (
                           <>
                             <br />
@@ -4682,11 +5143,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       </div>
                       <div className="form-group">
                         <label>Payment Date *</label>
-                        <input
-                          type="date"
+                        <DdMmYyCalendar
                           value={clientPaymentFormData.date}
-                          onChange={(e) => setClientPaymentFormData({ ...clientPaymentFormData, date: e.target.value })}
-                          required
+                          onChange={(v) => setClientPaymentFormData({ ...clientPaymentFormData, date: v })}
                         />
                       </div>
                     </div>
@@ -4714,7 +5173,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       />
                     </div>
                     <div className="form-actions">
-                      <button type="submit" className="btn btn-primary" disabled={submittingPayment}>
+                      <button type="submit" className="primary-button" disabled={submittingPayment}>
                         {submittingPayment ? (
                           <>
                             <span className="button-loading"></span>
@@ -4724,7 +5183,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           'Make Payment'
                         )}
                       </button>
-                      <button type="button" className="btn btn-secondary" onClick={() => {
+                      <button type="button" className="secondary-button" onClick={() => {
                         setShowClientPaymentForm(false);
                         setSelectedClientPurchase(null);
                         setClientPaymentFormData({
@@ -4732,7 +5191,8 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                           amount: '',
                           date: getLocalDateString(),
                           paymentMethod: 'cash',
-                          notes: ''
+                          notes: '',
+                          accountChannel: 'NON_GST',
                         });
                       }}>
                         Cancel
@@ -4745,16 +5205,33 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
           )}
 
           <div className="salaries-content">
-            {clientPayments.length > 0 ? (
-              <>
-                {/* Purchases Table View */}
-                {!showPaymentsTable && (
+            {clientSubView === 'clients' && (
+              <ClientListSection
+                clientPayments={clientPayments}
+                allPayments={allPayments}
+                getClientPurchasePaid={getClientPurchasePaid}
+                getClientPurchasePending={getClientPurchasePending}
+                fetchClientRunningLedger={fetchClientRunningLedger}
+                fetchClientAccountSummary={fetchClientAccountSummary}
+                fetchClientSupplierAccounts={fetchClientSupplierAccounts}
+                createClientSupplierAccount={createClientSupplierAccount}
+                createClientPurchase={createClientPurchase}
+                addClientPayment={addClientPayment}
+                onClientDataRefresh={refreshClientTabData}
+                notify={showToast}
+                searchQuery={clientFilter}
+              />
+            )}
+
+            {clientSubView === 'purchases' && (
+              clientPayments.length > 0 ? (
                   <div className="expenses-table-container client-purchases-table-wrap">
                     <div className="sales-table-wrapper client-purchases-scroll-wrap">
                       <table className="data-table expenses-table client-purchases-table">
                         <thead>
                           <tr>
                             <th>Client Name</th>
+                            <th>Account</th>
                             <th>Description</th>
                             <th>Purchase Date</th>
                             <th>Due</th>
@@ -4794,6 +5271,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                         return (
                           <tr key={purchase?.id}>
                             <td className="date-cell client-purchase-client-cell">{purchase?.clientName || '-'}</td>
+                            <td style={{ fontSize: '12px', fontWeight: 600 }}>
+                              {accountChannelLabel(purchase?.accountChannel ?? purchase?.account_channel)}
+                            </td>
                             <td className="client-purchase-desc-cell">
                               <span className="client-purchase-desc-inner">{purchase?.purchaseDescription || '-'}</span>
                             </td>
@@ -4876,7 +5356,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                       amount: safePending > 0 ? String(safePending) : '',
                                       date: getLocalDateString(),
                                       paymentMethod: 'cash',
-                                      notes: ''
+                                      notes: '',
+                                      accountChannel: normalizeAccountChannel(
+                                        purchase?.accountChannel ?? purchase?.account_channel
+                                      ),
                                     });
                                     setShowClientPaymentForm(true);
                                   }}
@@ -4923,10 +5406,19 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                       </table>
                     </div>
                   </div>
-                )}
+              ) : (
+                <div className="empty-state-wrapper">
+                  <span className="empty-icon">💼</span>
+                  <p className="empty-state">No client purchases added yet</p>
+                  <p className="empty-subtitle">
+                    Record stock bought on credit from a supplier or client. Retail bill customers, loans, and customer
+                    advances appear under Sales / Ledger, not here.
+                  </p>
+                </div>
+              )
+            )}
 
-                {/* All Payments Table View */}
-                {showPaymentsTable && (() => {
+            {clientSubView === 'payments' && (() => {
                   // Use payments from API (allPayments state) - fetched from GET /api/client-purchases/payments
                   // Filter by client name if filter is set
                   const filteredPayments = clientFilter
@@ -4951,6 +5443,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                             <tr>
                               <th>Payment Date</th>
                               <th>Client Name</th>
+                              <th>Account</th>
                               <th>Payment Amount</th>
                               <th>Payment Method</th>
                               <th>Notes</th>
@@ -4981,6 +5474,9 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                                     <td className="date-cell" style={{ fontWeight: '600' }}>
                                       {payment?.clientName || payment?.clientId || '-'}
                                     </td>
+                                    <td style={{ fontSize: '12px', fontWeight: 600 }}>
+                                      {accountChannelLabel(payment?.accountChannel ?? payment?.account_channel)}
+                                    </td>
                                     <td className="amount-cell total-col">
                                       <span className="expense-amount" style={{ color: '#28a745', fontWeight: '700' }}>
                                         ₹{safeAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -5007,7 +5503,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                               })
                             ) : (
                               <tr>
-                                <td colSpan="6" style={{ textAlign: 'center', padding: '40px' }}>
+                                <td colSpan="7" style={{ textAlign: 'center', padding: '40px' }}>
                                   <span className="empty-icon">💰</span>
                                   <p className="empty-state">No payments found</p>
                                   {clientFilter && (
@@ -5022,17 +5518,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
                     </div>
                   );
                 })()}
-              </>
-            ) : (
-              <div className="empty-state-wrapper">
-                <span className="empty-icon">💼</span>
-                <p className="empty-state">No client purchases added yet</p>
-                <p className="empty-subtitle">
-                  Record stock bought on credit from a supplier or client. Retail bill customers, loans, and customer
-                  advances appear under Sales / Ledger, not here.
-                </p>
-              </div>
-            )}
           </div>
 
           {showClientRunningLedgerModal && (

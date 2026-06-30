@@ -180,7 +180,7 @@ const WebsiteItemsPage = () => {
           <span className="sales-count">({items.length})</span>
         </div>
         <div className="section-header-actions">
-          <button type="button" className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+          <button type="button" className="primary-button" onClick={() => setShowAddModal(true)}>
             + Add website items
           </button>
         </div>
@@ -192,7 +192,7 @@ const WebsiteItemsPage = () => {
             <span className="empty-icon">🌐</span>
             <p className="empty-state">No website items yet</p>
             <p className="empty-subtitle">Click &quot;Add website items&quot; to add your first item.</p>
-            <button type="button" className="btn btn-primary" onClick={() => setShowAddModal(true)}>
+            <button type="button" className="primary-button" onClick={() => setShowAddModal(true)}>
               + Add website items
             </button>
           </div>
@@ -321,10 +321,10 @@ const WebsiteItemsPage = () => {
                 </label>
               </div>
               <div className="form-actions">
-                <button type="submit" className="btn btn-primary" disabled={submitting}>
+                <button type="submit" className="primary-button" disabled={submitting}>
                   {submitting ? 'Adding…' : 'Add item'}
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={resetForm}>
+                <button type="button" className="secondary-button" onClick={resetForm}>
                   Cancel
                 </button>
               </div>

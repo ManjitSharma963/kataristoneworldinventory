@@ -81,12 +81,12 @@ const Register = ({ onRegisterSuccess, onSwitchToLogin, initialError = '' }) => 
   };
 
   return (
-    <div className="auth-container">
+    <div className="page-container page-container--auth auth-container">
       <div className="auth-card">
-        <h1 className="auth-title">Sign up</h1>
+        <h1 className="page-title auth-title">Sign up</h1>
         
         <form onSubmit={handleSubmit} className="auth-form">
-          {error && <div className="auth-error">{error}</div>}
+          {error && <div className="status-card status-card--danger auth-error"><p className="status-card__text">{error}</p></div>}
 
           <input
             type="text"
@@ -138,7 +138,7 @@ const Register = ({ onRegisterSuccess, onSwitchToLogin, initialError = '' }) => 
             options={locations.map(loc => ({ value: loc, label: loc }))}
           />
 
-          <button type="submit" className="auth-btn-primary" disabled={loading}>
+          <button type="submit" className="primary-button primary-button--block auth-btn-primary" disabled={loading}>
             <span className="btn-icon">🔒</span>
             <span>{loading ? 'Registering...' : 'Sign up'}</span>
           </button>

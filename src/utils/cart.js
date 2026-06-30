@@ -191,6 +191,11 @@ export const clearCartSessionStorage = () => {
 /** Clear cart items and all saved checkout/session data. */
 export const resetCartSession = () => {
   clearCartSessionStorage();
+  try {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify([]));
+  } catch {
+    /* ignore */
+  }
   return [];
 };
 

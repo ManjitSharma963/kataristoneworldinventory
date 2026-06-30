@@ -3,6 +3,7 @@ import Dashboard from './components/Dashboard';
 import Customers from './components/Customers';
 import Reports from './components/Reports';
 import Sales from './components/Sales';
+import Agents from './components/Agents';
 import Products from './components/Products';
 import InventoryItemsTabs from './components/InventoryItemsTabs';
 import Login from './components/Login';
@@ -304,6 +305,13 @@ function App() {
                   <span className="nav-label">Customers</span>
                 </button>
                 <button
+                  className={`nav-item ${activeNav === 'agents' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('agents')}
+                >
+                  <span className="nav-icon">🤝</span>
+                  <span className="nav-label">Agents</span>
+                </button>
+                <button
                   className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
                   onClick={() => setActiveNav('reports')}
                 >
@@ -419,6 +427,16 @@ function App() {
                         <span className="nav-label">Customers</span>
                       </button>
                       <button
+                        className={`nav-item ${activeNav === 'agents' ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveNav('agents');
+                          setMobileMenuOpen(false);
+                        }}
+                      >
+                        <span className="nav-icon">🤝</span>
+                        <span className="nav-label">Agents</span>
+                      </button>
+                      <button
                         className={`nav-item ${activeNav === 'reports' ? 'active' : ''}`}
                         onClick={() => {
                           setActiveNav('reports');
@@ -455,6 +473,8 @@ function App() {
               <InventoryItemsTabs defaultTab="inventory-items" />
             ) : activeNav === 'customers' ? (
               <Customers />
+            ) : activeNav === 'agents' ? (
+              <Agents />
             ) : activeNav === 'reports' ? (
               <Reports />
             ) : activeNav === 'sales' ? (

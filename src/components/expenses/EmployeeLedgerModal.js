@@ -1,5 +1,6 @@
 import React from 'react';
 import Loading from '../Loading';
+import DdMmYyCalendar from '../DdMmYyCalendar';
 
 function formatEmployeeLedgerPaymentMode(row) {
   const raw = row?.paymentMode ?? row?.payment_mode;
@@ -53,24 +54,23 @@ const EmployeeLedgerModal = ({
           <div className="form-row">
             <div className="form-group">
               <label>From</label>
-              <input
-                type="date"
+              <DdMmYyCalendar
                 value={employeeLedgerRange.from}
-                onChange={(e) => setEmployeeLedgerRange((prev) => ({ ...prev, from: e.target.value }))}
+                onChange={(v) => setEmployeeLedgerRange((prev) => ({ ...prev, from: v }))}
               />
             </div>
             <div className="form-group">
               <label>To</label>
-              <input
-                type="date"
+              <DdMmYyCalendar
                 value={employeeLedgerRange.to}
-                onChange={(e) => setEmployeeLedgerRange((prev) => ({ ...prev, to: e.target.value }))}
+                onChange={(v) => setEmployeeLedgerRange((prev) => ({ ...prev, to: v }))}
+                minDate={employeeLedgerRange.from || undefined}
               />
             </div>
             <div className="form-group ledger-filter-actions">
               <button
                 type="button"
-                className="btn btn-secondary"
+                className="secondary-button"
                 onClick={() => loadEmployeeLedger(selectedEmployee.id, employeeLedgerRange)}
                 disabled={employeeLedgerLoading}
               >
