@@ -1,0 +1,12 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "deploy/gateway/Dockerfile"
+
+[build.args]
+REACT_APP_API_URL = "https://www.katariastoneworld.com/api"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

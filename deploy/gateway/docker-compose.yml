@@ -1,0 +1,19 @@
+# Local smoke test: inventory UI + proxy to API on host machine.
+# Usage (from kataristoneworldinventory repo root):
+#   docker compose -f deploy/gateway/docker-compose.yml up --build
+# Open http://localhost:8080/inventory/
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/gateway/Dockerfile
+      args:
+        REACT_APP_API_URL: http://localhost:8080/api
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      BACKEND_URL: http://host.docker.internal:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

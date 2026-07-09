@@ -131,6 +131,9 @@ function classifyExpenseForChart(ex) {
   ) {
     return 'Loan Repay';
   }
+  if (cat === 'loan_given' || cat === 'loan_outflow' || desc.includes('loan given')) {
+    return 'Loan Given';
+  }
   if (type === 'salary' || cat === 'salary') {
     return 'Employee Salary';
   }

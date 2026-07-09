@@ -1,0 +1,9 @@
+node_modules
+build
+.git
+.gitignore
+*.md
+.env
+.env.*
+coverage
+deploy/gateway/docker-compose.yml

@@ -632,6 +632,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
               ledgerSide: 'borrower',
               partyId: b.id,
               entryType: typ,
+              expenseId: r.expenseId ?? r.expense_id ?? null,
               date: r.entryDate || r.entry_date || r.createdAt || r.created_at || '',
               person,
               personKey: String(person || '').trim().toLowerCase(),
@@ -789,6 +790,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       await loadBudgetState();
       await loadLoanBorrowers();
       await loadLoanTransactions();
+      await loadExpenses();
       showToast('Loan given recorded.');
     } catch (err) {
       console.error('recordLoanGiven', err);
@@ -1448,6 +1450,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   const formatExpenseCategoryLabel = (cat) => {
     const c = String(cat || '').trim().toLowerCase();
     if (c === 'loan_repayment' || c === 'loan_repay') return 'Loan Repay';
+    if (c === 'loan_given' || c === 'loan_outflow') return 'Loan Given';
     if (c === 'client_purchase_payment') return 'Client payment';
     if (!cat) return '';
     return String(cat).charAt(0).toUpperCase() + String(cat).slice(1);
@@ -2403,12 +2406,12 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
       if (m === 'CHEQUE' || m === 'CHECK') return 'cheque';
       return String(mode).toLowerCase().replace(/_/g, ' ');
     };
-    // Only receivable "loan given" (borrower disbursements). Market-loan repayments already
-    // appear as daily expenses (loan_repayment) — lender ledger REPAYMENT rows use giveTake=GIVE
-    // but must not be duplicated here.
+    // Only receivable "loan given" (borrower disbursements) without a mirrored expense row.
+    // New disbursements create an expense via the API; legacy rows still show here until backfilled.
     return (Array.isArray(loanTransactions) ? loanTransactions : [])
       .filter((r) => String(r.giveTake || '').toUpperCase() === 'GIVE')
       .filter((r) => String(r.id || '').startsWith('b-'))
+      .filter((r) => r.expenseId == null)
       .map((r) => {
         const dateRaw = r.date || '';
         let dateStr = getLocalDateString();

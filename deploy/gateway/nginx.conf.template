@@ -1,0 +1,87 @@
+# Rendered at container start via envsubst (PORT, BACKEND_URL).
+# BACKEND_URL example: http://your-api-service.railway.internal:8080
+
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /tmp/nginx.pid;
+
+events {
+  worker_connections 1024;
+}
+
+http {
+  include /etc/nginx/mime.types;
+  default_type application/octet-stream;
+  sendfile on;
+  keepalive_timeout 65;
+  client_max_body_size 25m;
+
+  # Railway / reverse proxy
+  map $http_x_forwarded_proto $forwarded_proto {
+    default $http_x_forwarded_proto;
+    ''      $scheme;
+  }
+
+  server {
+    listen ${PORT};
+    server_name _;
+
+    # Gateway health (Railway healthcheck)
+    location = /health {
+      access_log off;
+      default_type text/plain;
+      return 200 'ok';
+    }
+
+    # Root → inventory app
+    location = / {
+      return 302 /inventory/;
+    }
+
+    # React inventory SPA (CRA homepage /inventory)
+    location /inventory/ {
+      root /usr/share/nginx/html;
+      try_files $uri $uri/ /inventory/index.html;
+    }
+
+    location = /inventory {
+      return 301 /inventory/;
+    }
+
+    # Spring Boot API
+    location /api/ {
+      proxy_pass ${BACKEND_URL};
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $forwarded_proto;
+      proxy_connect_timeout 60s;
+      proxy_send_timeout 120s;
+      proxy_read_timeout 120s;
+    }
+
+    # Actuator (health checks through same host)
+    location /actuator/ {
+      proxy_pass ${BACKEND_URL};
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $forwarded_proto;
+    }
+
+    # Swagger (optional — disable in prod via not exposing backend publicly)
+    location /swagger-ui.html {
+      proxy_pass ${BACKEND_URL};
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto $forwarded_proto;
+    }
+
+    location /api-docs {
+      proxy_pass ${BACKEND_URL};
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto $forwarded_proto;
+    }
+  }
+}
