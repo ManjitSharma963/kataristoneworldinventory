@@ -15,7 +15,7 @@ RUN npm ci --no-audit --no-fund
 COPY public ./public
 COPY src ./src
 
-ARG REACT_APP_API_URL=https://www.katariastoneworld.com/api
+ARG REACT_APP_API_URL=https://api.katariastoneworld.com
 ENV REACT_APP_API_URL=$REACT_APP_API_URL
 ENV CI=true
 

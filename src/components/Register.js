@@ -37,9 +37,6 @@ const Register = ({ onRegisterSuccess, onSwitchToLogin, initialError = '' }) => 
     setLoading(true);
 
     try {
-      // Call backend directly at http://localhost:8080 (no proxy)
-      // Role defaults to 'user' on backend if not provided
-      // Only admins should be able to create admin accounts (handled by backend)
       const requestBody = {
         ...formData
         // role will default to 'user' on backend

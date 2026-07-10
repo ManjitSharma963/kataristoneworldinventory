@@ -299,7 +299,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
       
       if (isNetworkError) {
         console.warn('Network error detected. This usually means:');
-        console.warn('1. Backend server is not running on http://localhost:8080');
+        console.warn('1. Backend server is not reachable at', API_BASE_URL);
         console.warn('2. React dev server proxy is not working (restart required)');
         console.warn('3. Network connectivity issue');
         console.warn('Falling back to localStorage...');
@@ -1638,7 +1638,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
               <strong>API Error</strong>
               <p>Unable to fetch data from backend server. This could be:</p>
               <ul>
-                <li><strong>Connection Issue:</strong> Backend server not running on <code>http://localhost:8080</code> or proxy not configured</li>
+                <li><strong>Connection Issue:</strong> Backend server not reachable at <code>{API_BASE_URL}</code></li>
                 <li><strong>Server Error:</strong> Backend returned a 500 error (check backend logs for details)</li>
                 <li>Check browser console for detailed error messages</li>
               </ul>

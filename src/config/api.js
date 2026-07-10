@@ -1,10 +1,11 @@
-// API and app URL configuration
-// Inventory UI URLs:
-//   Development: http://localhost:3000/inventory
-//   Production (secure): https://www.katariastoneworld.com/inventory
-const API_URL = 'https://api.katariastoneworld.com';
+// API URL from environment (see .env.development / .env.production)
+// REACT_APP_API_URL = API host only, e.g. http://localhost:8080 or https://api.katariastoneworld.com
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
 
-export const API_BASE_URL = process.env.REACT_APP_API_URL || `${API_URL}/api`;
+// All fetch calls append /api/... — keep this suffix here, not in the env var
+export const API_BASE_URL = `${API_URL.replace(/\/$/, '')}/api`;
+
+export { API_URL };
 
 // Inventory app base URL (for redirects or links if needed)
 export const INVENTORY_APP_URL =

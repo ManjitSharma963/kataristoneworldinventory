@@ -2074,7 +2074,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   };
 
   // Handle Pay Advance form submission
-  // Matches CURL: curl -X POST http://localhost:8080/api/expenses -H "Content-Type: application/json" -H "Accept: application/json" -d '{...}'
+  // Matches CURL: curl -X POST ${API_BASE_URL}/expenses ...
   const handlePayAdvanceSubmit = async (e) => {
     e.preventDefault();
     if (!payAdvanceFormData.employeeId || submittingPayAdvance) return;
