@@ -1,10 +1,9 @@
 # Rendered at container start via envsubst (PORT, BACKEND_URL).
 # Static UI:  /usr/share/nginx/html/inventory/  (CRA homepage=/inventory)
-# BACKEND_URL: Railway private URL, e.g. http://api.railway.internal:8080
-#              or public API, e.g. https://api.katariastoneworld.com
+# BACKEND_URL: https://api.katariastoneworld.com or http://api.railway.internal:8080
 
 worker_processes auto;
-error_log /var/log/nginx/error.log warn;
+error_log /dev/stderr warn;
 pid /tmp/nginx.pid;
 
 events {
@@ -17,6 +16,7 @@ http {
   sendfile on;
   keepalive_timeout 65;
   client_max_body_size 25m;
+  access_log /dev/stdout;
 
   map $http_x_forwarded_proto $forwarded_proto {
     default $http_x_forwarded_proto;
@@ -24,17 +24,15 @@ http {
   }
 
   server {
-    listen ${PORT};
+    listen 0.0.0.0:${PORT};
     server_name _;
 
-    # Gateway health (Railway healthcheck) — does not hit backend
     location = /health {
       access_log off;
       default_type text/plain;
       return 200 'ok';
     }
 
-    # Root → inventory SPA (files live under /inventory/, not at web root)
     location = / {
       return 302 /inventory/;
     }
@@ -43,19 +41,17 @@ http {
       return 301 /inventory/;
     }
 
-    # React inventory SPA (CRA homepage /inventory)
-    # URI /inventory/foo → file /usr/share/nginx/html/inventory/foo
     location /inventory/ {
       root /usr/share/nginx/html;
       index index.html;
       try_files $uri $uri/ /inventory/index.html;
     }
 
-    # Spring Boot API — requires BACKEND_URL at runtime (Railway variable)
     location /api/ {
       proxy_pass ${BACKEND_URL};
       proxy_http_version 1.1;
-      proxy_set_header Host $host;
+      proxy_ssl_server_name on;
+      proxy_set_header Host $proxy_host;
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
       proxy_set_header X-Forwarded-Proto $forwarded_proto;
@@ -64,11 +60,11 @@ http {
       proxy_read_timeout 120s;
     }
 
-    # Actuator health through same host (optional; needs BACKEND_URL)
     location /actuator/ {
       proxy_pass ${BACKEND_URL};
       proxy_http_version 1.1;
-      proxy_set_header Host $host;
+      proxy_ssl_server_name on;
+      proxy_set_header Host $proxy_host;
       proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
       proxy_set_header X-Forwarded-Proto $forwarded_proto;
@@ -79,13 +75,13 @@ http {
 
     location /swagger-ui.html {
       proxy_pass ${BACKEND_URL};
-      proxy_set_header Host $host;
+      proxy_set_header Host $proxy_host;
       proxy_set_header X-Forwarded-Proto $forwarded_proto;
     }
 
     location /api-docs {
       proxy_pass ${BACKEND_URL};
-      proxy_set_header Host $host;
+      proxy_set_header Host $proxy_host;
       proxy_set_header X-Forwarded-Proto $forwarded_proto;
     }
   }

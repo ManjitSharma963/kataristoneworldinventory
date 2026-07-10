@@ -1,0 +1,3 @@
+# Force LF line endings for shell scripts (prevents "Starting Container" then crash on Railway)
+*.sh text eol=lf
+deploy/gateway/docker-entrypoint.sh text eol=lf

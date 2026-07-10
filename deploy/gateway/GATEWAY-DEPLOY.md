@@ -1,65 +1,49 @@
 # Gateway deploy (Inventory UI + nginx)
 
-## URLs
+## Diagnosis (curl results)
 
-| URL | Serves |
-|-----|--------|
-| `https://www.katariastoneworld.com/` | Redirect → `/inventory/` |
-| `https://www.katariastoneworld.com/inventory/` | React app (static) |
-| `https://www.katariastoneworld.com/api/*` | Proxied to Spring Boot API |
-| `https://www.katariastoneworld.com/health` | Gateway liveness (`ok`) |
+| URL | Result | Meaning |
+|-----|--------|---------|
+| `*.up.railway.app` → 404 "Application not found" | Service URL invalid or no active deployment |
+| `www.katariastoneworld.com` → 502 "Application failed to respond" | Domain points to a service whose container is not responding |
 
-The React build is **intentionally** under `/inventory/` (see `package.json` → `"homepage": "/inventory"`).
-Nginx maps that correctly:
+The React files under `/usr/share/nginx/html/inventory/` are **correct**. Nginx already redirects `/` → `/inventory/`.
 
-```text
-/usr/share/nginx/html/inventory/index.html   ← app entry
-```
+## Railway gateway variables
 
-Visiting `/` does **not** look for `/usr/share/nginx/html/index.html`; it redirects to `/inventory/`.
-
-## Railway — gateway service variables
-
-### Build variable
-```env
-REACT_APP_API_URL=https://www.katariastoneworld.com
-```
-Browser calls `https://www.katariastoneworld.com/api/...` (same host, proxied to backend).
-
-### Runtime variable (required)
-```env
-BACKEND_URL=http://api.railway.internal:8080
-```
-Replace `api` with your backend service name.
-
-Or use the public API host:
 ```env
 BACKEND_URL=https://api.katariastoneworld.com
 ```
 
-**Without `BACKEND_URL`, the container refuses to start** (prevents nginx `proxy_pass` misconfiguration and 502 on every path).
+**Delete** any empty `BACKEND_URL` variable in Railway — an empty value overrides the Dockerfile default and breaks nginx.
 
-## Verify after deploy
-
-```text
-GET https://www.katariastoneworld.com/health          → ok
-GET https://www.katariastoneworld.com/inventory/    → React login page
-GET https://www.katariastoneworld.com/api/auth/login → API (POST from UI)
+Optional (private networking):
+```env
+BACKEND_URL=http://api.railway.internal:8080
 ```
 
-## 502 troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---------|----------------|-----|
-| 502 on `/inventory/` | Container not running; check Railway logs | Set `BACKEND_URL`; redeploy |
-| 502 on `/api/*` only | `BACKEND_URL` wrong or API down | Fix URL; check API `/actuator/health` |
-| 502 on `/` | Custom domain on wrong service | Attach `www` to **gateway**, not API |
-| App loads but API fails | CORS or wrong `REACT_APP_API_URL` | Use `https://www.katariastoneworld.com` at build time |
-
-## Local smoke test
-
-```bash
-docker compose -f deploy/gateway/docker-compose.yml up --build
+Build variable:
+```env
+REACT_APP_API_URL=https://www.katariastoneworld.com
 ```
 
-Open `http://localhost:8080/inventory/` (API must run on host port 8080).
+## After push — verify
+
+1. Railway → gateway service → **Deployments** → latest deploy logs should show:
+   ```text
+   [gateway] starting nginx gateway
+   [gateway] PORT=...
+   [gateway] BACKEND_URL=https://api.katariastoneworld.com
+   [gateway] nginx config ok, listening on 0.0.0.0:...
+   ```
+2. Copy the **current** `*.up.railway.app` URL from Railway → Settings → Networking (old URLs 404 after redeploy/rename).
+3. Test:
+   ```bash
+   curl -I https://<your-service>.up.railway.app/health
+   curl -I https://<your-service>.up.railway.app/inventory/
+   curl -I https://www.katariastoneworld.com/inventory/
+   ```
+
+## Custom domain
+
+Attach `www.katariastoneworld.com` only to the **gateway** service (not the API).

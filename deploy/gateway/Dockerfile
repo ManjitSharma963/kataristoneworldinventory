@@ -31,7 +31,7 @@ RUN apk add --no-cache gettext wget
 
 COPY deploy/gateway/nginx.conf.template /etc/nginx/nginx.conf.template
 COPY deploy/gateway/docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 COPY --from=web-build /out /usr/share/nginx/html
 
@@ -42,6 +42,6 @@ ENV BACKEND_URL=https://api.katariastoneworld.com
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD sh -c 'wget -qO- "http://127.0.0.1:${PORT:-8080}/health" || exit 1'
+  CMD wget -qO- "http://127.0.0.1:${PORT:-8080}/health" || exit 1
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["sh", "/docker-entrypoint.sh"]
