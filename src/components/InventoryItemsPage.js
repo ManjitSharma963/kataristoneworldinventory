@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { getInventory } from '../utils/storage';
 import { API_BASE_URL } from '../config/api';
 import {
   handleApiResponse,

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { getInventory, getExpenses, getSales } from '../utils/storage';
+import { getInventory } from '../utils/storage';
 import Expenses from './Expenses';
 import Invoice from './Invoice';
 import HomeScreenManagement from './HomeScreenManagement';
@@ -7,7 +7,7 @@ import { downloadBillPDF, handleApiResponse, getInventoryEndpoint, fetchExpenses
 import { useLedgerSummary } from '../hooks/useLedgerSummary';
 import DashboardLedgerSummaryCards from './dashboard/DashboardLedgerSummaryCards';
 import { API_BASE_URL } from '../config/api';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import DdMmYyCalendar from './DdMmYyCalendar';
 import './Dashboard.css';
 
@@ -80,34 +80,6 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   // Shared state for Expenses form
   const [expensesFormOpen, setExpensesFormOpen] = useState(false);
   
-  // Expenses Section Component
-  const ExpensesSection = () => {
-    return (
-      <div className="dashboard-section expenses-section">
-        <div className="section-header-enhanced">
-          <div className="section-title-wrapper">
-            <span className="section-icon">💵</span>
-            <h3>Daily Expenses</h3>
-          </div>
-          <div className="section-header-actions">
-            <button className="primary-button" onClick={() => setExpensesFormOpen(true)}>
-              + Add Expense
-            </button>
-          </div>
-        </div>
-        <div className="section-content">
-          <Expenses 
-            hideHeader={true} 
-            hideStats={true} 
-            showForm={expensesFormOpen} 
-            onFormOpen={() => setExpensesFormOpen(true)} 
-            onFormClose={() => setExpensesFormOpen(false)}
-            onExpenseUpdate={fetchExpenses}
-          />
-        </div>
-      </div>
-    );
-  };
   // Map sidebar navigation to internal tab state
   const getActiveTab = () => {
     if (activeNav === 'sales') return 'sales';
@@ -132,7 +104,7 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
 
   // Expenses are now loaded from API only via the Expenses component
   // No need to refresh from localStorage
-  const [stats, setStats] = useState({
+  const [, setStats] = useState({
     totalSales: 0,
     totalWithGST: 0,
     totalWithoutGST: 0,
@@ -785,17 +757,6 @@ const Dashboard = ({ activeNav, setActiveNav }) => {
   if (loadingBills && bills.length === 0) {
     return <div className="dashboard-container">Loading...</div>;
   }
-
-  const totalInventoryValue = inventory.reduce((sum, item) => {
-    const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;
-    const price = getPricePerUnitAfter(item);
-    return sum + (stock * price);
-  }, 0);
-
-  // Calculate total expenses
-  const totalExpenses = expenses.reduce((sum, exp) => {
-    return sum + (parseFloat(exp.amount) || 0);
-  }, 0);
 
   const lowStockItems = inventory.filter(item => {
     const stock = item.totalSqftStock || item.total_sqft_stock || item.quantity || 0;

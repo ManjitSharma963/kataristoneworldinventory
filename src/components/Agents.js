@@ -262,7 +262,6 @@ export default function Agents() {
     return history;
   }, [detailTab, history, paidHistory]);
 
-  const dealsPageCount = Math.max(1, Math.ceil(visibleDeals.length / DEALS_PAGE_SIZE));
   const pagedDeals = useMemo(() => {
     if (viewAllDeals) return visibleDeals;
     const start = (dealsPage - 1) * DEALS_PAGE_SIZE;

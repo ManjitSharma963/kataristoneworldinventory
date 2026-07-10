@@ -139,9 +139,18 @@ const LoanPanel = ({
     );
   };
 
-  const lenderRows = Array.isArray(loanLenders) ? loanLenders : [];
-  const borrowerRows = Array.isArray(loanBorrowers) ? loanBorrowers : [];
-  const rows = Array.isArray(loanTransactions) ? loanTransactions : [];
+  const lenderRows = useMemo(
+    () => (Array.isArray(loanLenders) ? loanLenders : []),
+    [loanLenders]
+  );
+  const borrowerRows = useMemo(
+    () => (Array.isArray(loanBorrowers) ? loanBorrowers : []),
+    [loanBorrowers]
+  );
+  const rows = useMemo(
+    () => (Array.isArray(loanTransactions) ? loanTransactions : []),
+    [loanTransactions]
+  );
 
   const rowMatchesSearch = (r, q) => {
     if (!q) return true;

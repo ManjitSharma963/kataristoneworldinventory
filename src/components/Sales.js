@@ -17,7 +17,6 @@ import {
   formatPaymentModeLabel,
   splitPaymentSummaryLines,
   normalizePaymentModeKey,
-  getPaymentBand,
   normalizeSearchText,
   billMatchesPaymentModeBand,
   billPaymentModeSearchText,
@@ -266,32 +265,6 @@ function billAllowsSupplementaryExchange(bill) {
   return true;
 }
 
-/** True when every sold quantity has been returned (safe to offer bill cancel/delete). */
-function billAllItemsReturned(bill) {
-  if (!bill) return false;
-  const life = String(
-    bill.billLifecycleStatus ??
-      bill.billStatus ??
-      bill.originalSale?.billLifecycleStatus ??
-      bill.originalSale?.billStatus ??
-      ''
-  )
-    .trim()
-    .toUpperCase();
-  if (life === 'FULLY_RETURNED' || life === 'RETURNED') return true;
-  const rs = bill.returnSummary ?? bill.originalSale?.returnSummary;
-  if (rs != null) {
-    const eff = Number(rs.effectiveSoldQuantityRemaining);
-    if (Number.isFinite(eff) && eff <= 0.0005) return true;
-    const orig = Number(rs.originalInvoiceQuantity);
-    const ret = Number(rs.cumulativeReturnedQuantity);
-    if (Number.isFinite(orig) && orig > 0.0005 && Number.isFinite(ret) && ret >= orig - 0.0005) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function billIsDraftRow(row) {
   const life = String(
     row?.billLifecycleStatus ?? row?.billStatus ?? row?.originalSale?.billLifecycleStatus ?? ''
@@ -381,11 +354,11 @@ const Sales = ({ setActiveNav }) => {
   const [dateTo, setDateTo] = useState(today);
   const [searchQuery, setSearchQuery] = useState('');
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
-  const [billTypeFilter, setBillTypeFilter] = useState('ALL');
+  const [, setBillTypeFilter] = useState('ALL');
   const [paymentModeFilter, setPaymentModeFilter] = useState('ALL');
   const [salesListTab, setSalesListTab] = useState('active');
   const [toast, setToast] = useState({ message: '', type: 'success' });
-  const { sales, loading, paymentBandTotals, refreshSales } = useSalesData(dateFrom, dateTo);
+  const { sales, loading, refreshSales } = useSalesData(dateFrom, dateTo);
 
   const [isBillPopupVisible, setBillPopupVisible] = useState(false);
   const [editPageBill, setEditPageBill] = useState(null);
@@ -438,7 +411,7 @@ const Sales = ({ setActiveNav }) => {
   const [billAgentCommissionValue, setBillAgentCommissionValue] = useState('');
   const [billAgentCommissionNotes, setBillAgentCommissionNotes] = useState('');
   const [billAgentAssignSubmitting, setBillAgentAssignSubmitting] = useState(false);
-  const [billSettlementOpen, setBillSettlementOpen] = useState(false);
+  const [, setBillSettlementOpen] = useState(false);
 
   const billSettlementSectionRef = useRef(null);
 
@@ -882,16 +855,6 @@ const Sales = ({ setActiveNav }) => {
     };
   }, [activeTabSales]);
 
-  const paymentBreakdown = useMemo(() => {
-    const c = Number(paymentBandTotals.cash) || 0;
-    const u = Number(paymentBandTotals.upi) || 0;
-    const b = Number(paymentBandTotals.bankTransfer) || 0;
-    const o = (Number(paymentBandTotals.other) || 0) + (Number(paymentBandTotals.cheque) || 0);
-    const sum = c + u + b + o;
-    const pct = (x) => (sum > 0 ? Math.round((x / sum) * 100) : 0);
-    return { cash: c, upi: u, bank: b, other: o, sum, pctCash: pct(c), pctUpi: pct(u), pctBank: pct(b), pctOther: pct(o) };
-  }, [paymentBandTotals]);
-
   const formatCurrency = (n) =>
     `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -979,10 +942,6 @@ const Sales = ({ setActiveNav }) => {
     return <span className="sales-dash-bill-no">{rowData.billNumber}</span>;
   };
 
-  const dateBodyTemplate = (rowData) => {
-    return rowData.billDate ? formatDate(rowData.billDate) : '-';
-  };
-
   const billTypeBodyTemplate = (rowData) => {
     const label = rowData.isGST ? `GST ${rowData.gstRate}%` : 'NON-GST';
     return <Tag value={label} severity={rowData.isGST ? 'info' : 'secondary'} />;
@@ -1019,11 +978,6 @@ const Sales = ({ setActiveNav }) => {
     );
   };
 
-  const amountBodyTemplate = (rowData, field) => {
-    const amount = rowData[field] || 0;
-    return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  };
-
   const totalAmountBodyTemplate = (rowData) => {
     const original = Number(rowData.totalAmount) || 0;
     const effective = Number(rowData.effectiveTotal ?? original);
@@ -1046,10 +1000,6 @@ const Sales = ({ setActiveNav }) => {
         </span>
       </span>
     );
-  };
-
-  const handleOpenEditPage = (bill) => {
-    setEditPageBill(bill);
   };
 
   const handlePdfFromRow = async (bill) => {
@@ -1455,6 +1405,7 @@ const Sales = ({ setActiveNav }) => {
     if (isBillPopupVisible && selectedBill) {
       syncBillAgentFormFromBill(selectedBill);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     isBillPopupVisible,
     selectedBill?.id,

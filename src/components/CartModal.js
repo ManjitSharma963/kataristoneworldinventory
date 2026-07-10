@@ -256,6 +256,7 @@ export default function CartModal({
     return () => {
       document.body.style.overflow = '';
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   /** Prefill customer / tax when opening checkout for a supplementary (exchange) bill. */
@@ -591,13 +592,6 @@ export default function CartModal({
     if (isNaN(n)) return fallback;
     const v = Math.max(0, n);
     return v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-
-  // Show number without leading zeros (e.g. 1200 not 01200)
-  const chargeDisplayValue = (val) => {
-    if (val === '' || val === null || val === undefined) return '';
-    const n = parseFloat(val);
-    return isNaN(n) ? val : n;
   };
 
   const formatCartItemsForBilling = (cartItems) => {

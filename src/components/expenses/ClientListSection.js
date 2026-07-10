@@ -603,21 +603,6 @@ export default function ClientListSection({
       });
   }, [clientPayments, selectedClient]);
 
-  const clientAccountRows = useMemo(() => {
-    if (!selectedClient) return { GST: null, NON_GST: null };
-    const key = selectedClient.key;
-    const rows = (accounts || []).filter((row) => {
-      const rowKey = String(row?.clientKey ?? row?.client_key ?? '').toLowerCase();
-      const display = String(row?.displayName ?? row?.display_name ?? '').trim().toLowerCase();
-      return rowKey === key || display === key;
-    });
-    return {
-      GST: rows.find((r) => normalizeAccountChannel(r?.accountChannel ?? r?.account_channel) === 'GST') || null,
-      NON_GST:
-        rows.find((r) => normalizeAccountChannel(r?.accountChannel ?? r?.account_channel) === 'NON_GST') || null,
-    };
-  }, [accounts, selectedClient]);
-
   const pendingPurchasesByChannel = useMemo(() => {
     if (!selectedClient) return { GST: [], NON_GST: [] };
     const key = selectedClient.key;

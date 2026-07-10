@@ -30,18 +30,6 @@ function formatBillDate(dateString) {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function lineBatchLabel(it) {
-  return (
-    it.batchNo ||
-    it.lotNumber ||
-    it.lot ||
-    it.color ||
-    it.category ||
-    it.type ||
-    '—'
-  );
-}
-
 function newRowKey() {
   return `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -147,7 +135,7 @@ export default function AdjustmentExchangeDialog({
   const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewTimeline, setPreviewTimeline] = useState([]);
+  const [, setPreviewTimeline] = useState([]);
   const [adjustmentGroupId, setAdjustmentGroupId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [catalog, setCatalog] = useState([]);
@@ -200,6 +188,7 @@ export default function AdjustmentExchangeDialog({
     } else {
       setAdjustmentGroupId('');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, bill?.id, adjustmentSession?.adjustmentGroupId]);
 
   useEffect(() => {

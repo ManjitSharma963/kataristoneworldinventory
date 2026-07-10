@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+/* eslint-disable react-hooks/exhaustive-deps */
 import DdMmYyCalendar from './DdMmYyCalendar';
-// Note: localStorage functions are no longer used - all data comes from API
-// Keeping imports for potential future use or reference, but not actively used
-import { getExpenses, addExpense, updateExpense, deleteExpense, getEmployees, addEmployee, updateEmployee, deleteEmployee } from '../utils/storage';
 import {
   apiFetchExpenses,
   apiCreateExpense,
@@ -18,7 +16,6 @@ import {
   apiDeleteEmployee,
   fetchClientPurchases,
   createClientPurchase,
-  updateClientPurchase,
   addClientPurchaseAmount,
   deleteClientPurchase,
   addClientPayment,
@@ -28,7 +25,6 @@ import {
   fetchClientDueAlerts,
   fetchClientSupplierAccounts,
   createClientSupplierAccount,
-  updateClientSupplierAccount,
   apiGetDailyBudget,
   apiGetDailyBudgetByDate,
   apiGetBalanceSummary,
@@ -53,7 +49,7 @@ import {
 } from '../api/expensesFacade';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
-import { expenseSchema, employeeSchema, salaryPaymentSchema, advancePaymentSchema, clientPurchaseSchema, clientPaymentSchema } from '../utils/validation';
+import { expenseSchema } from '../utils/validation';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Loading from './Loading';
@@ -165,9 +161,7 @@ function loanNotesWithoutMode(notes) {
 const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader = false, showForm: externalShowForm = null, onFormClose = null, onFormOpen = null, onExpenseUpdate = null }) => {
   const {
     expenses,
-    setExpenses,
     loadingExpenses,
-    apiError,
     setApiError,
     clientLedgerFeedRows,
     loadExpenses
@@ -212,7 +206,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     }
   }, [externalShowForm]);
   const [editingExpense, setEditingExpense] = useState(null);
-  const [filterType, setFilterType] = useState('all'); // all, daily
   const [activeTab, setActiveTab] = useState('all'); // all | loan | employee | client
   const [showSalaryForm, setShowSalaryForm] = useState(false);
   const [showEditEmployeeModal, setShowEditEmployeeModal] = useState(false);
@@ -1320,7 +1313,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
   });
 
   const {
-    formData,
     setFormData,
     salaryFormData,
     setSalaryFormData,
@@ -1725,78 +1717,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     return '';
   }, [clientPurchaseSupplierSelect, clientPurchaseNewSupplierName, suppliersList]);
 
-  const openClientPurchaseForClient = useCallback(
-    (clientName, accountChannel = 'NON_GST') => {
-      const name = String(clientName || '').trim();
-      if (!name) return;
-      const key = name.toLowerCase();
-      const supplierMatch = suppliersList.find((s) => String(s.name || '').trim().toLowerCase() === key);
-      const priorMatch = clientPurchasePriorNames.find((n) => n.toLowerCase() === key);
-      if (supplierMatch) {
-        setClientPurchaseSupplierSelect(`s:${supplierMatch.id}`);
-        setClientPurchaseNewSupplierName('');
-      } else if (priorMatch) {
-        setClientPurchaseSupplierSelect(`p:${encodeURIComponent(priorMatch)}`);
-        setClientPurchaseNewSupplierName('');
-      } else {
-        setClientPurchaseSupplierSelect('__new__');
-        setClientPurchaseNewSupplierName(name);
-      }
-      setClientPurchaseSupplierSearchQuery('');
-      setClientPurchaseFormData({
-        purchaseDescription: '',
-        totalAmount: '',
-        purchaseDate: getLocalDateString(),
-        dueDate: '',
-        notes: '',
-        accountChannel: normalizeAccountChannel(accountChannel),
-      });
-      setShowClientPurchaseForm(true);
-    },
-    [suppliersList, clientPurchasePriorNames]
-  );
-
-  const openClientPaymentForChannel = useCallback(
-    (clientName, accountChannel, purchase = null) => {
-      const key = String(clientName || '').trim().toLowerCase();
-      const channel = normalizeAccountChannel(accountChannel);
-      if (!key) return;
-      let target = purchase;
-      if (!target) {
-        const matches = (clientPayments || [])
-          .filter((p) => String(p?.clientName || '').trim().toLowerCase() === key)
-          .filter(
-            (p) => normalizeAccountChannel(p?.accountChannel ?? p?.account_channel) === channel
-          )
-          .sort((a, b) => {
-            const pendingDiff = getClientPurchasePending(b) - getClientPurchasePending(a);
-            if (pendingDiff !== 0) return pendingDiff;
-            return String(a?.purchaseDate || '').localeCompare(String(b?.purchaseDate || ''));
-          });
-        target = matches.find((p) => getClientPurchasePending(p) > 0) || matches[0];
-      }
-      if (!target) {
-        showToast(
-          `No ${accountChannelLabel(channel)} purchase for this client. Add a ${accountChannelLabel(channel)} purchase first.`,
-          'error'
-        );
-        return;
-      }
-      const safePending = getClientPurchasePending(target);
-      setSelectedClientPurchase(target);
-      setClientPaymentFormData({
-        purchaseId: target.id,
-        amount: safePending > 0 ? String(safePending) : '',
-        date: getLocalDateString(),
-        paymentMethod: 'cash',
-        notes: '',
-        accountChannel: channel,
-      });
-      setShowClientPaymentForm(true);
-    },
-    [clientPayments, getClientPurchasePending, showToast]
-  );
-
   const refreshClientTabData = useCallback(async () => {
     await loadClientPayments();
     await loadAllPayments();
@@ -2079,7 +1999,7 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     e.preventDefault();
     if (!payAdvanceFormData.employeeId || submittingPayAdvance) return;
 
-    const selectedEmp = employees.find(emp => emp.id == payAdvanceFormData.employeeId);
+    const selectedEmp = employees.find(emp => String(emp.id) === String(payAdvanceFormData.employeeId));
     if (!selectedEmp) return;
 
     try {
@@ -2113,14 +2033,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     } finally {
       setSubmittingPayAdvance(false);
     }
-  };
-
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
   };
 
   const [submittingExpense, setSubmittingExpense] = useState(false);
@@ -2215,12 +2127,6 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     }
   };
 
-  // Keep handleSubmit for backward compatibility
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    handleExpenseSubmit(onSubmitExpense)(e);
-  };
-
   const handleEdit = (expense) => {
     setEditingExpense(expense);
     const editData = {
@@ -2303,7 +2209,10 @@ const Expenses = ({ hideHeader = false, hideStats = false, showAddButtonInHeader
     setEditingExpense(null);
   };
 
-  const safeExpenses = Array.isArray(expenses) ? expenses : [];
+  const safeExpenses = useMemo(
+    () => (Array.isArray(expenses) ? expenses : []),
+    [expenses]
+  );
 
   const dedupedSafeExpenses = useMemo(() => {
     const paymentIds = new Set((allPayments || []).map((p) => String(p.id)));

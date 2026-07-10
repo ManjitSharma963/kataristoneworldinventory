@@ -8,7 +8,7 @@ import Products from './components/Products';
 import InventoryItemsTabs from './components/InventoryItemsTabs';
 import Login from './components/Login';
 import Register from './components/Register';
-import { isAuthenticated, getCurrentUser, logout, setSessionExpiryHandler, isAdmin, getUserRole } from './utils/api';
+import { getCurrentUser, logout, setSessionExpiryHandler, isAdmin, getUserRole } from './utils/api';
 import './App.css';
 
 function App() {
@@ -236,8 +236,6 @@ function App() {
     );
   }
 
-  // Get user role for conditional rendering
-  const currentUserRole = getUserRole();
   const userIsAdmin = Boolean(isAdmin()); // Ensure it's always a boolean
 
   return (

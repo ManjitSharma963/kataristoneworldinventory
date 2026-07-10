@@ -88,7 +88,7 @@ const Customers = () => {
     defaultValues: CUSTOMER_FORM_DEFAULTS,
   });
 
-  const [formData, setFormData] = useState({
+  const [, setFormData] = useState({
     name: '',
     phone: '',
     email: '',
@@ -115,6 +115,7 @@ const Customers = () => {
 
   useEffect(() => {
     loadCustomers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadAdvanceData = async (customerId) => {
@@ -277,15 +278,6 @@ const Customers = () => {
       }
     });
     setRemainingAdvanceByCustomerId(map);
-  };
-
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-    setValue(name, value);
   };
 
   const onSubmit = async (data) => {
