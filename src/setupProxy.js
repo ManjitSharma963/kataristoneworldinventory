@@ -1,4 +1,4 @@
-// Proxy disabled - Using direct API calls to http://localhost:8080
+// Proxy disabled — API calls use API_BASE_URL from src/config/api.js
 // CORS must be configured on the backend to allow http://localhost:3000
 
 // Export empty function to prevent errors

@@ -2,10 +2,9 @@
 // Direct backend URL (proxy is disabled)
 import { API_BASE_URL } from '../config/api';
 
-const API_BASE = API_BASE_URL; // Use full backend URL: http://localhost:8080/api
+const API_BASE = API_BASE_URL;
 
 // Helper function for API calls
-// Uses direct backend URL (http://localhost:8080/api) since proxy is disabled
 const apiCall = async (endpoint, options = {}) => {
   try {
     // Check if this is an auth endpoint (public, no token needed)
@@ -37,7 +36,6 @@ const apiCall = async (endpoint, options = {}) => {
       delete finalHeaders['Authorization'];
     }
     
-    // Use API_BASE with endpoint - direct call to http://localhost:8080/api
     const url = endpoint.startsWith('http') ? endpoint : `${API_BASE}${endpoint}`;
     
     // Log request details for debugging (only in development)
