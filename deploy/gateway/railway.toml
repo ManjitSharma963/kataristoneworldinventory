@@ -6,7 +6,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "deploy/gateway/Dockerfile"
 
 [build.args]
-REACT_APP_API_URL = "https://api.katariastoneworld.com"
+REACT_APP_API_URL = "https://www.katariastoneworld.com"
 
 [deploy]
 healthcheckPath = "/health"

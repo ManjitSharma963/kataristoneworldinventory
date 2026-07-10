@@ -14,14 +14,15 @@ RUN npm ci --no-audit --no-fund
 
 COPY public ./public
 COPY src ./src
+COPY .env.production ./
 
-ARG REACT_APP_API_URL=https://api.katariastoneworld.com
+ARG REACT_APP_API_URL=https://www.katariastoneworld.com
 ENV REACT_APP_API_URL=$REACT_APP_API_URL
 ENV CI=true
 
 RUN npm run build
 
-# CRA homepage=/inventory → serve files under /inventory/ on nginx
+# CRA homepage=/inventory → static files must live under html/inventory/
 RUN mkdir -p /out/inventory && cp -r build/* /out/inventory/
 
 FROM nginx:1.27-alpine
@@ -35,7 +36,8 @@ RUN chmod +x /docker-entrypoint.sh
 COPY --from=web-build /out /usr/share/nginx/html
 
 ENV PORT=8080
-ENV BACKEND_URL=http://127.0.0.1:8080
+# Proxied to Spring Boot API (override in Railway Variables if needed)
+ENV BACKEND_URL=https://api.katariastoneworld.com
 
 EXPOSE 8080
 
