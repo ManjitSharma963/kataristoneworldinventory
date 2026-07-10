@@ -35,13 +35,7 @@ RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 COPY --from=web-build /out /usr/share/nginx/html
 
-ENV PORT=8080
-# Proxied to Spring Boot API (override in Railway Variables if needed)
+# Do NOT set PORT here — Railway injects PORT at runtime.
 ENV BACKEND_URL=https://api.katariastoneworld.com
-
-EXPOSE 8080
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD wget -qO- "http://127.0.0.1:${PORT:-8080}/health" || exit 1
 
 ENTRYPOINT ["sh", "/docker-entrypoint.sh"]

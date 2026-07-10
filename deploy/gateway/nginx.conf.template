@@ -1,6 +1,5 @@
 # Rendered at container start via envsubst (PORT, BACKEND_URL).
-# Static UI:  /usr/share/nginx/html/inventory/  (CRA homepage=/inventory)
-# BACKEND_URL: https://api.katariastoneworld.com or http://api.railway.internal:8080
+# Railway requires binding to $PORT on all interfaces (IPv4 + IPv6).
 
 worker_processes auto;
 error_log /dev/stderr warn;
@@ -24,7 +23,9 @@ http {
   }
 
   server {
-    listen 0.0.0.0:${PORT};
+    # Dual-stack: Railway edge may connect via IPv4 or IPv6
+    listen ${PORT} default_server;
+    listen [::]:${PORT} default_server;
     server_name _;
 
     location = /health {
