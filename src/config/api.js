@@ -10,5 +10,5 @@ export { API_URL };
 // Inventory app base URL (for redirects or links if needed)
 export const INVENTORY_APP_URL =
   process.env.NODE_ENV === 'production'
-    ? 'https://api.katariastoneworld.com/inventory'
+    ? 'https://www.katariastoneworld.com/inventory'
     : `${window.location.origin}/inventory`;

@@ -1,12 +1,9 @@
-# Railway config for the public gateway service.
-# Place in repo root OR set these in Railway dashboard → Settings → Build.
-
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "deploy/gateway/Dockerfile"
 
 [build.args]
-REACT_APP_API_URL = "https://www.katariastoneworld.com"
+REACT_APP_API_URL = "https://api.katariastoneworld.com"
 
 [deploy]
 healthcheckPath = "/health"

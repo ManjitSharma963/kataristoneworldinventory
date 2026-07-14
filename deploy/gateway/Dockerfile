@@ -1,7 +1,8 @@
-# Kataria public gateway: React inventory UI + Express reverse proxy to Spring Boot API.
+# UI only — serves React at /inventory/
+# Browser calls API at https://api.katariastoneworld.com (set in REACT_APP_API_URL at build time)
 #
-# Railway: connect this repo, set dockerfilePath = deploy/gateway/Dockerfile
-# Custom domain: www.katariastoneworld.com → this service
+# Railway: inventory repo → dockerfilePath = deploy/gateway/Dockerfile
+# Custom domain: www.katariastoneworld.com
 
 FROM node:20-alpine AS web-build
 
@@ -14,7 +15,7 @@ COPY public ./public
 COPY src ./src
 COPY .env.production ./
 
-ARG REACT_APP_API_URL=https://www.katariastoneworld.com
+ARG REACT_APP_API_URL=https://api.katariastoneworld.com
 ENV REACT_APP_API_URL=$REACT_APP_API_URL
 ENV CI=true
 
@@ -32,9 +33,6 @@ RUN npm ci --omit=dev --no-audit --no-fund
 COPY deploy/gateway/server.js ./
 COPY --from=web-build /out ./public
 
-ENV BACKEND_URL=https://api.katariastoneworld.com
 ENV NODE_ENV=production
-
-EXPOSE 8080
 
 CMD ["node", "server.js"]
