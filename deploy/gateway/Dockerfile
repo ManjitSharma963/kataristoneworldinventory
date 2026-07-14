@@ -35,6 +35,9 @@ RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 COPY --from=web-build /out /usr/share/nginx/html
 
+# Hint for Railway port detection — app still listens on injected $PORT at runtime.
+EXPOSE 8080
+
 # Do NOT set PORT here — Railway injects PORT at runtime.
 ENV BACKEND_URL=https://api.katariastoneworld.com
 
