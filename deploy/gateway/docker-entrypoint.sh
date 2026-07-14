@@ -28,5 +28,5 @@ envsubst '${PORT} ${BACKEND_URL}' < /etc/nginx/nginx.conf.template > /tmp/nginx.
 echo "[gateway] validating nginx config..."
 nginx -t -c /tmp/nginx.conf 2>&1
 
-echo "[gateway] nginx config ok — binding to port ${PORT} (IPv4 + IPv6)"
+echo "[gateway] nginx config ok — binding to 0.0.0.0:${PORT}"
 exec nginx -c /tmp/nginx.conf -g 'daemon off;'

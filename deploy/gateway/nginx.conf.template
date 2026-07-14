@@ -23,9 +23,8 @@ http {
   }
 
   server {
-    # Dual-stack: Railway edge may connect via IPv4 or IPv6
-    listen ${PORT} default_server;
-    listen [::]:${PORT} default_server;
+    # Railway edge connects via IPv4 — bind explicitly to 0.0.0.0 (not localhost, not IPv6-only)
+    listen 0.0.0.0:${PORT} default_server;
     server_name _;
 
     location = /health {
