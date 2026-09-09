@@ -17,7 +17,7 @@ COPY .env.production ./
 
 ARG REACT_APP_API_URL=https://api.katariastoneworld.com
 ENV REACT_APP_API_URL=$REACT_APP_API_URL
-ENV CI=true
+ENV CI=false
 
 RUN npm run build
 
